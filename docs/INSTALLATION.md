@@ -36,12 +36,12 @@ The repository owner placeholder must be replaced before publication or provided
 ```bash
 cd /root
 
-sha256sum -c xpam-script-v1.0.6-ubuntu24-debian12.tar.gz.sha256
+sha256sum -c xpam-script-v1.0.7-ubuntu24-debian12.tar.gz.sha256
 
 rm -rf /root/xpam-install
 mkdir -p /root/xpam-install
 
-tar -xzf xpam-script-v1.0.6-ubuntu24-debian12.tar.gz -C /root/xpam-install
+tar -xzf xpam-script-v1.0.7-ubuntu24-debian12.tar.gz -C /root/xpam-install
 
 KIT_DIR="$(find /root/xpam-install -maxdepth 3 -type f -name install.sh -printf '%h\n' | head -n1)"
 cd "$KIT_DIR"

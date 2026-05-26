@@ -1,12 +1,12 @@
-# XPAM Script v1.0.6 GitHub publication audit
+# XPAM Script v1.0.7 GitHub publication audit
 
 Дата подготовки: 2026-05-26  
-Базовый архив: `xpam-script-final-20260526-v1.0.6-ubuntu24-debian12.tar.gz`  
+Базовый архив: `xpam-script-final-20260526-v1.0.7-ubuntu24-debian12.tar.gz`  
 SHA256 базового архива: `8cae6b4f3f99b1e8f83e49ee7c109252d452dce0b5337147d787edcdbe49afb4`
 
 ## Результат
 
-Подготовлен отдельный GitHub-ready пакет на базе v1.0.6.
+Подготовлен отдельный GitHub-ready пакет на базе v1.0.7.
 
 Архив был статически разобран: проверена структура, синтаксис shell-файлов, шаблоны, документация и потенциальные утечки.
 
@@ -35,7 +35,7 @@ bash -n bootstrap.sh
 
 ## Что было исправлено
 
-В исходной v1.0.6-сборке оставались косметические legacy-строки с прежним внутренним путём/версией в старых предупреждениях и MTProto notes. Они заменены на актуальное нейтральное описание XPAM Script v1.0.6.
+В исходной v1.0.7-сборке оставались косметические legacy-строки с прежним внутренним путём/версией в старых предупреждениях и MTProto notes. Они заменены на актуальное нейтральное описание XPAM Script v1.0.7.
 
 ## Персональные данные и секреты
 
@@ -74,7 +74,7 @@ vless://...
 - `LICENSE` — MIT для собственного кода XPAM Script.
 - `THIRD_PARTY.md` — upstream-компоненты и лицензии.
 - `SECURITY.md` — политика безопасности и редактирования секретов.
-- `CHANGELOG.md` — changelog v1.0.6.
+- `CHANGELOG.md` — changelog v1.0.7.
 - `NOTICE.md` — независимость проекта.
 - `.gitignore`
 - `bootstrap.sh`
@@ -104,4 +104,4 @@ grep -RIn 'deepru\|stas.khramov.github@gmail.com' .
 ## Рекомендация
 
 Публиковать не старый tar.gz как репозиторий, а именно GitHub-ready пакет.  
-Release asset можно прикреплять отдельно как `xpam-script-v1.0.6-ubuntu24-debian12.tar.gz` вместе с `.sha256`.
+Release asset можно прикреплять отдельно как `xpam-script-v1.0.7-ubuntu24-debian12.tar.gz` вместе с `.sha256`.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-KIT_VERSION="v1.0.6"
+KIT_VERSION="v1.0.7"
 KIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG_DIR="/etc/xpam-script"
 CONFIG_FILE="${CONFIG_DIR}/config.env"
@@ -3259,7 +3259,7 @@ stage_finalize(){
   fi
   echo
   warn "Финальная очистка удалит временные файлы установки, архивы, .sha256 и распакованную папку XPAM Script."
-  warn "Если после завершения вы всё ещё видите путь xpam-script-v1.0.6, выполните: cd /root"
+  warn "Если после завершения вы всё ещё видите путь xpam-script-v1.0.7, выполните: cd /root"
   local did_final_cleanup="no"
   if confirm "Выполнить финальную очистку перед production сейчас?" yes; then
     did_final_cleanup="yes"
@@ -3881,7 +3881,7 @@ def link_for(sec):
 
 def write_notes():
     notes.mkdir(mode=0o700, parents=True, exist_ok=True)
-    body=['MTProto users for XPAM Script v1.0.6','==================================================','']
+    body=['MTProto users for XPAM Script v1.0.7','==================================================','']
     for name, sec in users.items():
         body.append(f'User: {name}')
         body.append(f'Link: {link_for(sec)}')
@@ -3889,7 +3889,7 @@ def write_notes():
     users_note.write_text('\n'.join(body), encoding='utf-8')
     users_note.chmod(0o600)
     first_name = prefix if prefix in users else next(iter(users))
-    legacy_note.write_text('MTProto proxy for XPAM Script v1.0.6\n==================================================\nLink: '+link_for(users[first_name])+'\n', encoding='utf-8')
+    legacy_note.write_text('MTProto proxy for XPAM Script v1.0.7\n==================================================\nLink: '+link_for(users[first_name])+'\n', encoding='utf-8')
     legacy_note.chmod(0o600)
 
 if action == 'list':

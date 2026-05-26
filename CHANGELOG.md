@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.0.6 — public GitHub-ready baseline
+## v1.0.7 — public GitHub-ready baseline
 
 ### Added
 

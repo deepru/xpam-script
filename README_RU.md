@@ -86,9 +86,9 @@ sudo XPAM_REPO="deepru/xpam-script" bash xpam-bootstrap.sh
 
 ```bash
 cd /root
-sha256sum -c xpam-script-v1.0.6-ubuntu24-debian12.tar.gz.sha256
+sha256sum -c xpam-script-v1.0.7-ubuntu24-debian12.tar.gz.sha256
 mkdir -p /root/xpam-install
-tar -xzf xpam-script-v1.0.6-ubuntu24-debian12.tar.gz -C /root/xpam-install
+tar -xzf xpam-script-v1.0.7-ubuntu24-debian12.tar.gz -C /root/xpam-install
 KIT_DIR="$(find /root/xpam-install -maxdepth 3 -type f -name install.sh -printf '%h\n' | head -n1)"
 cd "$KIT_DIR"
 bash ./install.sh
