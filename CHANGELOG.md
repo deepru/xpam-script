@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.0.8 — final cleanup polish
+
+### Changed
+
+- Final production cleanup now removes GitHub bootstrap and extracted installer leftovers from `/root`.
+- Delayed cleanup protection now also covers `/root/xpam-install` and `/root/xpam-release-build` if any shell is still standing inside those directories.
+- Bootstrap default version now points to `v1.0.8`.
+
+### Verified
+
+- The cleanup change is limited to final production cleanup and does not alter health-check, weekly maintenance, nginx, HAProxy, Xray, 3x-ui, MTProto, DNS or network-tuning logic.
+
 ## v1.0.7 — public GitHub-ready baseline
 
 ### Added

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-KIT_VERSION="v1.0.7"
+KIT_VERSION="v1.0.8"
 KIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG_DIR="/etc/xpam-script"
 CONFIG_FILE="${CONFIG_DIR}/config.env"
@@ -2770,6 +2770,9 @@ final_production_cleanup(){
   say "Removing XPAM Script upload/test leftovers"
   shopt -s nullglob
   for item in \
+    /root/xpam-bootstrap.sh \
+    /root/xpam-install \
+    /root/xpam-release-build \
     /root/xpam-script-*.tar.gz \
     /root/xpam-script-*.tgz \
     /root/xpam-script-*.zip \
@@ -2783,12 +2786,12 @@ final_production_cleanup(){
     /root/xpam-script-v*; do
     [[ -e "$item" ]] || continue
     target="$(readlink -f "$item" 2>/dev/null || true)"
-    if [[ -d "$target" && "$target" == /root/xpam-script-v* ]]; then
-      # Do not remove an extracted XPAM Script source directory synchronously.
-      # The user's parent SSH shell may still be standing inside it, and a
-      # child script cannot move that parent shell.  Always schedule delayed
-      # removal: if nobody is inside, it disappears within a few seconds; if
-      # somebody is inside, it disappears after they leave.
+    if [[ -d "$target" && ( "$target" == /root/xpam-script-v* || "$target" == /root/xpam-install || "$target" == /root/xpam-release-build ) ]]; then
+      # Do not remove extracted XPAM Script/bootstrap/build directories synchronously.
+      # The user's parent SSH shell may still be standing inside one of them,
+      # and a child script cannot move that parent shell. Always schedule
+      # delayed removal: if nobody is inside, it disappears within a few seconds;
+      # if somebody is inside, it disappears after they leave.
       deferred_workdirs+=("$target")
       continue
     fi
@@ -2818,7 +2821,7 @@ set -u
 target="${1:-}"
 [[ -n "$target" ]] || exit 0
 case "$target" in
-  /root/xpam-script-v*) ;;
+  /root/xpam-script-v*|/root/xpam-install|/root/xpam-release-build) ;;
   *) exit 0 ;;
 esac
 [[ -d "$target" ]] || exit 0
@@ -3259,7 +3262,7 @@ stage_finalize(){
   fi
   echo
   warn "Финальная очистка удалит временные файлы установки, архивы, .sha256 и распакованную папку XPAM Script."
-  warn "Если после завершения вы всё ещё видите путь xpam-script-v1.0.7, выполните: cd /root"
+  warn "Если после завершения вы всё ещё видите путь xpam-script-v1.0.8, выполните: cd /root"
   local did_final_cleanup="no"
   if confirm "Выполнить финальную очистку перед production сейчас?" yes; then
     did_final_cleanup="yes"
@@ -3881,7 +3884,7 @@ def link_for(sec):
 
 def write_notes():
     notes.mkdir(mode=0o700, parents=True, exist_ok=True)
-    body=['MTProto users for XPAM Script v1.0.7','==================================================','']
+    body=['MTProto users for XPAM Script v1.0.8','==================================================','']
     for name, sec in users.items():
         body.append(f'User: {name}')
         body.append(f'Link: {link_for(sec)}')
@@ -3889,7 +3892,7 @@ def write_notes():
     users_note.write_text('\n'.join(body), encoding='utf-8')
     users_note.chmod(0o600)
     first_name = prefix if prefix in users else next(iter(users))
-    legacy_note.write_text('MTProto proxy for XPAM Script v1.0.7\n==================================================\nLink: '+link_for(users[first_name])+'\n', encoding='utf-8')
+    legacy_note.write_text('MTProto proxy for XPAM Script v1.0.8\n==================================================\nLink: '+link_for(users[first_name])+'\n', encoding='utf-8')
     legacy_note.chmod(0o600)
 
 if action == 'list':

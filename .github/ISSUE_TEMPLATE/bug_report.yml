@@ -12,7 +12,7 @@ body:
     id: version
     attributes:
       label: XPAM Script version
-      placeholder: "1.0.7"
+      placeholder: "1.0.8"
     validations:
       required: true
   - type: dropdown
