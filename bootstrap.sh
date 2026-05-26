@@ -2,7 +2,7 @@
 set -euo pipefail
 
 XPAM_VERSION="${XPAM_VERSION:-v1.0.6}"
-XPAM_ASSET="${XPAM_ASSET:-xpam-script-${XPAM_VERSION#v}-ubuntu24-debian12.tar.gz}"
+XPAM_ASSET="${XPAM_ASSET:-xpam-script-${XPAM_VERSION}-ubuntu24-debian12.tar.gz}"
 XPAM_INSTALL_DIR="${XPAM_INSTALL_DIR:-/root/xpam-install}"
 
 if [ "$(id -u)" -ne 0 ]; then
