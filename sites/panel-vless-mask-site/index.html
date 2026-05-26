@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Storage Access</title>
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg">
+  <link rel="stylesheet" href="./css/styles.css">
+</head>
+<body>
+  <header class="header">
+    <a class="brand" href="./index.html"><img src="./favicon.svg" alt=""><span>Storage Access</span></a>
+    <nav class="nav"><a href="./login.html">Sign in</a><a href="./docs.html">Docs</a></nav>
+  </header>
+  <main class="shell">
+    <section>
+      <div class="kicker">Restricted access</div>
+      <h1>Sign in is temporarily unavailable</h1>
+      <p class="lead">The storage interface is online, but public authentication is not available from this page.</p>
+      <div class="actions"><a class="button primary" href="./login.html">Open sign in</a><a class="button" href="./docs.html">View access notes</a></div>
+    </section>
+    <aside class="card" aria-label="Sign in panel">
+      <div class="notice">Access to this area is currently limited. No credentials are requested here.</div>
+      <div class="field">Email address</div>
+      <div class="field">Password</div>
+      <button class="submit" type="button" data-static-action>Continue</button>
+      <div class="hint" id="page-hint" aria-live="polite"></div>
+    </aside>
+  </main>
+  <section class="docs" style="margin-top:0">
+    <div class="mini-grid">
+      <div class="mini"><b>Storage</b><span>File interface and private workspace entry.</span></div>
+      <div class="mini"><b>Sync</b><span>Background availability for connected clients.</span></div>
+      <div class="mini"><b>Access</b><span>Authentication is handled outside this public page.</span></div>
+    </div>
+  </section>
+  <footer class="footer">Service page</footer>
+  <script src="./js/main.js"></script>
+</body>
+</html>

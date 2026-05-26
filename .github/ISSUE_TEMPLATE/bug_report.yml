@@ -1,0 +1,48 @@
+name: Bug report
+description: Report an XPAM Script issue without exposing secrets
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before submitting, redact VLESS links, MTProto links, Telegram tokens, Relay tokens,
+        WARP keys, certificate private keys, `/root/secure-notes/*`, and `/etc/xpam-script/config.env`.
+  - type: input
+    id: version
+    attributes:
+      label: XPAM Script version
+      placeholder: "1.0.6"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options:
+        - Ubuntu 24.04
+        - Debian 12
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: profile
+    attributes:
+      label: Profile
+      options:
+        - vless_direct
+        - subdomains_mtproto
+        - root_mtproto
+        - unknown
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted logs
+      render: shell

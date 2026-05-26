@@ -1,0 +1,9 @@
+PORT = {{MTPROTO_PORT}}
+USERS = { "{{SERVER_PREFIX}}": "{{MTPROTO_SECRET}}" }
+USER_MAX_TCP_CONNS = {  }
+TLS_DOMAIN = "{{SYNC_DOMAIN}}"
+MODES = { "classic": False, "secure": False, "tls": True }
+LISTEN_ADDR_IPV4 = "127.0.0.1"
+LISTEN_ADDR_IPV6 = None
+MASK_HOST = "127.0.0.1"
+MASK_PORT = {{SYNC_BACKEND_PORT}}

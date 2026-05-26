@@ -1,0 +1,39 @@
+# Archives and release assets
+*.tar.gz
+*.tgz
+*.zip
+*.sha256
+
+# Runtime configs and secrets
+.env
+*.env
+config.env
+prefix.env
+secure-notes/
+config-backups/
+manual-backups/
+
+# Local install/build/test directories
+xpam-install/
+xpam-v*/
+xpam-*-build/
+xpam-*-audit/
+xpam-*-test/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+*.old
+*.orig
+*.swp
+*~
+
+# Python cache
+__pycache__/
+*.pyc
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/

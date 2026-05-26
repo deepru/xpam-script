@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+set -u
+
+FAIL=0
+
+ok() { echo "OK: $*"; }
+warn() { echo "WARNING: $*"; }
+bad() { echo "FAIL: $*"; FAIL=1; }
+
+expect_sysctl() {
+  local key="$1" expected="$2" actual
+  actual="$(sysctl -n "$key" 2>/dev/null | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//')" || {
+    bad "missing sysctl: $key"
+    return
+  }
+
+  if [ "$actual" = "$expected" ]; then
+    ok "$key = $actual"
+  else
+    bad "$key expected '$expected', got '$actual'"
+  fi
+}
+
+is_tunnel_dev() {
+  case "${1:-}" in
+    wg*|tun*|tap*|warp*|CloudflareWARP*|tailscale*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+pick_physical_dev() {
+  ip -o link show up 2>/dev/null \
+    | awk -F': ' '{print $2}' \
+    | sed 's/@.*//' \
+    | grep -Ev '^(lo|wg[0-9]*|tun[0-9]*|tap[0-9]*|warp.*|CloudflareWARP.*|tailscale.*|docker.*|br-.*|veth.*)$' \
+    | head -n 1
+}
+
+check_qdisc_dev() {
+  local dev="$1"
+  [ -n "$dev" ] || return 1
+  echo "Checking qdisc on dev: $dev"
+  if tc qdisc show dev "$dev" 2>/dev/null | grep -q 'fq'; then
+    ok "fq qdisc is present on $dev"
+  else
+    bad "fq qdisc not found on $dev"
+    tc qdisc show dev "$dev" 2>/dev/null || true
+  fi
+}
+
+echo "===== NETWORK TUNING POLICY CHECK ====="
+
+expect_sysctl net.ipv4.tcp_congestion_control "bbr"
+expect_sysctl net.core.default_qdisc "fq"
+expect_sysctl net.core.rmem_max "33554432"
+expect_sysctl net.core.wmem_max "33554432"
+expect_sysctl net.ipv4.tcp_rmem "4096 131072 33554432"
+expect_sysctl net.ipv4.tcp_wmem "4096 65536 33554432"
+expect_sysctl net.core.somaxconn "4096"
+expect_sysctl net.ipv4.tcp_max_syn_backlog "8192"
+expect_sysctl net.core.netdev_max_backlog "8192"
+expect_sysctl net.ipv4.tcp_mtu_probing "1"
+expect_sysctl net.ipv4.tcp_slow_start_after_idle "0"
+expect_sysctl net.ipv4.tcp_syncookies "1"
+expect_sysctl net.ipv4.tcp_fin_timeout "15"
+expect_sysctl net.ipv4.tcp_tw_reuse "2"
+expect_sysctl net.ipv4.ip_local_port_range "1024 65535"
+
+echo
+echo "===== PERSISTENT CONFIG CHECK ====="
+
+if [ -f /etc/sysctl.d/99-xpam-script-network-tuning.conf ]; then
+  ok "persistent sysctl file exists: /etc/sysctl.d/99-xpam-script-network-tuning.conf"
+else
+  bad "missing /etc/sysctl.d/99-xpam-script-network-tuning.conf"
+fi
+
+if [ -f /etc/modules-load.d/tcp_bbr.conf ]; then
+  if grep -qx 'tcp_bbr' /etc/modules-load.d/tcp_bbr.conf; then
+    ok "tcp_bbr module-load config is correct"
+  else
+    bad "/etc/modules-load.d/tcp_bbr.conf exists but content is not exactly tcp_bbr"
+  fi
+else
+  bad "missing /etc/modules-load.d/tcp_bbr.conf"
+fi
+
+echo
+echo "===== QDISC CHECK ====="
+
+DEV="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}')"
+
+if [ -n "${DEV:-}" ]; then
+  echo "Route-to-1.1.1.1 dev: $DEV"
+  if is_tunnel_dev "$DEV"; then
+    warn "default route probe uses tunnel/WARP dev $DEV; this is external to XPAM Script 3x-ui WARP"
+    PHY_DEV="$(pick_physical_dev || true)"
+    if [ -n "${PHY_DEV:-}" ]; then
+      check_qdisc_dev "$PHY_DEV"
+    else
+      warn "could not detect a non-tunnel active interface; skipping qdisc device check"
+    fi
+  else
+    check_qdisc_dev "$DEV"
+  fi
+else
+  bad "could not detect default network interface"
+fi
+
+echo
+echo "===== SERVICE NOFILE LIMIT CHECK ====="
+
+for svc in nginx x-ui haproxy mtprotoproxy; do
+  if systemctl cat "$svc.service" >/dev/null 2>&1; then
+    state="$(systemctl is-active "$svc" 2>/dev/null || true)"
+    limit="$(systemctl show "$svc" -p LimitNOFILE --value 2>/dev/null || echo 0)"
+
+    if [ "$state" = "active" ]; then
+      ok "$svc is active"
+    elif [ "$svc" = "haproxy" ] || [ "$svc" = "mtprotoproxy" ]; then
+      warn "$svc is installed but not active: $state; this is normal for direct VLESS profile"
+      continue
+    else
+      bad "$svc is installed but not active: $state"
+    fi
+
+    case "$limit" in
+      ''|*[!0-9]*)
+        if [ "$limit" = "infinity" ]; then
+          ok "$svc LimitNOFILE = infinity"
+        else
+          bad "$svc LimitNOFILE is unexpected: $limit"
+        fi
+        ;;
+      *)
+        if [ "$limit" -ge 524288 ]; then
+          ok "$svc LimitNOFILE = $limit"
+        else
+          bad "$svc LimitNOFILE too low: $limit"
+        fi
+        ;;
+    esac
+  fi
+done
+
+echo
+if [ "$FAIL" -eq 0 ]; then
+  echo "OK: network tuning policy looks correct"
+else
+  echo "FAIL: network tuning policy has problems"
+fi
+
+exit "$FAIL"
