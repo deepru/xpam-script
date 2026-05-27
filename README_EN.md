@@ -26,7 +26,7 @@ XPAM Script is not a fork of 3x-ui, Xray-core, or MTProto proxy. It is a Bash-ba
 
 | Field | Value |
 |---|---|
-| Version | `1.0.9` |
+| Version | `1.0.10` |
 | Supported OS | Ubuntu 24.04 LTS, Debian 12 |
 | Shell | Bash |
 | Privilege model | root-required installer |
@@ -122,8 +122,8 @@ For GitHub Releases, publish a release archive and a matching SHA256 file.
 Expected release assets:
 
 ```text
-xpam-script-v1.0.9-ubuntu24-debian12.tar.gz
-xpam-script-v1.0.9-ubuntu24-debian12.tar.gz.sha256
+xpam-script-v1.0.10-ubuntu24-debian12.tar.gz
+xpam-script-v1.0.10-ubuntu24-debian12.tar.gz.sha256
 ```
 
 Bootstrap usage:
@@ -148,12 +148,12 @@ The bootstrap installer:
 ```bash
 cd /root
 
-sha256sum -c xpam-script-v1.0.9-ubuntu24-debian12.tar.gz.sha256
+sha256sum -c xpam-script-v1.0.10-ubuntu24-debian12.tar.gz.sha256
 
 rm -rf /root/xpam-install
 mkdir -p /root/xpam-install
 
-tar -xzf xpam-script-v1.0.9-ubuntu24-debian12.tar.gz -C /root/xpam-install
+tar -xzf xpam-script-v1.0.10-ubuntu24-debian12.tar.gz -C /root/xpam-install
 
 KIT_DIR="$(find /root/xpam-install -maxdepth 3 -type f -name install.sh -printf '%h\n' | head -n1)"
 cd "$KIT_DIR"
@@ -287,3 +287,7 @@ See [`SECURITY.md`](SECURITY.md).
 XPAM Script is released under the MIT License. See [`LICENSE`](LICENSE).
 
 Third-party components retain their own licenses. See [`THIRD_PARTY.md`](THIRD_PARTY.md).
+
+## IPv4-first support model
+
+XPAM Script currently supports the installer path over IPv4 only. Configure A records for XPAM domains to the VPS IPv4 address and remove AAAA records for those domains before installation. Public IPv6 installation is not supported.

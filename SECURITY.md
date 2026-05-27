@@ -8,7 +8,7 @@ XPAM Script is a server automation tool that handles sensitive operational data.
 
 | Version | Status |
 |---|---|
-| 1.0.9 | Supported baseline |
+| 1.0.10 | Supported baseline |
 | older versions | Unsupported |
 
 ---

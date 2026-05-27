@@ -32,7 +32,7 @@ Expected public IPv4 rules:
 443/tcp
 ```
 
-IPv6 public 443 is not expected unless explicitly allowed.
+Public IPv6 inbound is not supported by the XPAM Script installation path. Use IPv4 A records only and remove AAAA records for XPAM domains before installation.
 
 ---
 

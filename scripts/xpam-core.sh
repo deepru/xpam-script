@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-KIT_VERSION="v1.0.9"
+KIT_VERSION="v1.0.10"
 KIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG_DIR="/etc/xpam-script"
 CONFIG_FILE="${CONFIG_DIR}/config.env"
@@ -1033,7 +1033,7 @@ check_dns_preflight(){
     [[ -n "$ip4" && "$answers" != *"$ip4"* ]] && warn "A record for $d does not appear to point to this server IPv4"
     aaaa="$(dig +short AAAA "$d" @1.1.1.1 2>/dev/null | tr '\n' ' ' || true)"
     echo "AAAA $d -> ${aaaa:-none}"
-    [[ -n "$aaaa" && "$ALLOW_IPV6_443" != "yes" ]] && warn "$d has AAAA records but IPv6 public TLS was not allowed"
+    [[ -n "$aaaa" && "$ALLOW_IPV6_443" != "yes" ]] && warn "$d has AAAA records. XPAM Script is IPv4-first and does not support public IPv6 installation. Remove AAAA records for XPAM domains before running the installer."
   done
   return 0
 }
@@ -2690,8 +2690,6 @@ ask_layout(){
   ask SITE_BACKEND_PORT "Local nginx fallback site port" "$SITE_BACKEND_PORT"
   uses_mtproto && ask SYNC_BACKEND_PORT "Local nginx MTProto TLS backend port" "$SYNC_BACKEND_PORT" && ask MTPROTO_PORT "Local MTProto backend port" "$MTPROTO_PORT"
   echo "External ports are fixed by XPAM Script: SSH 22, HTTP 80, TLS 443. They are not asked interactively."
-  ask ALLOW_IPV6_443 "Allow IPv6 inbound on public TLS port? yes/no" "$ALLOW_IPV6_443"
-
   if confirm "Установить и настроить 3x-ui автоматически?" "${XUI_AUTO_SETUP:-yes}"; then
     XUI_AUTO_SETUP="yes"
     ask_xui_admin_credentials
@@ -3262,7 +3260,7 @@ stage_finalize(){
   fi
   echo
   warn "Финальная очистка удалит временные файлы установки, архивы, .sha256 и распакованную папку XPAM Script."
-  warn "Если после завершения вы всё ещё видите путь xpam-script-v1.0.9, выполните: cd /root"
+  warn "Если после завершения вы всё ещё видите путь xpam-script-v1.0.10, выполните: cd /root"
   local did_final_cleanup="no"
   if confirm "Выполнить финальную очистку перед production сейчас?" yes; then
     did_final_cleanup="yes"
@@ -3884,7 +3882,7 @@ def link_for(sec):
 
 def write_notes():
     notes.mkdir(mode=0o700, parents=True, exist_ok=True)
-    body=['MTProto users for XPAM Script v1.0.9','==================================================','']
+    body=['MTProto users for XPAM Script v1.0.10','==================================================','']
     for name, sec in users.items():
         body.append(f'User: {name}')
         body.append(f'Link: {link_for(sec)}')
@@ -3892,7 +3890,7 @@ def write_notes():
     users_note.write_text('\n'.join(body), encoding='utf-8')
     users_note.chmod(0o600)
     first_name = prefix if prefix in users else next(iter(users))
-    legacy_note.write_text('MTProto proxy for XPAM Script v1.0.9\n==================================================\nLink: '+link_for(users[first_name])+'\n', encoding='utf-8')
+    legacy_note.write_text('MTProto proxy for XPAM Script v1.0.10\n==================================================\nLink: '+link_for(users[first_name])+'\n', encoding='utf-8')
     legacy_note.chmod(0o600)
 
 if action == 'list':

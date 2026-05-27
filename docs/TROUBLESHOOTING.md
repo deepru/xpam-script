@@ -30,7 +30,7 @@ The public key must be one line.
 
 Check that every required domain has an `A` record pointing to the VPS IPv4 address.
 
-Avoid stale or wrong AAAA records if IPv6 is not configured.
+XPAM Script is IPv4-first. Make sure XPAM domains have A records pointing to the VPS IPv4 address and do not have AAAA records. Public IPv6 installation is not supported by XPAM Script.
 
 Run:
 

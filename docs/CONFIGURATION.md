@@ -29,7 +29,7 @@ It is created during installation and loaded by runtime launchers.
 | `SITE_BACKEND_PORT` | loopback nginx fallback site port |
 | `SYNC_BACKEND_PORT` | loopback nginx sync TLS backend port |
 | `MTPROTO_PORT` | loopback MTProto backend port |
-| `ALLOW_IPV6_443` | explicit IPv6 public TLS allowance |
+| `ALLOW_IPV6_443` | internal compatibility flag; supported installer path keeps it `no` |
 | `BASIC_USER` | Basic Auth user for protected panel path |
 
 ---

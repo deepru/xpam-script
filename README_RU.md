@@ -86,9 +86,13 @@ sudo XPAM_REPO="deepru/xpam-script" bash xpam-bootstrap.sh
 
 ```bash
 cd /root
-sha256sum -c xpam-script-v1.0.9-ubuntu24-debian12.tar.gz.sha256
+sha256sum -c xpam-script-v1.0.10-ubuntu24-debian12.tar.gz.sha256
+
+> **IPv4-first:** XPAM Script поддерживает установку только по IPv4. Для доменов проекта создавайте только `A`-записи на IPv4-адрес VPS. `AAAA`-записи для этих доменов нужно удалить до запуска установки: публичный IPv6-режим скриптом не поддерживается.
+
 mkdir -p /root/xpam-install
-tar -xzf xpam-script-v1.0.9-ubuntu24-debian12.tar.gz -C /root/xpam-install
+tar -xzf xpam-script-v1.0.10-ubuntu24-debian12.tar.gz -C /root/xpam-install
+
 KIT_DIR="$(find /root/xpam-install -maxdepth 3 -type f -name install.sh -printf '%h\n' | head -n1)"
 cd "$KIT_DIR"
 bash ./install.sh
