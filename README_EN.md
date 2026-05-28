@@ -4,7 +4,7 @@
 
 Current public release: **v1.1.0**.
 
-> Before using XPAM Script, read the full Russian user guide: [`docs/USER_GUIDE_RU.pdf`](docs/USER_GUIDE_RU.pdf).
+> Before using XPAM Script, read the [full Russian user guide in PDF](docs/USER_GUIDE_RU.pdf).
 >
 > XPAM Script changes SSH, firewall, nginx, HAProxy, 3x-ui/Xray, MTProto, Certbot, fail2ban, systemd units, health/maintenance scripts, DNS checks, `/etc/hosts` and VPS networking-related policy. Use it on a clean VPS, not on a production server with existing important services.
 
@@ -64,7 +64,7 @@ Public exposure remains limited to IPv4 TCP 22/80/443. Backend services stay on 
 
 ## Documentation
 
-- [`docs/USER_GUIDE_RU.pdf`](docs/USER_GUIDE_RU.pdf)
+- [Full Russian user guide, PDF](docs/USER_GUIDE_RU.pdf)
 - [`RELEASE_NOTES-v1.1.0.md`](RELEASE_NOTES-v1.1.0.md)
 - [`CHANGELOG-v1.1.0.md`](CHANGELOG-v1.1.0.md)
 - [`TESTING-v1.1.0.md`](TESTING-v1.1.0.md)

@@ -4,7 +4,7 @@
 
 Актуальный публичный релиз: **v1.1.0**.
 
-> **Перед использованием обязательно прочитайте полную инструкцию: [`docs/USER_GUIDE_RU.pdf`](docs/USER_GUIDE_RU.pdf).**
+> **Перед использованием обязательно прочитайте [полную инструкцию пользователя в PDF](docs/USER_GUIDE_RU.pdf).**
 >
 > Скрипт меняет SSH, firewall, nginx, HAProxy, 3x-ui/Xray, MTProto, Certbot, fail2ban, systemd-юниты, health/maintenance-скрипты, DNS-проверки, `/etc/hosts` и сетевые параметры VPS. Это не “маленькая утилита”, а полноценная автоматизация сервера. Не запускайте XPAM Script на VPS, где уже работают важные сервисы.
 
@@ -307,8 +307,8 @@ sudo <prefix>-telega --manage
 
 Обязательная инструкция:
 
-- [`docs/USER_GUIDE_RU.pdf`](docs/USER_GUIDE_RU.pdf)
-- [`docs/USER_GUIDE_RU.docx`](docs/USER_GUIDE_RU.docx)
+- [Полная инструкция пользователя, PDF](docs/USER_GUIDE_RU.pdf)
+- [Редактируемая версия инструкции, DOCX](docs/USER_GUIDE_RU.docx)
 
 Дополнительно:
 
