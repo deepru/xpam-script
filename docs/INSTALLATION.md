@@ -1,55 +1,30 @@
 # Installation
 
-XPAM Script expects a fresh Ubuntu 24.04 or Debian 12 VPS.
-
----
+XPAM Script expects a fresh Ubuntu 24.04 LTS or Debian 12 VPS.
 
 ## Required preparation
 
-Before running XPAM Script, the operator must have:
+Before running XPAM Script, prepare:
 
 1. root access to the VPS;
-2. SSH key access confirmed;
+2. confirmed SSH key login;
 3. a domain name;
-4. ability to create DNS `A` records;
-5. DNS records pointing to the VPS IPv4 address.
+4. access to DNS zone management;
+5. DNS `A` records pointing the required domains to the VPS IPv4 address.
 
-Do not start step `0` until SSH key login works.
+Do not start step `0` until SSH key login works in a separate SSH session.
 
----
+## GitHub bootstrap installation
 
-## Bootstrap installation
-
-Download the bootstrap script first, then run it:
-
-```bash
-curl -fsSL -o xpam-bootstrap.sh https://raw.githubusercontent.com/deepru/xpam-script/main/bootstrap.sh
-sudo XPAM_REPO="deepru/xpam-script" bash xpam-bootstrap.sh
-```
-
-The repository owner placeholder must be replaced before publication or provided through `XPAM_REPO`.
-
----
-
-## Manual archive installation
+XPAM Script is installed through the GitHub bootstrap command:
 
 ```bash
 cd /root
-
-sha256sum -c xpam-script-v1.0.10-ubuntu24-debian12.tar.gz.sha256
-
-rm -rf /root/xpam-install
-mkdir -p /root/xpam-install
-
-tar -xzf xpam-script-v1.0.10-ubuntu24-debian12.tar.gz -C /root/xpam-install
-
-KIT_DIR="$(find /root/xpam-install -maxdepth 3 -type f -name install.sh -printf '%h\n' | head -n1)"
-cd "$KIT_DIR"
-
-bash ./install.sh
+curl -fsSL https://raw.githubusercontent.com/deepru/xpam-script/main/bootstrap.sh -o xpam-bootstrap.sh
+sudo XPAM_REPO="deepru/xpam-script" bash xpam-bootstrap.sh
 ```
 
----
+The bootstrap installer downloads the published release archive, downloads the matching SHA256 file, verifies the archive, extracts it and starts `install.sh`.
 
 ## Step 0
 
@@ -63,6 +38,8 @@ sudo <prefix>-health
 sudo <prefix>-links
 sudo <prefix>-vless
 sudo <prefix>-telega
+sudo <prefix>-netdiag
+sudo <prefix>-repair
 ```
 
 After step `0`, continue through:
@@ -70,8 +47,6 @@ After step `0`, continue through:
 ```bash
 sudo <prefix>-install
 ```
-
----
 
 ## Step 1
 
@@ -89,19 +64,12 @@ sudo <prefix>-install
 
 Then choose step `1` again to continue.
 
----
-
 ## Post-install validation
 
 Run:
 
 ```bash
 sudo <prefix>-health
-sudo <prefix>-links
 ```
 
-The health check should end with:
-
-```text
-OK: <PREFIX> server looks healthy
-```
+The health check should end with a healthy status. For ordinary usage, weekly maintenance is configured automatically and does not need to be run manually.

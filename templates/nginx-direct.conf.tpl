@@ -28,7 +28,7 @@ server {
     add_header Referrer-Policy no-referrer-when-downgrade always;
     add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
     add_header X-Permitted-Cross-Domain-Policies none always;
-    access_log /var/log/nginx/{{SERVER_PREFIX}}.access.log;
+    access_log off;
     error_log /var/log/nginx/{{SERVER_PREFIX}}.error.log;
     etag on;
     if_modified_since exact;

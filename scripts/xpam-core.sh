@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-KIT_VERSION="v1.0.10"
+KIT_VERSION="v1.1.0"
 KIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG_DIR="/etc/xpam-script"
 CONFIG_FILE="${CONFIG_DIR}/config.env"
 PREFIX_BOOTSTRAP_FILE="${CONFIG_DIR}/prefix.env"
 LOG="/root/xpam-script-${KIT_VERSION}-$(date +%F-%H%M%S).log"
 RUNTIME_KIT_DIR="/opt/xpam-script"
+PREPARE_DONE_FILE="${CONFIG_DIR}/stage-prepare.done"
 
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
@@ -17,7 +18,7 @@ say(){ echo -e "${BLUE}==>${NC} $*"; }
 ok(){ echo -e "${GREEN}OK:${NC} $*"; }
 warn(){ echo -e "${YELLOW}WARN:${NC} $*"; }
 fail(){ echo -e "${RED}ERROR:${NC} $*" >&2; exit 1; }
-need_root(){ [[ ${EUID:-$(id -u)} -eq 0 ]] || fail "Run as root: sudo ./install.sh"; }
+need_root(){ [[ ${EUID:-$(id -u)} -eq 0 ]] || fail "Запустите от root: sudo ./install.sh"; }
 
 run_with_heartbeat(){
   local label="$1" interval="${XPAM_HEARTBEAT_INTERVAL:-30}" elapsed=0 pid rc
@@ -131,6 +132,16 @@ PANEL_PATH="api/internal/storage"; XUI_PANEL_PORT="57827"; XUI_AUTO_SETUP="yes";
 MTPROTO_REPO_URL="https://github.com/alexbers/mtprotoproxy.git"; MTPROTO_REPO_BRANCH="stable"
 TELEGRAM_RELAY_PATH="api/internal/notify-relay"; TELEGRAM_RELAY_SOCKET="/run/xpam-script-telegram-relay.sock"
 
+# XPAM Auto internal policy defaults. These are intentionally hidden from the normal user menu.
+XPAM_DNS_POLICY_MODE="${XPAM_DNS_POLICY_MODE:-safe}"        # safe|strict
+XPAM_OUTPUT_MODE="${XPAM_OUTPUT_MODE:-compact}"            # compact|verbose
+XPAM_MAINT_APT_MODE="${XPAM_MAINT_APT_MODE:-security}"     # security|upgrade|full|off
+XPAM_SERVICE_HYGIENE_MODE="${XPAM_SERVICE_HYGIENE_MODE:-safe}"
+XPAM_BACKUP_KEEP="${XPAM_BACKUP_KEEP:-2}"
+XPAM_HEALTH_LOG_KEEP="${XPAM_HEALTH_LOG_KEEP:-4}"
+XPAM_WEEKLY_LOG_KEEP="${XPAM_WEEKLY_LOG_KEEP:-4}"
+XPAM_PROVIDER_NETWORKING_WARN_ONLY="${XPAM_PROVIDER_NETWORKING_WARN_ONLY:-auto}"
+
 ask(){
   local var="$1" prompt="$2" def="${3:-}" ans c_def="" c_off=""
   if [[ -t 1 ]]; then c_def="$YELLOW"; c_off="$NC"; fi
@@ -147,7 +158,7 @@ ask(){
 ask_default_label(){
   local var="$1" prompt="$2" def="${3:-}" ans c_def="" c_off=""
   if [[ -t 1 ]]; then c_def="$YELLOW"; c_off="$NC"; fi
-  printf '%s [%bdefault: %s%b]: ' "$prompt" "$c_def" "$def" "$c_off"
+  printf '%s [по умолчанию: %s]: ' "$prompt" "$def"
   read -r ans || true
   ans="${ans:-$def}"
   printf -v "$var" '%s' "$ans"
@@ -159,7 +170,7 @@ confirm(){
     n|N|no|NO|No) def="no" ;;
     *) def="yes" ;;
   esac
-  read -r -p "$prompt yes/no [$def]: " ans || true
+  read -r -p "$prompt Введите yes или no [$def]: " ans || true
   ans="${ans:-$def}"
   [[ "$ans" =~ ^([Yy][Ee][Ss]|[Yy])$ ]]
 }
@@ -379,6 +390,62 @@ write_health_launcher(){
   fi
 }
 
+
+
+write_repair_launcher(){
+  [[ -n "${SERVER_PREFIX:-}" ]] || return 0
+  local safe_prefix launcher bin_link kit_dir_real
+  safe_prefix="$(printf '%s' "$SERVER_PREFIX" | tr -cd 'A-Za-z0-9_-')"
+  launcher="/usr/local/sbin/${safe_prefix}-repair"
+  bin_link="/usr/local/bin/${safe_prefix}-repair"
+  kit_dir_real="$RUNTIME_KIT_DIR"
+  cat > "$launcher" <<EOF_REPAIR_LAUNCHER
+#!/usr/bin/env bash
+set -euo pipefail
+LAUNCHER="/usr/local/sbin/${safe_prefix}-repair"
+KIT_DIR="${kit_dir_real}"
+if [ "\$(id -u)" -ne 0 ]; then exec sudo "\$LAUNCHER" "\$@"; fi
+if [ ! -f "\$KIT_DIR/scripts/xpam-core.sh" ]; then
+  echo "ERROR: XPAM Script runtime missing: \$KIT_DIR/scripts/xpam-core.sh" >&2
+  exit 1
+fi
+export XPAM_SCRIPT_QUIET_LOAD_CONFIG=1
+# shellcheck source=/dev/null
+source "\$KIT_DIR/scripts/xpam-core.sh"
+stage_repair
+EOF_REPAIR_LAUNCHER
+  chmod 755 "$launcher"
+  ln -sf "$launcher" "$bin_link" 2>/dev/null || true
+  ok "Repair-команда доступна: sudo ${safe_prefix}-repair"
+}
+
+write_netdiag_launcher(){
+  [[ -n "${SERVER_PREFIX:-}" ]] || return 0
+  local safe_prefix launcher bin_link kit_dir_real
+  safe_prefix="$(printf '%s' "$SERVER_PREFIX" | tr -cd 'A-Za-z0-9_-')"
+  launcher="/usr/local/sbin/${safe_prefix}-netdiag"
+  bin_link="/usr/local/bin/${safe_prefix}-netdiag"
+  kit_dir_real="$RUNTIME_KIT_DIR"
+  cat > "$launcher" <<EOF_NETDIAG_LAUNCHER
+#!/usr/bin/env bash
+set -euo pipefail
+LAUNCHER="/usr/local/sbin/${safe_prefix}-netdiag"
+KIT_DIR="${kit_dir_real}"
+if [ "\$(id -u)" -ne 0 ]; then exec sudo "\$LAUNCHER" "\$@"; fi
+if [ ! -f "\$KIT_DIR/scripts/xpam-core.sh" ]; then
+  echo "ERROR: XPAM Script runtime missing: \$KIT_DIR/scripts/xpam-core.sh" >&2
+  exit 1
+fi
+export XPAM_SCRIPT_QUIET_LOAD_CONFIG=1
+# shellcheck source=/dev/null
+source "\$KIT_DIR/scripts/xpam-core.sh"
+stage_netdiag
+EOF_NETDIAG_LAUNCHER
+  chmod 755 "$launcher"
+  ln -sf "$launcher" "$bin_link" 2>/dev/null || true
+  ok "Диагностика сети доступна: sudo ${safe_prefix}-netdiag"
+}
+
 write_weekly_launcher(){
   [[ -n "${SERVER_PREFIX:-}" ]] || return 0
   local safe_prefix weekly bin_link
@@ -425,7 +492,7 @@ fi
 export XPAM_SCRIPT_QUIET_LOAD_CONFIG=1
 # shellcheck source=/dev/null
 source "\$KIT_DIR/scripts/xpam-core.sh"
-stage_links_direct
+stage_links_direct "\$@"
 EOF_LINKS_LAUNCHER
 
   chmod 755 "$launcher"
@@ -467,7 +534,7 @@ fi
 export XPAM_SCRIPT_QUIET_LOAD_CONFIG=1
 # shellcheck source=/dev/null
 source "\$KIT_DIR/scripts/xpam-core.sh"
-stage_telega_direct
+stage_telega_direct "\$@"
 EOF_TELEGA_LAUNCHER
 
   chmod 755 "$launcher"
@@ -509,7 +576,7 @@ fi
 export XPAM_SCRIPT_QUIET_LOAD_CONFIG=1
 # shellcheck source=/dev/null
 source "\$KIT_DIR/scripts/xpam-core.sh"
-stage_vless_direct
+stage_vless_direct "\$@"
 EOF_VLESS_LAUNCHER
 
   chmod 755 "$launcher"
@@ -622,7 +689,7 @@ maybe_import_existing_config(){
     chmod 700 "$CONFIG_DIR"
     {
       echo "# Managed by xpam-script ${KIT_VERSION}"
-      for v in PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT ALLOW_IPV6_443 BASIC_USER MTPROTO_REPO_URL MTPROTO_REPO_BRANCH TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET; do
+      for v in PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT ALLOW_IPV6_443 BASIC_USER MTPROTO_REPO_URL MTPROTO_REPO_BRANCH TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY; do
         printf '%s=%q\n' "$v" "${!v:-}"
       done
     } > "$CONFIG_FILE"
@@ -706,7 +773,7 @@ save_config(){
   validate_server_prefix
   {
     echo "# Managed by xpam-script ${KIT_VERSION}"
-    for v in PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT ALLOW_IPV6_443 BASIC_USER MTPROTO_REPO_URL MTPROTO_REPO_BRANCH TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET; do
+    for v in PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT ALLOW_IPV6_443 BASIC_USER MTPROTO_REPO_URL MTPROTO_REPO_BRANCH TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY; do
       printf '%s=%q\n' "$v" "${!v}"
     done
   } > "$CONFIG_FILE"
@@ -718,6 +785,8 @@ save_config(){
   write_links_launcher || true
   write_vless_launcher || true
   write_telega_launcher || true
+  write_repair_launcher || true
+  write_netdiag_launcher || true
 }
 
 load_config(){ maybe_import_existing_config || true; [[ -f "$CONFIG_FILE" ]] || fail "Config not found: $CONFIG_FILE. Run menu item 1 first."; source "$CONFIG_FILE"; validate_server_prefix; migrate_legacy_system_file_names || true; [[ "${XPAM_SCRIPT_QUIET_LOAD_CONFIG:-0}" == "1" ]] || ok "Loaded config: $CONFIG_FILE"; }
@@ -747,7 +816,7 @@ open(dst,'w').write(s)
 PY
 }
 export_vars(){
-  export PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT ALLOW_IPV6_443 BASIC_USER MTPROTO_REPO_URL MTPROTO_REPO_BRANCH TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET
+  export PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT ALLOW_IPV6_443 BASIC_USER MTPROTO_REPO_URL MTPROTO_REPO_BRANCH TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY
   export WEB_SERVER_NAMES="$(web_domains)" CERTONLY_SERVER_NAMES="$(web_domains)${SYNC_DOMAIN:+ $SYNC_DOMAIN}" SERVICE_SITE_DIR="$(service_site_dir)" ROOT_SITE_DIR="$(root_site_dir)" SERVER_PREFIX_UP="$(printf '%s' "$SERVER_PREFIX" | tr '[:lower:]' '[:upper:]')"
   if [[ "$PROFILE" == "root_mtproto" ]]; then
     ROOT_SITE_BLOCK="$(cat <<EOF_ROOT_SITE_BLOCK
@@ -864,39 +933,84 @@ verify_ssh_preflight(){
   say "Verifying SSH key-only effective policy"
   verify_authorized_keys_present
   sshd -t || fail "sshd config test failed"
+
   local eff prl
   eff="$(ssh_effective_config)"
   show_ssh_effective_summary "$eff"
-  echo "$eff" | grep -Eq '^passwordauthentication no$' || fail "PasswordAuthentication is not disabled. Run menu item 0: SSH hardening, after testing key login in a separate session."
-  echo "$eff" | grep -Eq '^kbdinteractiveauthentication no$' || fail "KbdInteractiveAuthentication is not disabled. Run menu item 0 first."
-  echo "$eff" | grep -Eq '^pubkeyauthentication yes$' || fail "PubkeyAuthentication is not enabled. Fix SSH key auth first."
-  echo "$eff" | grep -Eq '^permitemptypasswords no$' || fail "PermitEmptyPasswords must be no"
-  echo "$eff" | grep -Eq '^gssapiauthentication no$' || fail "GSSAPIAuthentication must be no"
-  echo "$eff" | grep -Eq '^x11forwarding no$' || fail "X11Forwarding must be no. Run menu item 0: SSH hardening."
-  echo "$eff" | grep -Eq '^allowtcpforwarding yes$' || fail "AllowTcpForwarding must remain yes for SSH local tunnels to 3x-ui."
-  prl="$(echo "$eff" | awk '$1=="permitrootlogin" {print $2; exit}')"
+
+  # Debian and Ubuntu/OpenSSH may format `sshd -T` output slightly differently.
+  # Compare parsed fields instead of relying on a strict full-line grep.
+  ssh_eff_value(){
+    local key="$1"
+    printf '%s\n' "$eff" | awk -v k="$key" 'tolower($1)==tolower(k) {print tolower($2); exit}'
+  }
+
+  ssh_eff_expect(){
+    local key="$1" expected="$2" message="$3" actual
+    actual="$(ssh_eff_value "$key")"
+    [[ "$actual" == "$expected" ]] || fail "$message (actual: ${actual:-missing})"
+  }
+
+  ssh_eff_expect passwordauthentication no "PasswordAuthentication is not disabled. Run menu item 0: SSH hardening, after testing key login in a separate session."
+  ssh_eff_expect kbdinteractiveauthentication no "KbdInteractiveAuthentication is not disabled. Run menu item 0 first."
+  ssh_eff_expect pubkeyauthentication yes "PubkeyAuthentication is not enabled. Fix SSH key auth first."
+  ssh_eff_expect permitemptypasswords no "PermitEmptyPasswords must be no"
+  ssh_eff_expect gssapiauthentication no "GSSAPIAuthentication must be no"
+  ssh_eff_expect x11forwarding no "X11Forwarding must be no. Run menu item 0: SSH hardening."
+  ssh_eff_expect allowtcpforwarding yes "AllowTcpForwarding must remain yes for SSH local tunnels to 3x-ui."
+
+  prl="$(ssh_eff_value permitrootlogin)"
   case "$prl" in
     yes|prohibit-password|without-password) : ;;
     *) fail "PermitRootLogin effective value is unsafe or blocks root key login: ${prl:-missing}" ;;
   esac
+
   ok "SSH effective policy is key-only"
+}
+
+apply_ssh_ipv4_only_public_listener(){
+  # XPAM Script is IPv4-first on the public network, but it must not disable
+  # the system IPv6 stack because Xray/WARP/local software may still rely on it.
+  # This function only binds OpenSSH public listeners to IPv4.
+  mkdir -p /etc/ssh/sshd_config.d
+
+  local ssh_key_only_conf="/etc/ssh/sshd_config.d/00-key-only.conf"
+  if [[ -f "$ssh_key_only_conf" ]] && ! grep -q '^AddressFamily inet$' "$ssh_key_only_conf"; then
+    cat >> "$ssh_key_only_conf" <<'SSH_IPV4_ONLY'
+
+# XPAM IPv4-first public SSH policy.
+# Do not disable IPv6 globally; only bind sshd public listener to IPv4.
+AddressFamily inet
+SSH_IPV4_ONLY
+  fi
+
+  if systemctl list-unit-files ssh.socket >/dev/null 2>&1 || [[ -f /usr/lib/systemd/system/ssh.socket || -f /lib/systemd/system/ssh.socket ]]; then
+    mkdir -p /etc/systemd/system/ssh.socket.d
+    cat > /etc/systemd/system/ssh.socket.d/10-xpam-ipv4-only.conf <<'SSH_SOCKET_IPV4'
+[Socket]
+ListenStream=
+ListenStream=0.0.0.0:22
+SSH_SOCKET_IPV4
+    systemctl daemon-reload || true
+  fi
 }
 
 stage_ssh_hardening(){
   need_root
   require_os
+  ensure_sudo_hostname_resolution
   say "SSH hardening: key-only login, no X11 forwarding, TCP tunnels allowed"
   echo
   verify_authorized_keys_present
   echo "Current authorized_keys:"
   sed -n '1,10p' /root/.ssh/authorized_keys | sed -E 's/(ssh-[^ ]+ [A-Za-z0-9+\/]{20}).*/\1... [truncated]/'
   echo
-  warn "Before continuing, open a NEW separate SSH session from MobaXterm/PowerShell using the private key and make sure root login works WITHOUT the server password."
-  echo "Keep the current session open. If the second session cannot log in by key, do not continue."
+  warn "Перед продолжением откройте НОВУЮ отдельную SSH-сессию по private key / ppk."
+  echo "Новая сессия должна войти под root без пароля. Текущую сессию пока не закрывайте."
   echo
-  local ans
-  read -r -p "Type KEY-LOGIN-OK to confirm the separate key-login test passed: " ans || true
-  [[ "$ans" == "KEY-LOGIN-OK" ]] || fail "Confirmation not received; SSH hardening cancelled"
+  if ! confirm "Вы проверили вход по SSH-ключу в новой отдельной сессии?" no; then
+    fail "SSH-безопасность отменена. Сначала проверьте вход по ключу в отдельной сессии."
+  fi
 
   mkdir -p /etc/ssh/sshd_config.d
   # Use an early drop-in name intentionally. On Ubuntu cloud images,
@@ -916,13 +1030,19 @@ MaxAuthTries 3
 UseDNS no
 X11Forwarding no
 AllowTcpForwarding yes
+AddressFamily inet
 SSHCONF
   chmod 644 "$ssh_key_only_conf"
+  apply_ssh_ipv4_only_public_listener
 
   say "Testing sshd configuration"
   sshd -t || fail "sshd -t failed after writing $ssh_key_only_conf; backup is kept next to the file"
 
   say "Reloading SSH service"
+  systemctl daemon-reload || true
+  if systemctl is-active --quiet ssh.socket 2>/dev/null || systemctl is-enabled --quiet ssh.socket 2>/dev/null; then
+    systemctl restart ssh.socket || fail "could not restart ssh.socket"
+  fi
   systemctl reload ssh || systemctl restart ssh || fail "could not reload/restart ssh service"
 
   say "Verifying effective SSH policy"
@@ -938,13 +1058,15 @@ SSHCONF
   install_runtime_kit || true
   write_install_launcher || true
 
-  echo "Next step:"
-  echo "  sudo ${SERVER_PREFIX}-install"
+  echo "Команда меню создана: sudo ${SERVER_PREFIX}-install"
   echo
-  echo "Then choose menu item 1: Install / continue server setup."
-
+  echo "Не закрывайте рабочую SSH-сессию до завершения установки."
   echo
-  echo "Keep a working key SSH session open until installation is complete."
+  if confirm "Продолжить установку XPAM сейчас?" yes; then
+    stage_install_continue
+  else
+    echo "Позже выполните: sudo ${SERVER_PREFIX}-install"
+  fi
 }
 preinstall_system_update(){
   say "Updating repositories and upgrading existing packages before installation"
@@ -959,7 +1081,7 @@ install_base_packages(){
   say "Installing base packages"
   apt_dpkg_recovery "base packages"
   apt_get_safe "apt update before base packages" update
-  apt_get_safe "base package install" install -y ca-certificates curl wget gnupg lsb-release unzip tar gzip cron ufw fail2ban nginx certbot openssl python3 python3-venv xxd systemd-sysv systemd-resolved rsync sqlite3 jq dnsutils openssh-client iproute2
+  apt_get_safe "base package install" install -y --no-install-recommends ca-certificates curl wget gnupg lsb-release unzip tar gzip cron ufw fail2ban python3-systemd nginx certbot openssl python3 python3-venv xxd systemd-sysv rsync sqlite3 jq dnsutils openssh-client iproute2
   systemctl enable --now certbot.timer 2>/dev/null || true
 }
 
@@ -972,52 +1094,209 @@ install_mtproto_haproxy_packages(){
   fi
 }
 
-server_public_ipv4(){ curl -4fsS --max-time 8 https://api.ipify.org 2>/dev/null || curl -4fsS --max-time 8 ifconfig.me 2>/dev/null || true; }
+server_public_ipv4(){
+  local ip
+  # Prefer local routing information. This works even when DNS/HTTP is broken.
+  ip="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}' || true)"
+  if [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    printf '%s\n' "$ip"
+    return 0
+  fi
+  ip="$(ip -4 addr show scope global 2>/dev/null | awk '/ inet /{sub(/\/.*/,"",$2); print $2; exit}' || true)"
+  if [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    printf '%s\n' "$ip"
+    return 0
+  fi
+  curl -4fsS --max-time 5 https://api.ipify.org 2>/dev/null || curl -4fsS --max-time 5 ifconfig.me 2>/dev/null || true
+}
 
-managed_domains(){ unique_domains $(web_domains) ${SYNC_DOMAIN:-}; }
+normalize_hosts_public_ipv4_line(){
+  local ip4 domains hn short
+  ip4="${1:-}"
+  shift || true
+  domains="$*"
+  [[ -n "$ip4" ]] || return 0
 
-fix_managed_hosts(){
-  say "Ensuring managed domains do not resolve to localhost in /etc/hosts"
-  local ip4 domains
-  ip4="$(server_public_ipv4)"
-  domains="$(managed_domains)"
-  echo "Server IPv4 detected: ${ip4:-unknown}"
-  [[ -n "$ip4" ]] || { warn "Could not detect public IPv4; /etc/hosts managed-domain fix skipped"; return 0; }
-  [[ -n "$domains" ]] || return 0
+  hn="$(hostname 2>/dev/null | tr -d '[:space:]' || true)"
+  short="${hn%%.*}"
 
-  cp -a /etc/hosts "/etc/hosts.bak-xpam-script-$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
-  DOMAINS="$domains" SERVER_IPV4="$ip4" python3 - <<'PYHOSTS'
+  SERVER_IPV4="$ip4" XPAM_HOSTNAME="$hn" XPAM_SHORT_HOSTNAME="$short" XPAM_HOSTS_DOMAINS="$domains" python3 - <<'PYHOSTNORM'
 from pathlib import Path
-import os
-p = Path('/etc/hosts')
-domains = [d for d in os.environ.get('DOMAINS','').split() if d]
-ip = os.environ.get('SERVER_IPV4','').strip()
-lines = p.read_text().splitlines() if p.exists() else []
+import os, shutil, datetime, re
+
+hosts_path = Path('/etc/hosts')
+ip = os.environ.get('SERVER_IPV4', '').strip()
+hn = os.environ.get('XPAM_HOSTNAME', '').strip()
+short = os.environ.get('XPAM_SHORT_HOSTNAME', '').strip()
+domains = [d.strip() for d in os.environ.get('XPAM_HOSTS_DOMAINS', '').split() if d.strip()]
+
+if not ip:
+    raise SystemExit(0)
+
+local_names = {'localhost', 'localhost.localdomain', 'ip6-localhost', 'ip6-loopback', 'ip6-localnet', 'ip6-mcastprefix', 'ip6-allnodes', 'ip6-allrouters', 'ip6-allhosts'}
+
+wanted = []
+def add(name):
+    name = (name or '').strip()
+    if not name or name in local_names:
+        return
+    if name not in wanted:
+        wanted.append(name)
+
+original_text = hosts_path.read_text() if hosts_path.exists() else ''
+lines = original_text.splitlines()
 out = []
-managed = set(domains)
+public_names = []
+placeholder = '__XPAM_PUBLIC_IPV4_LINE__'
+inserted_placeholder = False
+
+def add_public_name(name):
+    name = (name or '').strip()
+    if not name or name in local_names:
+        return
+    if name not in public_names:
+        public_names.append(name)
+
 for line in lines:
     stripped = line.strip()
     if not stripped or stripped.startswith('#'):
         out.append(line)
         continue
+
     parts = stripped.split()
     addr, names = parts[0], parts[1:]
-    if addr.startswith('127.'):
-        names = [n for n in names if n not in managed]
-        if names:
-            out.append(addr + ' ' + ' '.join(names))
-        continue
+
     if addr == ip:
-        names = [n for n in names if n not in managed]
-        if names:
-            out.append(addr + ' ' + ' '.join(names))
+        if not inserted_placeholder:
+            out.append(placeholder)
+            inserted_placeholder = True
+        for name in names:
+            add_public_name(name)
         continue
+
     out.append(line)
-out.append(ip + ' ' + ' '.join(domains))
-p.write_text('\n'.join(out).rstrip() + '\n')
-PYHOSTS
+
+for name in public_names:
+    add(name)
+for name in domains:
+    add(name)
+if hn and hn not in ('localhost', 'localhost.localdomain'):
+    add(hn)
+if short and short != hn and short not in ('localhost', 'localhost.localdomain'):
+    add(short)
+
+cleaned = []
+remove_from_local = set(wanted)
+for line in out:
+    if line == placeholder:
+        continue
+    stripped = line.strip()
+    if not stripped or stripped.startswith('#'):
+        cleaned.append(line)
+        continue
+    parts = stripped.split()
+    addr, names = parts[0], parts[1:]
+    if addr.startswith('127.') or addr == '::1':
+        kept = [n for n in names if n not in remove_from_local]
+        # Keep loopback lines only if they still have names after removing public names.
+        if kept:
+            cleaned.append(addr + '\t' + ' '.join(kept))
+        continue
+    cleaned.append(line)
+
+public_line = ip + '\t' + ' '.join(wanted) if wanted else ''
+if public_line:
+    if inserted_placeholder:
+        final = []
+        placed = False
+        for line in out:
+            if line == placeholder:
+                if not placed:
+                    final.append(public_line)
+                    placed = True
+                continue
+            stripped = line.strip()
+            if not stripped or stripped.startswith('#'):
+                final.append(line)
+                continue
+            parts = stripped.split()
+            addr, names = parts[0], parts[1:]
+            if addr.startswith('127.') or addr == '::1':
+                kept = [n for n in names if n not in remove_from_local]
+                if kept:
+                    final.append(addr + '\t' + ' '.join(kept))
+                continue
+            final.append(line)
+        cleaned = final
+    else:
+        cleaned.append(public_line)
+
+new_text = '\n'.join(cleaned).rstrip() + '\n'
+if new_text != original_text:
+    backup_dir = Path('/root/manual-backups/hosts')
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+    backup_path = backup_dir / f'hosts.before-xpam-normalize.{ts}'
+    if hosts_path.exists():
+        shutil.copy2(hosts_path, backup_path)
+    hosts_path.write_text(new_text)
+    print(f'OK: /etc/hosts normalized for {ip}: {" ".join(wanted)}')
+PYHOSTNORM
+}
+
+ensure_sudo_hostname_resolution(){
+  local hn short ip4
+  hn="$(hostname 2>/dev/null | tr -d '[:space:]' || true)"
+  [[ -n "$hn" ]] || return 0
+  case "$hn" in
+    localhost|localhost.localdomain) return 0 ;;
+  esac
+
+  ip4="$(server_public_ipv4)"
+  short="${hn%%.*}"
+
+  if [[ -n "$ip4" ]]; then
+    normalize_hosts_public_ipv4_line "$ip4" "$hn" "$short"
+    if getent hosts "$hn" >/dev/null 2>&1; then
+      return 0
+    fi
+    warn "Hostname ${hn} still does not resolve locally after /etc/hosts normalization"
+    return 0
+  fi
+
+  if getent hosts "$hn" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [[ "$hn" != *.* ]]; then
+    if ! awk -v hn="$hn" '$1=="127.0.1.1" {for(i=2;i<=NF;i++) if($i==hn) found=1} END{exit found?0:1}' /etc/hosts 2>/dev/null; then
+      cp -a /etc/hosts "/root/manual-backups/hosts/hosts.before-1270011-$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+      printf '127.0.1.1\t%s\n' "$hn" >> /etc/hosts
+      ok "Hostname for sudo resolved locally: ${hn} -> 127.0.1.1"
+    fi
+  else
+    warn "Hostname ${hn} does not resolve locally and server IPv4 was not detected; sudo may warn about hostname resolution"
+  fi
+}
+
+
+managed_domains(){ unique_domains $(web_domains) ${SYNC_DOMAIN:-}; }
+
+fix_managed_hosts(){
+  say "Ensuring managed domains do not resolve to localhost in /etc/hosts"
+  local ip4 domains hn short
+  ip4="$(server_public_ipv4)"
+  domains="$(managed_domains)"
+  hn="$(hostname 2>/dev/null | tr -d '[:space:]' || true)"
+  short="${hn%%.*}"
+  echo "Server IPv4 detected: ${ip4:-unknown}"
+  [[ -n "$ip4" ]] || { warn "Could not detect public IPv4; /etc/hosts managed-domain fix skipped"; return 0; }
+  [[ -n "$domains" ]] || return 0
+
+  normalize_hosts_public_ipv4_line "$ip4" $domains "$hn" "$short"
   ok "Managed domains mapped in /etc/hosts to ${ip4}: ${domains}"
 }
+
 
 check_dns_preflight(){
   say "DNS preflight"
@@ -1027,18 +1306,42 @@ check_dns_preflight(){
   for d in $(managed_domains); do
     [[ -n "$d" ]] || continue
     localv4="$(getent ahostsv4 "$d" 2>/dev/null | awk 'NR==1{print $1}' || true)"
-    [[ -n "$localv4" ]] && echo "Local resolver $d -> $localv4"
-    answers="$(dig +short A "$d" @1.1.1.1 2>/dev/null | tr '\n' ' ' || true)"
-    echo "A $d -> ${answers:-none}"
-    [[ -n "$ip4" && "$answers" != *"$ip4"* ]] && warn "A record for $d does not appear to point to this server IPv4"
-    aaaa="$(dig +short AAAA "$d" @1.1.1.1 2>/dev/null | tr '\n' ' ' || true)"
-    echo "AAAA $d -> ${aaaa:-none}"
+    if [[ -n "$localv4" ]]; then
+      echo "Local resolver $d -> $localv4"
+    else
+      warn "Локальный DNS пока не вернул IPv4 для $d. Проверьте A-запись домена, если выпуск сертификата не пройдёт."
+    fi
+
+    answers="$(timeout 5s dig +short A "$d" @1.1.1.1 2>/dev/null | tr '\n' ' ' || true)"
+    if [[ -n "$answers" ]]; then
+      echo "Public DNS A $d -> $answers"
+      [[ -n "$ip4" && "$answers" != *"$ip4"* ]] && warn "A record for $d does not appear to point to this server IPv4"
+    else
+      warn "Прямая проверка public DNS для $d не дала A-ответа; продолжаю, основная проверка идёт через системный resolver"
+    fi
+
+    aaaa="$(timeout 5s dig +short AAAA "$d" @1.1.1.1 2>/dev/null | tr '\n' ' ' || true)"
+    echo "Public DNS AAAA $d -> ${aaaa:-none}"
     [[ -n "$aaaa" && "$ALLOW_IPV6_443" != "yes" ]] && warn "$d has AAAA records. XPAM Script is IPv4-first and does not support public IPv6 installation. Remove AAAA records for XPAM domains before running the installer."
   done
   return 0
 }
 setup_ufw(){ say "Configuring UFW"; ufw --force reset; ufw default deny incoming; ufw default allow outgoing; ufw allow from 0.0.0.0/0 to any port "$SSH_PUBLIC_PORT" proto tcp; ufw allow from 0.0.0.0/0 to any port "$HTTP_PUBLIC_PORT" proto tcp; ufw allow from 0.0.0.0/0 to any port "$XRAY_PUBLIC_PORT" proto tcp; [[ "$ALLOW_IPV6_443" == "yes" ]] && ufw allow from ::/0 to any port "$XRAY_PUBLIC_PORT" proto tcp || true; ufw --force enable; ufw status verbose; }
-setup_fail2ban_ssh(){ say "Configuring fail2ban"; mkdir -p /etc/fail2ban/jail.d; cat > /etc/fail2ban/jail.d/sshd.local <<'JAIL'
+setup_fail2ban_ssh(){
+  say "Configuring fail2ban"
+  mkdir -p /etc/fail2ban/jail.d
+
+  cat > /etc/fail2ban/fail2ban.local <<'F2B_DEF'
+[Definition]
+allowipv6 = no
+F2B_DEF
+
+  cat > /etc/fail2ban/jail.d/00-xpam-defaults.local <<'F2B_DEFAULTS'
+[DEFAULT]
+backend = systemd
+F2B_DEFAULTS
+
+  cat > /etc/fail2ban/jail.d/sshd.local <<'JAIL'
 [sshd]
 enabled = true
 backend = systemd
@@ -1046,7 +1349,22 @@ maxretry = 3
 findtime = 10m
 bantime = 1h
 JAIL
-systemctl enable fail2ban; systemctl restart fail2ban || true; }
+
+  fail2ban-client -t || fail "fail2ban configuration test failed"
+  systemctl enable fail2ban >/dev/null 2>&1 || true
+  systemctl restart fail2ban || fail "fail2ban service restart failed"
+
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    if fail2ban-client ping >/dev/null 2>&1; then
+      ok "fail2ban is running"
+      return 0
+    fi
+    sleep 1
+  done
+  systemctl status fail2ban --no-pager -l || true
+  fail "fail2ban did not become ready after restart"
+}
 
 render_tree(){ local dir="$1" site_domain="$2" root_domain="$3" sync_domain="$4"; find "$dir" -type f \( -name '*.html' -o -name '*.css' -o -name '*.js' -o -name '*.txt' \) -print0 2>/dev/null | while IFS= read -r -d '' f; do sed -i -e "s#__SITE_DOMAIN__#${site_domain}#g" -e "s#__ROOT_DOMAIN__#${root_domain}#g" -e "s#__SYNC_DOMAIN__#${sync_domain}#g" "$f"; done; }
 copy_site(){ local src="$1" dst="$2" domain="$3" rootd="$4" syncd="$5"; mkdir -p "$dst"; rsync -a --delete "$src"/ "$dst"/ 2>/dev/null || { rm -rf "$dst"; mkdir -p "$dst"; cp -a "$src"/. "$dst"/; }; render_tree "$dst" "$domain" "$rootd" "$syncd"; chown -R www-data:www-data "$dst" || true; }
@@ -1102,7 +1420,12 @@ ensure_htpasswd(){
   if [[ ! -f /etc/nginx/.htpasswd ]]; then
     local pass hash note
     ask BASIC_USER "Basic Auth username for protected panel path" "admin"
-    ask pass "Basic Auth password for protected panel path" "change-me-now"
+    read -r -s -p "Basic Auth password for protected panel path: " pass || true
+    echo
+    if [[ -z "$pass" ]]; then
+      pass="change-me-now"
+      warn "Basic Auth password is empty; using default temporary password. Change it after installation."
+    fi
     hash="$(openssl passwd -apr1 "$pass")"
     printf '%s:%s\n' "$BASIC_USER" "$hash" > /etc/nginx/.htpasswd
 
@@ -1148,6 +1471,7 @@ EOF_SWAP_SYSCTL
     return 0
   fi
 
+  free_mb="$(df -Pm / | awk 'NR==2 {print $4+0}')"
   if (( mem_mb <= 1024 )); then
     size_mb=1024
   elif (( mem_mb <= 4096 )); then
@@ -1157,7 +1481,6 @@ EOF_SWAP_SYSCTL
     return 0
   fi
 
-  free_mb="$(df -Pm / | awk 'NR==2 {print $4+0}')"
   if (( free_mb < size_mb + 512 )); then
     warn "No active swap found, but not enough free disk space to create ${size_mb}M /swapfile (free: ${free_mb}M)"
     return 0
@@ -1383,37 +1706,82 @@ wait_for_resolved_global_dns_policy(){
   return 0
 }
 
-setup_dns_policy(){
-  say "Configuring system DNS policy: systemd-resolved + Cloudflare IPv4 ordinary DNS"
 
-  # Canonical DNS policy for XPAM Script-managed servers:
-  # systemd-resolved stub + ordinary Cloudflare IPv4 DNS, no DoT, no DNSSEC, no WARP/wg0 DNS.
-  # Backup whatever the provider image shipped before replacing /etc/resolv.conf.
+dns_getent_ok(){
+  local d
+  for d in github.com letsencrypt.org api.telegram.org cloudflare.com; do
+    getent ahostsv4 "$d" >/dev/null 2>&1 || return 1
+  done
+  return 0
+}
+
+raw_ipv4_network_ok(){
+  # A valid route is enough for DNS rescue. Some VPS providers block ICMP,
+  # so do not require ping to succeed before writing /etc/resolv.conf.
+  ip route get 1.1.1.1 >/dev/null 2>&1 || return 1
+  return 0
+}
+
+backup_resolv_conf_once(){
+  mkdir -p /root/manual-backups/dns
   if [[ -e /etc/resolv.conf || -L /etc/resolv.conf ]]; then
-    cp -a /etc/resolv.conf "/etc/resolv.conf.bak-dns-$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+    cp -a /etc/resolv.conf "/root/manual-backups/dns/resolv.conf.before-xpam-dns-rescue.$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+  fi
+}
+
+write_static_dns_rescue(){
+  backup_resolv_conf_once
+  rm -f /etc/resolv.conf
+  cat > /etc/resolv.conf <<'EOF_DNS_RESCUE'
+nameserver 1.1.1.1
+nameserver 1.0.0.1
+nameserver 8.8.8.8
+options timeout:2 attempts:2 rotate
+EOF_DNS_RESCUE
+  chmod 644 /etc/resolv.conf 2>/dev/null || true
+}
+
+ensure_dns_safe_rescue_if_needed(){
+  if dns_getent_ok; then
+    ok "DNS работает; DNS провайдера не изменяем"
+    return 0
   fi
 
-  mkdir -p /etc/systemd/resolved.conf.d
-  cat > /etc/systemd/resolved.conf.d/10-dns-policy.conf <<'EOF'
-[Resolve]
-DNS=1.1.1.1 1.0.0.1
-FallbackDNS=
-DNSOverTLS=no
-DNSSEC=no
-Cache=yes
-LLMNR=no
-MulticastDNS=no
-Domains=~.
-EOF
-  systemctl enable --now systemd-resolved
-  ln -sfn ../run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
-  suppress_provider_link_dns || true
-  systemctl restart systemd-resolved
-  sleep 1
-  resolvectl flush-caches >/dev/null 2>&1 || true
-  wait_for_resolved_global_dns_policy
+  warn "DNS сейчас не работает через текущий системный resolver"
+  if ! raw_ipv4_network_ok; then
+    fail "DNS не работает, и прямой IPv4-доступ к интернету тоже не подтверждён. Проверьте сеть/VPS-провайдера."
+  fi
+
+  warn "IPv4-сеть работает, но DNS провайдера/resolver сломан. Включаю безопасный fallback DNS для установки."
+  warn "IP, gateway, routes и /etc/network/interfaces не изменяются."
+
+  # If systemd-resolved recently converted /etc/resolv.conf to a broken stub,
+  # do not depend on resolvectl/DBus.  Static resolv.conf is the safest rescue.
+  write_static_dns_rescue
+
+  if dns_getent_ok; then
+    ok "DNS восстановлен через безопасный fallback /etc/resolv.conf"
+    return 0
+  fi
+
+  fail "DNS не работает даже после безопасного fallback /etc/resolv.conf"
+}
+
+setup_dns_policy(){
+  local mode="${XPAM_DNS_POLICY_MODE:-safe}"
+  # XPAM no longer replaces working provider DNS in the default installer path.
+  # DNS management was deliberately reduced to: check -> rescue if broken.
+  # No /etc/network/interfaces, route, gateway, NetworkManager or link-DNS changes are made here.
+  say "Проверка DNS сервера (XPAM Auto: DNS не меняем, только проверяем)"
   write_dns_policy_script
-  /usr/local/sbin/check-dns-policy.sh || fail "DNS policy check failed after setup"
+
+  if [[ "$mode" != "safe" ]]; then
+    warn "DNS replacement/strict mode отключён в XPAM Auto. Используется безопасная проверка DNS без замены провайдерских настроек."
+    mode="safe"
+  fi
+
+  ensure_dns_safe_rescue_if_needed
+  /usr/local/sbin/check-dns-policy.sh || fail "DNS-проверка не пройдена"
 }
 write_telegram_https_relay_worker(){
   cat > /usr/local/sbin/telegram-https-relay.py <<'PYRELAY'
@@ -2035,6 +2403,65 @@ xui_add_vless_inbound_auto(){
   say "Reading local 3x-ui v3 API token from SQLite"
   token="$(xui_api_token)" || fail "Could not read enabled 3x-ui API token from /etc/x-ui/x-ui.db"
 
+  say "Проверка существующего XPAM-managed VLESS inbound"
+  existing="$(SERVER_PREFIX="$SERVER_PREFIX" PRIMARY_DOMAIN="$PRIMARY_DOMAIN" XRAY_PUBLIC_PORT="$XRAY_PUBLIC_PORT" EXPECTED_PORT="$(expected_xray_port)" python3 - <<'PY_EXISTING_VLESS' 2>/dev/null || true
+import json, os, sqlite3, sys
+DB='/etc/x-ui/x-ui.db'
+prefix=os.environ['SERVER_PREFIX']
+primary=os.environ['PRIMARY_DOMAIN']
+public_port=os.environ['XRAY_PUBLIC_PORT']
+expected_port=str(os.environ['EXPECTED_PORT'])
+client_email=f'{prefix}-vless-client'
+conn=sqlite3.connect(DB)
+conn.row_factory=sqlite3.Row
+cur=conn.cursor()
+for row in cur.execute('SELECT * FROM inbounds ORDER BY id ASC'):
+    r=dict(row)
+    if str(r.get('protocol','')).lower()!='vless':
+        continue
+    if str(r.get('port','')) != expected_port:
+        continue
+    remark=str(r.get('remark',''))
+    settings=json.loads(r.get('settings') or '{}')
+    clients=settings.get('clients') or []
+    if isinstance(clients, dict): clients=[clients]
+    for c in clients:
+        if not isinstance(c, dict):
+            continue
+        if c.get('email') != client_email:
+            continue
+        uuid=c.get('id') or c.get('uuid')
+        if not uuid:
+            continue
+        link=f'vless://{uuid}@{primary}:{public_port}?type=tcp&security=tls&flow=xtls-rprx-vision&sni={primary}&fp=chrome&alpn=http%2F1.1#{client_email}'
+        print('\t'.join([str(uuid), client_email, remark or f'{prefix}-vless', link]))
+        sys.exit(0)
+PY_EXISTING_VLESS
+)"
+  if [[ -n "$existing" ]]; then
+    IFS=$'\t' read -r uuid client_name inbound_remark vless_link <<< "$existing"
+    note="/root/secure-notes/${SERVER_PREFIX}-3x-ui-auto.txt"
+    mkdir -p /root/secure-notes
+    chmod 700 /root/secure-notes
+    cat > "$note" <<EOF_XUINOTE_EXISTING
+3x-ui / VLESS setup for xpam-script ${KIT_VERSION}
+=======================================================
+Installed 3x-ui tag: ${XUI_INSTALLED_TAG}
+
+Panel public URL: https://${PRIMARY_DOMAIN}/${PANEL_PATH}/
+3x-ui username: ${XUI_ADMIN_USER}
+3x-ui password: ${XUI_ADMIN_PASS}
+
+Inbound name: ${inbound_remark}
+Client name: ${client_name}
+VLESS link: ${vless_link}
+EOF_XUINOTE_EXISTING
+    chmod 600 "$note"
+    rm -f "$payload"
+    ok "Существующий VLESS inbound найден и переиспользован: ${inbound_remark}"
+    return 0
+  fi
+
   say "Building VLESS TLS fallback inbound payload"
   ids="$(xui_build_inbound_payload "$payload")"
   uuid="$(printf '%s\n' "$ids" | sed -n '1p')"
@@ -2127,7 +2554,7 @@ install_configure_3xui_auto(){
   ok "Automatic 3x-ui install/configure complete"
   echo "Panel URL after setup: https://${PRIMARY_DOMAIN}/${PANEL_PATH}/"
   echo "3x-ui username: ${XUI_ADMIN_USER}"
-  echo "3x-ui password: ${XUI_ADMIN_PASS}"
+  echo "3x-ui password сохранён в /root/secure-notes/${SERVER_PREFIX}-3x-ui-auto.txt"
 }
 
 stage_xui_auto_only(){
@@ -2154,23 +2581,63 @@ write_nginx_final(){ export_vars; cleanup_legacy_nginx_files; if uses_mtproto; t
 install_mtproto(){
   uses_mtproto || return 0
 
-  say "Installing Python mtprotoproxy from upstream repo"
-  rm -rf /opt/mtprotoproxy
-  git clone --depth 1 --branch "$MTPROTO_REPO_BRANCH" "$MTPROTO_REPO_URL" /opt/mtprotoproxy
-  chmod 755 /opt/mtprotoproxy /opt/mtprotoproxy/mtprotoproxy.py
-  rm -rf /opt/mtprotoproxy/.git /opt/mtprotoproxy/Dockerfile /opt/mtprotoproxy/docker-compose.yml || true
-
+  say "Подготовка MTProto proxy"
   mkdir -p /root/secure-notes
   chmod 700 /root/secure-notes
 
-  local secret tag note
-  secret="$(xxd -p -l 16 /dev/urandom)"
-  tag="$(echo -n "$SYNC_DOMAIN" | xxd -p -c 256)"
-  export MTPROTO_SECRET="$secret"
-  export_vars
+  local existing_ok="no" secret tag note backup_dir
+  if [[ -f /opt/mtprotoproxy/config.py ]]; then
+    if python3 - <<'PY_MTPROTO_VALIDATE' >/dev/null 2>&1
+import importlib.util
+p='/opt/mtprotoproxy/config.py'
+spec=importlib.util.spec_from_file_location('mtproto_config', p)
+mod=importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+users=getattr(mod,'USERS',{})
+assert isinstance(users, dict) and users
+for k,v in users.items():
+    assert isinstance(k,str) and k
+    assert isinstance(v,str) and len(v)==32 and all(c in '0123456789abcdefABCDEF' for c in v)
+PY_MTPROTO_VALIDATE
+    then
+      existing_ok="yes"
+      ok "Найден существующий валидный MTProto config.py; USERS/secrets будут сохранены"
+    else
+      warn "Существующий /opt/mtprotoproxy/config.py не прошёл проверку; перед изменением будет создан backup"
+    fi
+  fi
 
-  render_template "$KIT_DIR/templates/mtprotoproxy-config.py.tpl" /opt/mtprotoproxy/config.py
-  chmod 600 /opt/mtprotoproxy/config.py
+  if [[ ! -x /opt/mtprotoproxy/mtprotoproxy.py ]]; then
+    say "Установка Python mtprotoproxy из upstream repo"
+    backup_dir="/root/manual-backups/mtprotoproxy-code-$(date +%Y%m%d-%H%M%S)"
+    if [[ -d /opt/mtprotoproxy ]]; then
+      mkdir -p "$backup_dir"
+      cp -a /opt/mtprotoproxy "$backup_dir/" 2>/dev/null || true
+      rm -rf /opt/mtprotoproxy
+    fi
+    git clone --depth 1 --branch "$MTPROTO_REPO_BRANCH" "$MTPROTO_REPO_URL" /opt/mtprotoproxy
+    chmod 755 /opt/mtprotoproxy /opt/mtprotoproxy/mtprotoproxy.py
+    rm -rf /opt/mtprotoproxy/.git /opt/mtprotoproxy/Dockerfile /opt/mtprotoproxy/docker-compose.yml || true
+  else
+    ok "MTProto upstream code already present: /opt/mtprotoproxy"
+  fi
+
+  if [[ "$existing_ok" != "yes" ]]; then
+    [[ -f /opt/mtprotoproxy/config.py ]] && cp -a /opt/mtprotoproxy/config.py "/root/manual-backups/mtproto-config.py.$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+    secret="$(xxd -p -l 16 /dev/urandom)"
+    tag="$(echo -n "$SYNC_DOMAIN" | xxd -p -c 256)"
+    export MTPROTO_SECRET="$secret"
+    export_vars
+    render_template "$KIT_DIR/templates/mtprotoproxy-config.py.tpl" /opt/mtprotoproxy/config.py
+    chmod 600 /opt/mtprotoproxy/config.py
+    note="/root/secure-notes/${SERVER_PREFIX}-mtproto.txt"
+    cat > "$note" <<EOF_MTPROTO_NOTE
+MTProto proxy for xpam-script ${KIT_VERSION}
+==================================================
+Link: tg://proxy?server=${SYNC_DOMAIN}&port=443&secret=ee${secret}${tag}
+EOF_MTPROTO_NOTE
+    chmod 600 "$note"
+  fi
 
   render_template "$KIT_DIR/templates/mtprotoproxy.service.tpl" /etc/systemd/system/mtprotoproxy.service
   mkdir -p /etc/systemd/system/mtprotoproxy.service.d
@@ -2198,22 +2665,14 @@ Restart=on-failure
 RestartSec=5s
 EOF_MTPROTO_RESTART
 
-  note="/root/secure-notes/${SERVER_PREFIX}-mtproto.txt"
-  cat > "$note" <<EOF_MTPROTO_NOTE
-MTProto proxy for xpam-script ${KIT_VERSION}
-==================================================
-Link: tg://proxy?server=${SYNC_DOMAIN}&port=443&secret=ee${secret}${tag}
-EOF_MTPROTO_NOTE
-  chmod 600 "$note"
   mtproto_python_update rewrite-notes >/dev/null 2>&1 || true
-
   systemctl daemon-reload
   systemctl enable mtprotoproxy
   systemctl restart mtprotoproxy
 }
 
 write_haproxy(){ uses_mtproto || return 0; export_vars; render_template "$KIT_DIR/templates/haproxy.cfg.tpl" /etc/haproxy/haproxy.cfg; haproxy -c -f /etc/haproxy/haproxy.cfg; mkdir -p /etc/systemd/system/haproxy.service.d; render_template "$KIT_DIR/templates/backend-order.conf.tpl" /etc/systemd/system/haproxy.service.d/backend-order.conf; systemctl daemon-reload; systemctl enable haproxy; systemctl restart haproxy; }
-write_health_weekly(){ say "Writing health and weekly scripts"; write_common_library; write_dns_policy_script; write_network_tuning_policy_script; write_telegram_https_relay_worker; migrate_legacy_system_file_names || true; export_vars; render_template "$KIT_DIR/templates/health.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-health"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-health"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-health"; write_health_launcher || true; write_links_launcher || true; write_vless_launcher || true; write_telega_launcher || true; render_template "$KIT_DIR/templates/weekly.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; write_weekly_launcher || true; local cron_min=35; [[ "$SERVER_PREFIX" == "se" ]] && cron_min=30; [[ "$SERVER_PREFIX" == "lt" ]] && cron_min=40; cat > "/etc/cron.d/${SERVER_PREFIX}-weekly-maintenance" <<EOF
+write_health_weekly(){ say "Writing health and weekly scripts"; write_common_library; write_dns_policy_script; write_network_tuning_policy_script; write_telegram_https_relay_worker; migrate_legacy_system_file_names || true; export_vars; render_template "$KIT_DIR/templates/health.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-health"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-health"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-health"; write_health_launcher || true; write_links_launcher || true; write_vless_launcher || true; write_telega_launcher || true; write_repair_launcher || true; write_netdiag_launcher || true; render_template "$KIT_DIR/templates/weekly.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; write_weekly_launcher || true; local cron_min=35; [[ "$SERVER_PREFIX" == "se" ]] && cron_min=30; [[ "$SERVER_PREFIX" == "lt" ]] && cron_min=40; cat > "/etc/cron.d/${SERVER_PREFIX}-weekly-maintenance" <<EOF
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ${cron_min} 4 * * 0 root /usr/bin/nice -n 19 /usr/bin/ionice -c3 /usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh >/dev/null 2>&1
@@ -2241,7 +2700,7 @@ run_health_quiet(){
   ts="$(date +%Y%m%d-%H%M%S)"
   label="$(printf '%s' "$label" | tr -cd 'A-Za-z0-9_.-')"
   [[ -n "$label" ]] || label="health-check"
-  log_dir="/root/manual-backups/health-logs"
+  log_dir="/var/log/xpam-script"
   mkdir -p "$log_dir"
   chmod 700 "$log_dir" 2>/dev/null || true
   log="${log_dir}/${SERVER_PREFIX}-${label}-${ts}.log"
@@ -2611,12 +3070,22 @@ setup_notify_env(){
   local choice
   echo
   printf '\033[0m'
-  echo "Настройка Telegram уведомлений."
+  echo "============================================================"
+  echo "Telegram-уведомления"
+  echo "============================================================"
   echo
-  echo "XPAM Script использует только личный чат один-на-один с вашим Telegram-ботом."
+  echo "XPAM использует личный чат один-на-один с вашим Telegram-ботом."
   echo "Группы, каналы и темы форумов в простой установке не используются."
   echo
-  echo "Выберите режим Telegram:"
+  echo "Что НЕ отправляется:"
+  echo "  - пароли;"
+  echo "  - VLESS/MTProto ссылки;"
+  echo "  - Telegram token;"
+  echo "  - WARP keys."
+  echo
+  echo "------------------------------------------------------------"
+  echo "Выберите режим Telegram"
+  echo "------------------------------------------------------------"
   echo "1) Отправлять уведомления напрямую с этого сервера в Telegram"
   echo "   Этот VPS сам пишет вам в Telegram. Нужен bot token от @BotFather."
   echo
@@ -2724,8 +3193,38 @@ post_install_cleanup(){
   bash -c '. /usr/local/sbin/xpam-maint-common.sh; xpam_post_install_cleanup "'"$SERVER_PREFIX"'"'
 }
 
+cleanup_root_test_leftovers(){
+  # Keep /root clean after successful stage transitions. This helper removes
+  # only upload/test/debug leftovers and empty tool caches; it never touches
+  # user secrets, SSH keys, config snapshots or rollback backups.
+  local mode="${1:-safe}"
+  shopt -s nullglob
+
+  rm -f /root/de-health-*.txt /root/de-health-debian-*.txt 2>/dev/null || true
+  rm -f /root/xpam-script-v*-*.log /root/xpam-script-*.log 2>/dev/null || true
+  rm -f /root/.Xauthority /root/.lesshst 2>/dev/null || true
+  rm -rf /root/xpam-install /root/xpam-release-build /root/xpam-script-test-* 2>/dev/null || true
+  rm -rf /tmp/xpam-* /tmp/xpam-script-* /var/tmp/xpam-* /var/tmp/xpam-script-* 2>/dev/null || true
+  rm -f /tmp/service-audit-*.txt /tmp/tls-cert.* /tmp/tls-info.* 2>/dev/null || true
+
+  if [[ "$mode" == "stage1" || "$mode" == "final" ]]; then
+    rm -f /root/xpam-script-v*.tar.gz /root/xpam-script-v*.tgz /root/xpam-script-v*.zip 2>/dev/null || true
+    rm -f /root/xpam-script-v*.tar.gz.sha256 /root/xpam-script-v*.tgz.sha256 /root/xpam-script-v*.sha256 2>/dev/null || true
+  fi
+
+  # Remove empty helper/cache directory trees only when they contain no files.
+  for xpam_empty_cache_dir in /root/.ansible /root/.local; do
+    if [[ -d "$xpam_empty_cache_dir" ]]; then
+      find "$xpam_empty_cache_dir" -depth -type d -empty -delete 2>/dev/null || true
+      rmdir "$xpam_empty_cache_dir" 2>/dev/null || true
+    fi
+  done
+  shopt -u nullglob
+}
+
 final_production_cleanup(){
   need_root
+  ensure_sudo_hostname_resolution
   load_config
   validate_inputs
   say "Final production cleanup / polish"
@@ -2742,6 +3241,8 @@ final_production_cleanup(){
   write_links_launcher || true
   write_vless_launcher || true
   write_telega_launcher || true
+  write_repair_launcher || true
+  write_netdiag_launcher || true
   write_health_weekly || true
 
   post_install_cleanup || true
@@ -2834,13 +3335,13 @@ has_process_cwd_inside_target(){
   done
   return 1
 }
-for _ in $(seq 1 720); do
+for _ in $(seq 1 1800); do
   if ! has_process_cwd_inside_target; then
     rm -rf -- "$target" 2>/dev/null || true
     rm -f -- "$0" 2>/dev/null || true
     exit 0
   fi
-  sleep 5
+  sleep 1
 done
 exit 0
 EOS
@@ -2848,8 +3349,17 @@ EOS
     nohup bash "$deferred_cleanup_script" "$target" >/dev/null 2>&1 &
   done
 
-  say "Removing stale manual backups and temporary patch backups"
-  rm -rf /root/manual-backups 2>/dev/null || true
+  say "Cleaning old logs and backups by retention policy"
+  mkdir -p /var/log/xpam-script /var/log/xpam-script/netdiag
+  chmod 700 /var/log/xpam-script /var/log/xpam-script/netdiag 2>/dev/null || true
+  prune_keep_latest /var/log/xpam-script "${SERVER_PREFIX}-health-*.log" "${XPAM_HEALTH_LOG_KEEP:-4}" || true
+  prune_keep_latest /var/log/xpam-script/netdiag "${SERVER_PREFIX}-*.txt" 2 || true
+  rm -rf /root/manual-backups/health-logs /root/manual-backups/networking-diagnostics 2>/dev/null || true
+  prune_keep_latest /root/manual-backups/xui-warp-normalize 'x-ui.db.*' "${XPAM_BACKUP_KEEP:-2}" || true
+  prune_keep_latest /root/manual-backups/xui-subscription-disable 'x-ui.db.*' "${XPAM_BACKUP_KEEP:-2}" || true
+  prune_keep_latest /root/manual-backups 'mtproto-config.py.*' "${XPAM_BACKUP_KEEP:-2}" || true
+  find /root/manual-backups -type d -empty -delete 2>/dev/null || true
+  find /root/manual-backups -mindepth 1 -maxdepth 2 -type f \( -name '*.bak-*' -o -name '*.tmp' -o -name '*.out' -o -name '*.err' \) -delete 2>/dev/null || true
   find /usr/local/sbin /etc/nginx /etc/haproxy /etc/systemd/system -xdev -type f \
     \( -name '*.bak-*' -o -name '*.bak-before-*' -o -name '*.bak-xpam-script-*' \) \
     -delete 2>/dev/null || true
@@ -2857,7 +3367,9 @@ EOS
   say "Cleaning apt caches and trimming journals"
   apt-get clean || true
   rm -rf /var/cache/apt/archives/*.deb /var/cache/apt/archives/partial/* 2>/dev/null || true
-  journalctl --vacuum-size=20M >/dev/null 2>&1 || true
+  journalctl --vacuum-size=24M >/dev/null 2>&1 || true
+
+  cleanup_root_test_leftovers final || true
 
   say "Final cleanup footprint"
   du -sh /root /tmp /var/cache/apt /var/log /opt /usr/local/sbin 2>/dev/null || true
@@ -2870,8 +3382,10 @@ EOS
     echo
     ok "Финальная очистка завершена. Сервер здоров."
     echo
-    echo "Выполните сейчас: cd /root"
-    echo "После выхода из временной папки XPAM Script удалит её автоматически."
+    echo "Выполните сейчас:"
+    echo "  cd /root"
+    echo
+    echo "Временная папка установки будет удалена автоматически через несколько секунд после выхода из неё."
     echo "Перезагрузка не требуется."
   else
     ok "Final production cleanup complete. Server is clean and manageable."
@@ -2886,9 +3400,16 @@ EOS
 stage_prepare(){
   need_root
   require_os
+  ensure_sudo_hostname_resolution
   verify_ssh_preflight
-  ask_layout
-  save_config
+  if [[ "${XPAM_REUSE_CONFIG:-no}" == "yes" && -s "$CONFIG_FILE" ]]; then
+    say "Продолжаю установку с сохранённой конфигурацией"
+    load_config
+    validate_inputs
+  else
+    ask_layout
+    save_config
+  fi
   ensure_swap_policy
   preinstall_system_update
   install_base_packages
@@ -2915,21 +3436,34 @@ stage_prepare(){
     warn "3x-ui automation disabled; use the manual checklist before continuing setup."
   fi
   post_install_cleanup
+  cleanup_root_test_leftovers stage1 || true
+  mkdir -p "$CONFIG_DIR"
+  date -Is > "$PREPARE_DONE_FILE"
   reboot_status_notice
   echo
   echo "============================================================"
   if [[ -f /var/run/reboot-required ]]; then
-    warn "Initial setup is complete. Reboot is required before finalization."
-    echo "Run now: sudo reboot"
-    echo "After reboot, run: sudo ${SERVER_PREFIX}-install"
-    echo "Then choose menu item 1: Install / continue server setup."
+    warn "Первый этап завершён. Перед финальной настройкой требуется перезагрузка."
+    echo "Выполните сейчас:"
+    echo "  sudo reboot"
+    echo
+    echo "После перезагрузки войдите по SSH-ключу и выполните:"
+    echo "  sudo ${SERVER_PREFIX}-install"
+    echo "============================================================"
+    echo
+    exit 0
   elif [[ "${XUI_AUTO_SETUP:-yes}" == "yes" ]]; then
-    ok "Initial setup complete. Continue finalization with: sudo ${SERVER_PREFIX}-install"
+    ok "Перезагрузка не требуется. Продолжаю финальную настройку автоматически."
+    echo "============================================================"
+    echo
+    stage_finalize
+    exit 0
   else
-    ok "Initial setup complete. Install/configure 3x-ui manually, then continue with: sudo ${SERVER_PREFIX}-install"
+    ok "Первый этап завершён. Настройте 3x-ui вручную, затем выполните: sudo ${SERVER_PREFIX}-install"
+    echo "============================================================"
+    echo
+    exit 0
   fi
-  echo "============================================================"
-  echo
 }
 note_value(){
   local file="$1" key="$2"
@@ -3162,7 +3696,78 @@ PY_VLESS_LINKS
   fi
 }
 
+
+vless_links_file(){
+  echo "/root/secure-notes/${SERVER_PREFIX}-vless-links.txt"
+}
+
+sync_vless_links_file(){
+  local auto_note file tmp
+  auto_note="/root/secure-notes/${SERVER_PREFIX}-3x-ui-auto.txt"
+  file="$(vless_links_file)"
+  mkdir -p /root/secure-notes
+  chmod 700 /root/secure-notes 2>/dev/null || true
+  tmp="$(mktemp /tmp/xpam-vless-links.XXXXXX)"
+  # print_vless_links_from_xui intentionally prints a human view; extract only link lines into the secure file.
+  print_vless_links_from_xui "$auto_note" 2>/dev/null \
+    | awk -F'VLESS Link: ' '/VLESS Link: / {print $2}' \
+    | sed '/^[[:space:]]*$/d' > "$tmp" || true
+  if [[ -s "$tmp" ]]; then
+    install -m 600 "$tmp" "$file"
+    rm -f "$tmp"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
 print_connection_summary(){
+  local basic_note auto_note mt_note mt_users_note vless_file
+  basic_note="/root/secure-notes/${SERVER_PREFIX}-basic-auth.txt"
+  auto_note="/root/secure-notes/${SERVER_PREFIX}-3x-ui-auto.txt"
+  mt_note="/root/secure-notes/${SERVER_PREFIX}-mtproto.txt"
+  mt_users_note="/root/secure-notes/${SERVER_PREFIX}-mtproto-users.txt"
+  vless_file="$(vless_links_file)"
+  sync_vless_links_file >/dev/null 2>&1 || true
+
+  echo
+  echo "============================================================"
+  echo "XPAM Script: данные подключения"
+  echo "============================================================"
+  echo
+  echo "Этот вывод безопасный: пароли, VLESS-ссылки и MTProto-секреты здесь не печатаются."
+  echo "Полные секреты лежат только в защищённых файлах с правами 600."
+  echo
+  echo "Сайты и панели:"
+  [[ -n "${ROOT_DOMAIN:-}" ]] && echo "  Основной сайт:        https://${ROOT_DOMAIN}/"
+  [[ -n "${WWW_DOMAIN:-}" && -n "${ROOT_DOMAIN:-}" ]] && echo "  www redirect:         https://${WWW_DOMAIN}/ -> https://${ROOT_DOMAIN}/"
+  echo "  3x-ui / VLESS:        https://${PRIMARY_DOMAIN}/${PANEL_PATH}/"
+  if uses_mtproto; then
+    echo "  MTProto health:       https://${SYNC_DOMAIN}/health"
+  fi
+  echo
+  echo "Файлы с секретами на сервере:"
+  [[ -f "$basic_note" ]] && echo "  Basic Auth:           $basic_note"
+  [[ -f "$auto_note" ]] && echo "  3x-ui данные:         $auto_note"
+  [[ -f "$vless_file" ]] && echo "  VLESS-ссылки:         $vless_file"
+  [[ -f "$mt_note" ]] && echo "  MTProto link:         $mt_note"
+  [[ -f "$mt_users_note" ]] && echo "  MTProto users:        $mt_users_note"
+  echo
+  echo "Показать секреты на экран только осознанно:"
+  echo "  VLESS-ссылки:         sudo ${SERVER_PREFIX}-vless --show"
+  if uses_mtproto; then
+    echo "  MTProto-ссылки:       sudo ${SERVER_PREFIX}-telega --show"
+    echo "  MTProto управление:   sudo ${SERVER_PREFIX}-telega --manage"
+  fi
+  echo "  Всё сразу:            sudo ${SERVER_PREFIX}-links --show-secrets"
+  echo
+  echo "Проверка сервера:"
+  echo "  Быстрая:              sudo ${SERVER_PREFIX}-health"
+  echo "  Подробная:            sudo ${SERVER_PREFIX}-health --deep"
+  echo "============================================================"
+}
+
+print_connection_secrets_summary(){
   local basic_note auto_note mt_note mt_users_note basic_user basic_pass xui_user xui_pass mtproto_link
   basic_note="/root/secure-notes/${SERVER_PREFIX}-basic-auth.txt"
   auto_note="/root/secure-notes/${SERVER_PREFIX}-3x-ui-auto.txt"
@@ -3211,8 +3816,8 @@ print_connection_summary(){
   echo
   echo "ПОЛЕЗНЫЕ КОМАНДЫ:"
   echo "  Открыть меню XPAM Script:          sudo ${SERVER_PREFIX}-install"
-  echo "  Показать данные подключения:     sudo ${SERVER_PREFIX}-links"
-  echo "  Показать VLESS ссылки:           sudo ${SERVER_PREFIX}-vless"
+  echo "  Показать безопасную сводку:     sudo ${SERVER_PREFIX}-links"
+  echo "  Показать VLESS-ссылки:           sudo ${SERVER_PREFIX}-vless"
   if uses_mtproto; then
     echo "  Управление MTProto пользователями: sudo ${SERVER_PREFIX}-telega"
   fi
@@ -3222,9 +3827,30 @@ print_connection_summary(){
 }
 
 
+
+print_install_done_summary(){
+  echo
+  echo "============================================================"
+  echo "XPAM Script: сервер готов"
+  echo
+  echo "Секреты, пароли, VLESS и MTProto ссылки не печатаются в install-log."
+  echo "Чтобы посмотреть данные подключения вручную, выполните:"
+  echo "  sudo ${SERVER_PREFIX}-links"
+  echo
+  echo "Проверить состояние сервера:"
+  echo "  sudo ${SERVER_PREFIX}-health"
+  echo
+  echo "Полная диагностика при проблемах:"
+  echo "  sudo ${SERVER_PREFIX}-health --deep"
+  echo
+  echo "Защищённые заметки с секретами находятся в /root/secure-notes"
+  echo "============================================================"
+}
+
 stage_finalize(){
   need_root
   require_os
+  ensure_sudo_hostname_resolution
   load_config
   validate_inputs
   verify_ssh_preflight
@@ -3254,51 +3880,85 @@ stage_finalize(){
   xpam_config_snapshot "$SERVER_PREFIX" 4 || true
   apply_service_hygiene
   post_install_cleanup
-  "/usr/local/sbin/${SERVER_PREFIX}-health" || fail "Final health check failed"
   if confirm "Настроить Telegram уведомления сейчас?" no; then
     setup_notify_env || true
   fi
   echo
   warn "Финальная очистка удалит временные файлы установки, архивы, .sha256 и распакованную папку XPAM Script."
-  warn "Если после завершения вы всё ещё видите путь xpam-script-v1.0.10, выполните: cd /root"
+  warn "После очистки временная папка установки будет удалена автоматически. Если вы сейчас внутри неё, выполните: cd /root"
   local did_final_cleanup="no"
   if confirm "Выполнить финальную очистку перед production сейчас?" yes; then
     did_final_cleanup="yes"
     final_production_cleanup
   fi
   "/usr/local/sbin/${SERVER_PREFIX}-health" || fail "Final health check failed after optional steps"
-  print_connection_summary
+  print_install_done_summary
   reboot_status_notice
-  ok "ALL DONE. Server looks healthy."
+  ok "Готово. Сервер выглядит рабочим."
   if [[ "$did_final_cleanup" == "yes" ]]; then
     rm -f /root/xpam-script-v*-*.log /root/xpam-script-*.log 2>/dev/null || true
   fi
+  exit 0
 }
 stage_check_only(){ need_root; load_config; validate_inputs; verify_ssh_preflight; [[ -x "/usr/local/sbin/${SERVER_PREFIX}-health" ]] && "/usr/local/sbin/${SERVER_PREFIX}-health" || verify_xui_manual_setup; }
 
 stage_notify(){ need_root; setup_notify_env; }
 
 warp_print_3xui_manual_steps(){
+  echo "============================================================"
+  echo "WARP через 3x-ui / Xray"
+  echo "============================================================"
   echo
-  echo "===== Настройка WARP в 3x-ui / Xray ====="
-  echo "Этот режим НЕ ставит системный VPN на весь сервер. WARP будет outbound внутри Xray."
-  echo "Обычная схема сервера при этом остаётся прежней: 22/80/443 снаружи, DNS и default route сервера не трогаем."
+  echo "Что важно:"
+  echo "  - XPAM НЕ ставит системный VPN на весь сервер."
+  echo "  - WARP будет работать только как outbound внутри Xray."
+  echo "  - SSH, DNS, apt, certbot, nginx, HAProxy и MTProto не пойдут через WARP."
+  echo "  - Default route сервера не меняется."
+  echo "  - WARP private key, reserved и license key нельзя отправлять в чат или логи."
   echo
-  echo "1. Откройте панель 3x-ui:"
-  echo "   https://${PRIMARY_DOMAIN}/${PANEL_PATH}/"
-  echo "2. В 3x-ui откройте: Настройки Xray -> Исходящие подключения."
-  echo "3. Нажмите кнопку WARP, затем обязательно нажмите Add outbound."
-  echo "   Без Add outbound WARP outbound не будет создан."
-  echo "4. Нажмите Сохранить в 3x-ui. Ручной перезапуск Xray не требуется: XPAM Script сделает это сам."
-  echo "5. Не отправляйте WARP private key, reserved, license key или скриншоты с ними в чат/логи."
-  echo "6. Вернитесь сюда и выберите: WARP в 3x-ui установлен — проверить и привести к настройкам XPAM Script."
+  echo "------------------------------------------------------------"
+  echo "Шаг 1. Создайте WARP outbound в панели 3x-ui"
+  echo "------------------------------------------------------------"
   echo
-  echo "XPAM Script после этого сам проверит и приведёт WARP outbound к безопасной схеме:"
-  echo "  tag=warp, protocol=wireguard, mtu=1420, domainStrategy=ForceIPv4, workers=2, noKernelTun=false"
-  echo "  address IPv4-only, peer allowedIPs=0.0.0.0/0, keepAlive=25"
-  echo "  Домены/IP маршрутизации в 3x-ui являются пользовательскими: health/weekly их не проверяют"
-  echo "  При выборе этого пункта XPAM Script восстановит стандартное YouTube -> warp правило, если оно отсутствует"
-  echo "  Пользовательские маршруты при этом не удаляются и не переписываются"
+  echo "Откройте панель:"
+  echo "  https://${PRIMARY_DOMAIN}${PANEL_PATH}/"
+  echo
+  echo "В панели 3x-ui:"
+  echo "  1. Откройте: Настройки Xray -> Исходящие подключения."
+  echo "  2. Нажмите кнопку: WARP."
+  echo "  3. Обязательно нажмите: Add outbound."
+  echo "  4. Нажмите: Сохранить."
+  echo
+  echo "Важно:"
+  echo "  Если не нажать Add outbound, WARP outbound не будет создан."
+  echo "  Ручной перезапуск Xray не нужен — XPAM сделает это сам."
+  echo
+  echo "------------------------------------------------------------"
+  echo "Шаг 2. Что сделает XPAM после проверки"
+  echo "------------------------------------------------------------"
+  echo
+  echo "XPAM проверит WARP outbound и приведёт его к безопасной схеме:"
+  echo
+  echo "  tag=warp"
+  echo "  protocol=wireguard"
+  echo "  mtu=1420"
+  echo "  domainStrategy=ForceIPv4"
+  echo "  workers=2"
+  echo "  noKernelTun=false"
+  echo "  address=IPv4-only"
+  echo "  peer allowedIPs=0.0.0.0/0"
+  echo "  peer keepAlive=25"
+  echo
+  echo "Также XPAM:"
+  echo "  - создаст backup базы 3x-ui;"
+  echo "  - восстановит стандартное правило YouTube -> warp, если оно отсутствует;"
+  echo "  - не удалит пользовательские маршруты;"
+  echo "  - не изменит default route сервера;"
+  echo "  - не изменит DNS сервера."
+  echo
+  echo "------------------------------------------------------------"
+  echo "Выберите действие"
+  echo "------------------------------------------------------------"
   echo
 }
 
@@ -3486,16 +4146,14 @@ stage_warp_3xui_youtube(){
   load_config
   validate_inputs
   warp_print_3xui_manual_steps
-  echo "1) WARP в 3x-ui установлен — проверить и привести к настройкам XPAM Script"
-  echo "2) Ничего не менять и выйти"
-  echo "3) Назад"
+  echo "1) Я создал WARP outbound в 3x-ui — проверить и настроить"
+  echo "2) Выйти без изменений"
   local choice
-  read -r -p "Выберите пункт [1-3]: " choice || true
+  read -r -p "Выберите пункт [1-2]: " choice || true
   case "$choice" in
     1) xui_warp_youtube_fix ;;
     2) return 0 ;;
-    3) return 0 ;;
-    *) fail "Unknown choice" ;;
+    *) fail "Неизвестный пункт меню" ;;
   esac
 }
 
@@ -3507,39 +4165,47 @@ stage_warp_menu(){
   fi
   load_config
   validate_inputs
-  echo "Настройка WARP (опционально)"
-  echo "1) Настройка WARP в 3X-UI / Xray"
-  echo "2) Назад"
+  echo "WARP через 3x-ui / Xray"
+  echo "1) Настроить или проверить WARP outbound"
+  echo "2) Выйти"
   local choice
   read -r -p "Выберите пункт [1-2]: " choice || true
   case "$choice" in
     1) stage_warp_3xui_youtube ;;
     2) return 0 ;;
-    *) fail "Unknown choice" ;;
+    *) fail "Неизвестный пункт меню" ;;
   esac
 }
 
 print_vless_summary(){
-  local auto_note
+  local auto_note file
   auto_note="/root/secure-notes/${SERVER_PREFIX}-3x-ui-auto.txt"
+  file="$(vless_links_file)"
+  sync_vless_links_file >/dev/null 2>&1 || true
 
   echo
   echo "============================================================"
-  echo "VLESS подключения"
-  echo
-  echo "Эта команда только показывает готовые VLESS-ссылки."
-  echo "Добавлять, удалять и менять VLESS пользователей нужно в панели 3x-ui."
+  echo "VLESS-подключение"
   echo "============================================================"
   echo
-  echo "АДРЕС ПАНЕЛИ 3x-ui:"
+  echo "Эта команда по умолчанию НЕ печатает VLESS-ссылку, чтобы случайно не раскрыть доступ."
+  echo "Добавлять, удалять и менять VLESS-пользователей нужно в панели 3x-ui."
+  echo
+  echo "Панель 3x-ui:"
   echo "  https://${PRIMARY_DOMAIN}/${PANEL_PATH}/"
   echo
-  print_vless_links_from_xui "$auto_note"
+  if [[ -f "$file" ]]; then
+    echo "VLESS-ссылка сохранена одной строкой в файле:"
+    echo "  $file"
+  else
+    echo "VLESS-ссылка пока не найдена в 3x-ui. Проверьте панель или выполните health --deep."
+  fi
   echo
-  echo "ПОЛЕЗНЫЕ КОМАНДЫ:"
-  echo "  Все данные подключения:        sudo ${SERVER_PREFIX}-links"
-  echo "  Проверить состояние сервера:   sudo ${SERVER_PREFIX}-health"
+  echo "Показать VLESS-ссылку на экран:"
+  echo "  sudo ${SERVER_PREFIX}-vless --show"
   echo
+  echo "Все данные подключения:"
+  echo "  sudo ${SERVER_PREFIX}-links"
   echo "============================================================"
 }
 
@@ -3547,14 +4213,50 @@ stage_vless_direct(){
   need_root
   load_config
   validate_inputs
-  print_vless_summary
+  case "${1:-}" in
+    --show)
+      if sync_vless_links_file; then
+        warn "Ниже будет показана приватная VLESS-ссылка. Не отправляйте её в публичные чаты, тикеты, скриншоты и логи."
+        cat "$(vless_links_file)"
+      else
+        fail "VLESS-ссылка не найдена. Проверьте 3x-ui или выполните: sudo ${SERVER_PREFIX}-health --deep"
+      fi
+      ;;
+    --file)
+      sync_vless_links_file >/dev/null 2>&1 || true
+      echo "$(vless_links_file)"
+      ;;
+    ""|--help|-h)
+      print_vless_summary
+      ;;
+    *)
+      fail "Неизвестный параметр. Используйте: sudo ${SERVER_PREFIX}-vless или sudo ${SERVER_PREFIX}-vless --show"
+      ;;
+  esac
 }
 
 stage_links_direct(){
   need_root
   load_config
   validate_inputs
-  print_connection_summary
+  case "${1:-}" in
+    --show-secrets)
+      warn "Сейчас будут показаны пароли, VLESS/MTProto ссылки и другие секреты."
+      warn "Не отправляйте этот вывод в чаты, тикеты, скриншоты или публичные логи."
+      if confirm "Показать секреты на экран?" no; then
+        print_connection_secrets_summary
+      else
+        echo "Отменено. Безопасная сводка:"
+        print_connection_summary
+      fi
+      ;;
+    ""|--safe|--help|-h)
+      print_connection_summary
+      ;;
+    *)
+      fail "Неизвестный параметр. Используйте: sudo ${SERVER_PREFIX}-links или sudo ${SERVER_PREFIX}-links --show-secrets"
+      ;;
+  esac
 }
 
 site_webroot_lines(){
@@ -3803,7 +4505,7 @@ stage_site_menu(){
     2) stage_site_check_uploaded ;;
     3) stage_site_reset_stock ;;
     4) return 0 ;;
-    *) fail "Unknown choice" ;;
+    *) fail "Неизвестный пункт меню" ;;
   esac
 }
 
@@ -3882,7 +4584,7 @@ def link_for(sec):
 
 def write_notes():
     notes.mkdir(mode=0o700, parents=True, exist_ok=True)
-    body=['MTProto users for XPAM Script v1.0.10','==================================================','']
+    body=['MTProto users for XPAM Script v1.1.0','==================================================','']
     for name, sec in users.items():
         body.append(f'User: {name}')
         body.append(f'Link: {link_for(sec)}')
@@ -3890,7 +4592,7 @@ def write_notes():
     users_note.write_text('\n'.join(body), encoding='utf-8')
     users_note.chmod(0o600)
     first_name = prefix if prefix in users else next(iter(users))
-    legacy_note.write_text('MTProto proxy for XPAM Script v1.0.10\n==================================================\nLink: '+link_for(users[first_name])+'\n', encoding='utf-8')
+    legacy_note.write_text('MTProto proxy for XPAM Script v1.1.0\n==================================================\nLink: '+link_for(users[first_name])+'\n', encoding='utf-8')
     legacy_note.chmod(0o600)
 
 if action == 'list':
@@ -3928,7 +4630,7 @@ elif action == 'regen':
 elif action == 'rewrite-notes':
     validate_users()
 else:
-    fail(f'unknown action: {action}')
+    fail(f"unknown action: {action}")
 
 validate_users()
 text=path.read_text(encoding='utf-8')
@@ -4009,8 +4711,8 @@ mtproto_delete_user(){
   local user confirm backup_dir
   read -r -p "Введите имя MTProto пользователя для удаления: " user || true
   mtproto_valid_user_name "$user" || fail "Некорректное имя пользователя"
-  read -r -p "Введите DELETE-${user} для подтверждения: " confirm || true
-  [[ "$confirm" == "DELETE-${user}" ]] || fail "Удаление отменено"
+  read -r -p "Для подтверждения введите delete-${user}: " confirm || true
+  [[ "$confirm" == "delete-${user}" ]] || fail "Удаление отменено"
   backup_dir="$(mtproto_backup)"
   ok "Backup MTProto config создан: $backup_dir"
   mtproto_python_update delete "$user" >/dev/null
@@ -4025,8 +4727,8 @@ mtproto_regenerate_user_key(){
   read -r -p "Введите имя MTProto пользователя для замены ключа: " user || true
   mtproto_valid_user_name "$user" || fail "Некорректное имя пользователя"
   warn "Старый MTProto link этого пользователя перестанет работать."
-  read -r -p "Введите REGEN-${user} для подтверждения: " confirm || true
-  [[ "$confirm" == "REGEN-${user}" ]] || fail "Замена ключа отменена"
+  read -r -p "Для подтверждения введите regen-${user}: " confirm || true
+  [[ "$confirm" == "regen-${user}" ]] || fail "Замена ключа отменена"
   backup_dir="$(mtproto_backup)"
   ok "Backup MTProto config создан: $backup_dir"
   link="$(mtproto_python_update regen "$user")"
@@ -4037,12 +4739,69 @@ mtproto_regenerate_user_key(){
   echo "new link: $link"
 }
 
+print_telega_summary(){
+  local mt_note mt_users_note
+  mt_note="/root/secure-notes/${SERVER_PREFIX}-mtproto.txt"
+  mt_users_note="/root/secure-notes/${SERVER_PREFIX}-mtproto-users.txt"
+  echo
+  echo "============================================================"
+  echo "MTProto-подключение"
+  echo "============================================================"
+  echo
+  echo "Эта команда по умолчанию НЕ печатает MTProto-ссылки, чтобы случайно не раскрыть доступ."
+  echo
+  echo "Файлы с MTProto-данными:"
+  [[ -f "$mt_note" ]] && echo "  Основная ссылка:       $mt_note"
+  [[ -f "$mt_users_note" ]] && echo "  Пользователи:          $mt_users_note"
+  echo
+  echo "Показать MTProto-ссылки на экран:"
+  echo "  sudo ${SERVER_PREFIX}-telega --show"
+  echo
+  echo "Управлять MTProto-пользователями:"
+  echo "  sudo ${SERVER_PREFIX}-telega --manage"
+  echo
+  echo "Проверить сервер:"
+  echo "  sudo ${SERVER_PREFIX}-health"
+  echo "============================================================"
+}
+
+mtproto_show_all_links(){
+  need_root; load_config; validate_inputs; mtproto_require
+  local mt_users_note mt_note
+  mt_users_note="/root/secure-notes/${SERVER_PREFIX}-mtproto-users.txt"
+  mt_note="/root/secure-notes/${SERVER_PREFIX}-mtproto.txt"
+  warn "Ниже будут показаны приватные MTProto-ссылки. Не отправляйте их в публичные чаты, тикеты, скриншоты и логи."
+  if [[ -s "$mt_users_note" ]]; then
+    cat "$mt_users_note"
+  elif [[ -s "$mt_note" ]]; then
+    cat "$mt_note"
+  else
+    fail "MTProto note file не найден. Выполните health или repair."
+  fi
+}
+
 stage_telega_direct(){
   need_root
   load_config
   validate_inputs
   mtproto_require
-  stage_mtproto_users_menu
+  case "${1:-}" in
+    --show)
+      mtproto_show_all_links
+      ;;
+    --manage)
+      stage_mtproto_users_menu
+      ;;
+    --list)
+      mtproto_list_users
+      ;;
+    ""|--help|-h)
+      print_telega_summary
+      ;;
+    *)
+      fail "Неизвестный параметр. Используйте: sudo ${SERVER_PREFIX}-telega, sudo ${SERVER_PREFIX}-telega --show или sudo ${SERVER_PREFIX}-telega --manage"
+      ;;
+  esac
 }
 
 stage_mtproto_users_menu(){
@@ -4056,7 +4815,7 @@ stage_mtproto_users_menu(){
   echo "3) Показать ссылку пользователя"
   echo "4) Удалить пользователя"
   echo "5) Перегенерировать ключ пользователя"
-  echo "6) Назад"
+  echo "6) Выйти"
   local choice
   read -r -p "Выберите пункт [1-6]: " choice || true
   case "$choice" in
@@ -4066,7 +4825,7 @@ stage_mtproto_users_menu(){
     4) mtproto_delete_user ;;
     5) mtproto_regenerate_user_key ;;
     6) return 0 ;;
-    *) fail "Unknown choice" ;;
+    *) fail "Неизвестный пункт меню" ;;
   esac
 }
 
@@ -4074,27 +4833,31 @@ stage_show_details(){
   need_root
   load_config
   validate_inputs
+  echo
   echo "Данные для подключения"
-  echo "1) Показать все данные подключения"
+  echo "1) Показать безопасную сводку без секретов"
+  echo "2) Показать секреты на экран"
   if uses_mtproto; then
-    echo "2) Управление MTProto пользователями"
-    echo "3) Назад"
+    echo "3) MTProto-пользователи"
+    echo "4) Выйти"
+    local choice
+    read -r -p "Выберите пункт [1-4]: " choice || true
+    case "$choice" in
+      1) print_connection_summary ;;
+      2) stage_links_direct --show-secrets ;;
+      3) stage_mtproto_users_menu ;;
+      4) return 0 ;;
+      *) fail "Неизвестный пункт меню" ;;
+    esac
+  else
+    echo "3) Выйти"
     local choice
     read -r -p "Выберите пункт [1-3]: " choice || true
     case "$choice" in
       1) print_connection_summary ;;
-      2) stage_mtproto_users_menu ;;
+      2) stage_links_direct --show-secrets ;;
       3) return 0 ;;
-      *) fail "Unknown choice" ;;
-    esac
-  else
-    echo "2) Назад"
-    local choice
-    read -r -p "Выберите пункт [1-2]: " choice || true
-    case "$choice" in
-      1) print_connection_summary ;;
-      2) return 0 ;;
-      *) fail "Unknown choice" ;;
+      *) fail "Неизвестный пункт меню" ;;
     esac
   fi
 }
@@ -4106,49 +4869,171 @@ stage_install_continue(){
   if [[ ! -f "$CONFIG_FILE" ]]; then
     load_prefix_bootstrap || true
     stage_prepare
-    return 0
+    exit 0
   fi
   load_config
   validate_inputs
-  if [[ ! -x "/usr/local/sbin/${SERVER_PREFIX}-health" ]]; then
-    stage_finalize
-    return 0
+
+  if [[ -x "/usr/local/sbin/${SERVER_PREFIX}-health" ]]; then
+    say "Сервер уже установлен"
+    "/usr/local/sbin/${SERVER_PREFIX}-health" || fail "Health check failed"
+    echo "Данные подключения не печатаются в install-log. Для просмотра выполните: sudo ${SERVER_PREFIX}-links"
+    exit 0
   fi
-  say "Server appears to be installed already"
-  "/usr/local/sbin/${SERVER_PREFIX}-health" || fail "Health check failed"
-  print_connection_summary
+
+  if [[ ! -s "$PREPARE_DONE_FILE" ]]; then
+    warn "Предыдущая установка не завершила первый этап. Повторяю подготовку сервера с сохранённой конфигурацией."
+    XPAM_REUSE_CONFIG=yes stage_prepare
+    exit 0
+  fi
+
+  stage_finalize
+  exit 0
+}
+
+
+
+stage_repair(){
+  need_root
+  ensure_sudo_hostname_resolution
+  load_config
+  validate_inputs
+  echo "============================================================"
+  echo "Repair: восстановление XPAM-обвязки"
+  echo "============================================================"
+  echo
+  echo "Что делает repair: восстанавливает команды XPAM, health/weekly, service limits,"
+  echo "startup order, fail2ban policy, certbot hook и service hygiene."
+  echo
+  echo "Что repair НЕ делает: не меняет домены, VLESS UUID, MTProto secret,"
+  echo "не удаляет пользователей и не переписывает /etc/network/interfaces."
+  echo
+  say "Repair XPAM service policy"
+  verify_ssh_preflight || true
+  setup_dns_policy || true
+  apply_network_tuning_policy || true
+  apply_service_nofile_limits || true
+  write_wait_for_port || true
+  write_certbot_hook || true
+  write_health_weekly || true
+  apply_service_hygiene || true
+  nginx -t >/dev/null 2>&1 && systemctl reload nginx || systemctl restart nginx || true
+  systemctl try-restart x-ui || true
+  if uses_mtproto; then
+    systemctl try-restart mtprotoproxy || true
+    systemctl try-reload-or-restart haproxy || true
+  fi
+  run_health_quiet "repair" || fail "Repair завершён, но health-check всё ещё показывает проблемы"
+  ok "Repair завершён"
+}
+
+stage_netdiag(){
+  need_root
+  load_config || true
+  echo "============================================================"
+  echo "Диагностика сети Debian/провайдера"
+  echo "============================================================"
+  echo
+  echo "Эта команда ничего не чинит автоматически. Она собирает диагностику DNS,"
+  echo "маршрутов, networking.service и сетевых конфигов в отдельный лог-файл."
+  echo "Файл может содержать IP-адреса, gateway, DNS и домены."
+  echo
+  local ts dir log
+  ts="$(date +%Y%m%d-%H%M%S)"
+  dir="/var/log/xpam-script/netdiag/${SERVER_PREFIX:-server}-${ts}"
+  mkdir -p "$dir"
+  chmod 700 "$dir" 2>/dev/null || true
+  log="$dir/netdiag.txt"
+  {
+    echo "XPAM Script network diagnostics"
+    date
+    hostname -f 2>/dev/null || hostname
+    echo
+    echo "===== OS ====="; cat /etc/os-release 2>/dev/null || true
+    echo
+    echo "===== FAILED SYSTEMD UNITS ====="; systemctl --failed --no-pager || true
+    echo
+    echo "===== networking.service ====="; systemctl --no-pager --full status networking 2>&1 || true
+    echo
+    echo "===== networking.service journal ====="; journalctl -u networking -b --no-pager -n 200 2>&1 || true
+    echo
+    echo "===== ip link ====="; ip -br link 2>&1 || true
+    echo
+    echo "===== ip addr ====="; ip -4 addr 2>&1 || true
+    echo
+    echo "===== ip route ====="; ip -4 route 2>&1 || true
+    echo
+    echo "===== ip route get 1.1.1.1 ====="; ip route get 1.1.1.1 2>&1 || true
+    echo
+    echo "===== /etc/network/interfaces ====="; sed -n '1,220p' /etc/network/interfaces 2>&1 || true
+    echo
+    echo "===== /etc/network/interfaces.d ====="; find /etc/network/interfaces.d -maxdepth 1 -type f -print -exec sed -n '1,220p' {} \; 2>&1 || true
+    echo
+    echo "===== resolvectl status ====="; timeout 5s resolvectl status 2>&1 || true
+    echo
+    echo "===== DNS check ====="; /usr/local/sbin/check-dns-policy.sh 2>&1 || true
+  } > "$log"
+  chmod 600 "$log" 2>/dev/null || true
+  ok "Диагностика сети сохранена: $log"
+  echo "Файл может содержать IP-адреса и имена доменов. Не публикуйте его без проверки."
+}
+
+stage_advanced_menu(){
+  echo
+  echo "Дополнительно"
+  echo "0) SSH-безопасность / создать prefix-команду"
+  echo "1) Подробная health-диагностика"
+  echo "2) Диагностика сети Debian/провайдера"
+  echo "3) Repair: восстановить XPAM service policy"
+  echo "4) Финальная production-очистка"
+  echo "5) Показать текущую конфигурацию"
+  echo "6) Выйти"
+  local choice
+  read -r -p "Выберите пункт [0-6]: " choice
+  case "$choice" in
+    0) stage_ssh_hardening ;;
+    1) need_root; load_config; "/usr/local/sbin/${SERVER_PREFIX}-health" --deep ;;
+    2) stage_netdiag ;;
+    3) stage_repair ;;
+    4) final_production_cleanup ;;
+    5) show_config ;;
+    6) return 0 ;;
+    *) fail "Неизвестный пункт меню" ;;
+  esac
 }
 
 main_menu(){
   need_root
   printf '\033[0m'
   echo "XPAM Script ${KIT_VERSION}"
-  echo "0) Настроить SSH-безопасность: вход только по ключу, X11 отключён, SSH-туннели разрешены"
+  echo "0) SSH-безопасность / создать prefix-команду"
   echo "1) Установить / продолжить настройку сервера"
-  echo "2) Настроить / проверить Telegram уведомления (опционально)"
-  echo "3) Настройка WARP (опционально)"
-  echo "4) Управление сайтами (опционально)"
-  echo "5) Показать данные для подключения"
-  echo "6) Проверить состояние сервера"
-  echo "7) Финальная / production-очистка"
-  echo "8) Показать текущую конфигурацию"
-  echo "9) Выход"
+  echo "2) Показать данные для подключения"
+  echo "3) Проверить состояние сервера"
+  echo "4) Telegram-уведомления"
+  echo "5) WARP через 3x-ui/Xray"
+  echo "6) Управление сайтами"
+  echo "7) Дополнительно"
+  echo "8) Выход"
+  echo
+  if [[ ! -s /etc/xpam-script/prefix.env ]]; then
+    echo "Первый запуск? Сначала выберите пункт 0."
+  fi
   local choice
-  read -r -p "Выберите пункт [0-9]: " choice
+  read -r -p "Выберите пункт [0-8]: " choice
   case "$choice" in
     0) stage_ssh_hardening ;;
     1) stage_install_continue ;;
-    2) stage_notify ;;
-    3) stage_warp_menu ;;
-    4) stage_site_menu ;;
-    5) stage_show_details ;;
-    6) stage_check_only ;;
-    7) final_production_cleanup ;;
-    8) show_config ;;
-    9) exit 0 ;;
-    # Compatibility shortcuts for older instructions/tests.
+    2) stage_show_details ;;
+    3) stage_check_only ;;
+    4) stage_notify ;;
+    5) stage_warp_menu ;;
+    6) stage_site_menu ;;
+    7) stage_advanced_menu ;;
+    8) exit 0 ;;
     a|A) stage_prepare ;;
     b|B) stage_finalize ;;
-    *) fail "Unknown choice" ;;
+    *) fail "Неизвестный пункт меню" ;;
   esac
+  exit 0
 }

@@ -1,0 +1,17 @@
+* text=auto eol=lf
+*.sh text eol=lf
+*.tpl text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+VERSION text eol=lf
+
+*.docx binary
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.tar.gz binary
+*.zip binary

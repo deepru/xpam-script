@@ -1,200 +1,114 @@
 # XPAM Script
 
-**XPAM Script** — автоматизированный Bash-инструмент для подготовки VPS на **Ubuntu 24.04 LTS** и **Debian 12**.
+**XPAM Script** — Bash-автоматизация для подготовки чистого VPS на **Ubuntu 24.04 LTS** или **Debian 12** под HTTPS/TLS-схему с VLESS, 3x-ui/Xray, MTProto, nginx, HAProxy, Certbot, UFW, fail2ban, health-check и регулярным обслуживанием.
 
-Скрипт настраивает серверную схему для **VLESS** и **MTProto** с HTTPS/TLS-поверхностью, сайтами-маскировками, TLS-сертификатами, firewall, health-checks и еженедельным обслуживанием.
+Актуальный публичный релиз: **v1.1.0**.
 
-Актуальный публичный релиз: **v1.0.10**.
-> **IPv4-first:** XPAM Script поддерживает установку только по IPv4. Для доменов проекта создавайте только `A`-записи на IPv4-адрес VPS. `AAAA`-записи для этих доменов нужно удалить до запуска установки: публичный IPv6-режим скриптом не поддерживается.
+Проект не является форком 3x-ui, Xray-core или MTProto proxy. XPAM Script устанавливает, связывает, настраивает, проверяет и обслуживает эти upstream-компоненты.
 
----
-
-## Быстрая установка
-
-На чистом VPS выполните:
-
-    curl -fsSL https://raw.githubusercontent.com/deepru/xpam-script/main/bootstrap.sh -o xpam-bootstrap.sh
-    sudo XPAM_REPO="deepru/xpam-script" bash xpam-bootstrap.sh
-
-После запуска следуйте меню установщика.
+> **Важно:** XPAM Script не обещает анонимность, неуязвимость или “невидимость”. Пользователь отвечает за законность использования, безопасность своих ключей и корректную DNS-настройку.
 
 ---
 
 ## Что делает XPAM Script
 
-XPAM Script автоматизирует полный цикл подготовки VPS:
-
-- настраивает SSH-безопасность и вход только по SSH-ключу;
-- отключает вход по SSH-паролю;
-- настраивает UFW firewall;
-- устанавливает и настраивает nginx;
-- устанавливает и настраивает HAProxy для TCP/SNI-маршрутизации;
-- устанавливает Certbot и получает TLS-сертификаты Let's Encrypt;
-- устанавливает и настраивает 3x-ui / Xray;
-- создаёт VLESS inbound на loopback-адресе;
-- настраивает внешний VLESS-домен через HTTPS/TLS;
-- устанавливает и настраивает MTProto proxy;
-- маскирует VLESS и MTProto под обычную HTTPS/TLS-поверхность;
-- создаёт рабочие сайты-маскировки;
-- настраивает systemd-зависимости и порядок запуска сервисов;
-- настраивает DNS policy через systemd-resolved;
-- применяет сетевые параметры ядра: BBR, fq, TCP buffers, backlog и другие;
-- отключает ненужные фоновые сервисы и демоны;
-- создаёт health-checks;
-- создаёт еженедельное обслуживание;
-- поддерживает Telegram-уведомления об ошибках weekly maintenance;
-- поддерживает опциональную WARP-маршрутизацию через 3x-ui / Xray;
-- создаёт резервные снимки конфигурации;
-- сохраняет данные подключения в защищённых файлах на сервере.
+- включает SSH-вход только по ключу;
+- нормализует hostname и `/etc/hosts`, чтобы `sudo` не ругался на hostname провайдера;
+- настраивает UFW и fail2ban;
+- создаёт nginx-сайты и HTTPS-поверхность;
+- получает сертификаты Let's Encrypt через Certbot;
+- устанавливает 3x-ui и Xray/VLESS;
+- опционально настраивает MTProto через HAProxy SNI routing;
+- опционально настраивает Telegram-уведомления и HTTPS Relay;
+- опционально проверяет WARP outbound внутри 3x-ui/Xray;
+- создаёт health-check, weekly maintenance, repair и netdiag команды;
+- очищает установочные хвосты и держит сервер компактным.
 
 ---
 
-## Для чего нужен скрипт
+## Поддерживаемые профили
 
-XPAM Script нужен, когда требуется не собирать VPS вручную из десятков команд, а получить повторяемую и проверяемую схему:
-
-- один публичный HTTPS/TLS-порт `443`;
-- backend-сервисы только на `127.0.0.1`;
-- рабочие сайты на публичных доменах;
-- защищённый путь панели 3x-ui;
-- VLESS через Xray;
-- MTProto через отдельный домен;
-- сертификаты Let's Encrypt;
-- firewall и fail2ban;
-- автоматические проверки здоровья сервера;
-- безопасная еженедельная maintenance-процедура.
+| Профиль | Назначение |
+|---|---|
+| `vless_direct` | VLESS/Xray и панель 3x-ui без MTProto и HAProxy |
+| `subdomains_mtproto` | VLESS и MTProto на отдельных поддоменах через HAProxy |
+| `root_mtproto` | основной сайт, `www` redirect, VLESS-домен и MTProto-домен |
 
 ---
 
-## Требования
+## Порты
 
-Перед запуском нужен:
+Публично ожидаются только:
 
-- чистый VPS на Ubuntu 24.04 LTS или Debian 12;
-- root-доступ;
-- SSH-ключ, заранее добавленный на сервер;
-- свой домен;
-- возможность создавать поддомены;
-- возможность редактировать DNS-записи;
-- DNS A-записи доменов должны указывать на IPv4 VPS.
+```text
+22/tcp   SSH
+80/tcp   HTTP / ACME
+443/tcp  HTTPS/TLS surface
+```
 
-Без рабочего SSH-входа по ключу использовать скрипт нельзя: пункт `0` отключает SSH-вход по паролю.
+Внутренние сервисы слушают `127.0.0.1`: панель 3x-ui, Xray/VLESS, nginx fallback, nginx sync backend, MTProto proxy и служебные backend-порты.
 
----
-
-## Поддерживаемые схемы
-
-XPAM Script поддерживает несколько профилей:
-
-- VLESS direct TLS;
-- VLESS + MTProto на отдельных поддоменах;
-- основной сайт + www redirect + VLESS-домен + MTProto-домен.
-
-В схемах с MTProto внешний порт `443` обслуживается HAProxy.
-
-HAProxy маршрутизирует соединения по SNI:
-
-- VLESS-домен → Xray/VLESS backend;
-- MTProto-домен → MTProto backend;
-- обычные сайты → nginx fallback/web surface.
+XPAM Script работает по IPv4-first схеме. Для доменов проекта создавайте только `A`-записи на IPv4 VPS. `AAAA`-записи для этих доменов перед установкой нужно удалить.
 
 ---
 
-## Основные команды после установки
+## Установка
 
-Префикс пользователь задаёт на шаге `0`. Ниже `<prefix>` означает выбранный пользователем префикс.
+```bash
+cd /root
+curl -fsSL https://raw.githubusercontent.com/deepru/xpam-script/main/bootstrap.sh -o xpam-bootstrap.sh
+sudo XPAM_REPO="deepru/xpam-script" bash xpam-bootstrap.sh
+```
 
-    sudo <prefix>-install
-    sudo <prefix>-health
-    sudo <prefix>-links
-    sudo <prefix>-vless
-    sudo <prefix>-telega
+После запуска сначала выберите пункт `0` для SSH-безопасности и создания prefix-команды, затем пункт `1` для установки.
 
-Пример: если префикс `de`, команды будут `sudo de-install`, `sudo de-health`, `sudo de-links`.
+---
+
+## Основное меню
+
+```text
+0) SSH-безопасность / создать prefix-команду
+1) Установить / продолжить настройку сервера
+2) Показать данные для подключения
+3) Проверить состояние сервера
+4) Telegram-уведомления
+5) WARP через 3x-ui/Xray
+6) Управление сайтами
+7) Дополнительно
+8) Выход
+```
+
+После шага 0 пользователь работает через свои prefix-команды. Если prefix = `srv`, команды будут `sudo srv-install`, `sudo srv-health`, `sudo srv-links` и так далее.
+
+---
+
+## Команды после установки
+
+```text
+sudo <prefix>-install       главное меню
+sudo <prefix>-health        быстрая проверка сервера
+sudo <prefix>-health --deep подробная диагностика
+sudo <prefix>-links         безопасная сводка без секретов
+sudo <prefix>-vless         информация по VLESS без вывода ссылки
+sudo <prefix>-telega        информация по MTProto без вывода секретов
+sudo <prefix>-netdiag       диагностика сети/DNS, ничего не чинит автоматически
+sudo <prefix>-repair        восстановление XPAM-обвязки
+```
+
+Секреты не печатаются по умолчанию. Для осознанного вывода используются `--show` или `--show-secrets`.
 
 ---
 
 ## Документация
 
-- [Полное руководство пользователя на русском языке, PDF](docs/USER_GUIDE_RU.pdf)
-- [README_RU.md](README_RU.md)
-- [English technical README](README_EN.md)
-- [Установка](docs/INSTALLATION.md)
-- [Архитектура](docs/ARCHITECTURE.md)
-- [Модель безопасности](docs/SECURITY_MODEL.md)
-- [Telegram-уведомления](docs/TELEGRAM_NOTIFICATIONS.md)
-- [WARP](docs/WARP.md)
-- [Управление сайтами](docs/SITES.md)
-- [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [`docs/USER_GUIDE_RU.pdf`](docs/USER_GUIDE_RU.pdf) — полное руководство пользователя на русском.
+- [`docs/USER_GUIDE_RU.docx`](docs/USER_GUIDE_RU.docx) — редактируемая версия руководства.
+- [`docs/`](docs/) — технические документы проекта.
 
 ---
 
-## Проверенный статус
+## Лицензия и сторонние компоненты
 
-Проверено:
+XPAM Script распространяется под MIT License.
 
-- GitHub bootstrap скачивает актуальный релиз;
-- SHA256-проверка архива проходит успешно;
-- установщик запускается из GitHub Release;
-- Ubuntu 24.04 LTS протестирован end-to-end;
-- Debian 12 ранее протестирован end-to-end;
-- VLESS работает;
-- MTProto работает;
-- сайты-маскировки открываются;
-- TLS-сертификаты корректны;
-- weekly maintenance завершается с `Exit status: 0`;
-- финальная production-очистка удаляет временные bootstrap/install/build-файлы;
-- после очистки сервер остаётся здоровым.
-
----
-
-## Release assets
-
-В каждом релизе публикуются:
-
-- `xpam-script-vX.Y.Z-ubuntu24-debian12.tar.gz`
-- `xpam-script-vX.Y.Z-ubuntu24-debian12.tar.gz.sha256`
-
-Проверка архива:
-
-    sha256sum -c xpam-script-vX.Y.Z-ubuntu24-debian12.tar.gz.sha256
-
----
-
-## Third-party components
-
-XPAM Script не является форком 3x-ui, Xray-core или MTProto proxy.
-
-Проект является automation / hardening / configuration wrapper и использует сторонние компоненты:
-
-- 3x-ui;
-- Xray-core;
-- alexbers/mtprotoproxy;
-- nginx;
-- HAProxy;
-- Certbot / Let's Encrypt;
-- UFW;
-- fail2ban;
-- systemd.
-
-Подробности указаны в [THIRD_PARTY.md](THIRD_PARTY.md).
-
----
-
-## Важно
-
-XPAM Script изменяет системную конфигурацию VPS:
-
-- SSH;
-- firewall;
-- DNS policy;
-- systemd-сервисы;
-- nginx;
-- HAProxy;
-- Xray;
-- 3x-ui;
-- MTProto;
-- сетевые параметры ядра;
-- service hygiene.
-
-Используйте скрипт на чистом VPS. Не запускайте его на сервере с важными рабочими сервисами без понимания последствий.
+3x-ui, Xray-core, alexbers/mtprotoproxy, nginx, HAProxy, Certbot, UFW, fail2ban, systemd и другие компоненты сохраняют собственные лицензии. Подробнее: [`THIRD_PARTY.md`](THIRD_PARTY.md).

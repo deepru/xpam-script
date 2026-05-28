@@ -4,14 +4,14 @@ xpam_server_label(){ local p="${1:-server}"; printf '%s' "$p" | tr '[:lower:]' '
 xpam_run_with_heartbeat(){
     local label="$1" interval="${XPAM_HEARTBEAT_INTERVAL:-30}" elapsed=0 pid rc
     shift
-    echo "WARNING: $label may take several minutes. Do not close the SSH session."
+    echo "WARN: $label может занять несколько минут. Не закрывайте SSH-сессию."
     "$@" &
     pid=$!
     while kill -0 "$pid" 2>/dev/null; do
         sleep 1
         elapsed=$((elapsed + 1))
         if [ $((elapsed % interval)) -eq 0 ] && kill -0 "$pid" 2>/dev/null; then
-            echo "OK: $label still working... ${elapsed}s"
+            echo "OK: $label всё ещё выполняется... ${elapsed}s"
         fi
     done
     wait "$pid"
@@ -250,6 +250,22 @@ xpam_guarded_full_upgrade(){
     echo "OK: guarded full-upgrade finished for $prefix"
 }
 
+
+xpam_guarded_security_upgrade(){
+    local prefix="${1:-server}"
+    xpam_apt_dpkg_recovery "$prefix security-upgrade" || return 1
+    echo
+    echo "===== APT UPDATE ====="
+    xpam_apt_get_safe "$prefix apt update" update || return 1
+    echo
+    echo "===== GUARDED APT UPGRADE ====="
+    # Minimal autonomous maintenance for small VPS. This intentionally avoids
+    # distribution release upgrades. It is safer than unattended apt-daily timers
+    # because XPAM controls schedule, logs and Telegram summaries.
+    xpam_apt_get_safe "$prefix apt upgrade" -o Dpkg::Options::=--force-confold upgrade -y || return 1
+    echo "OK: guarded apt upgrade finished for $prefix"
+}
+
 xpam_guarded_autoremove(){
     local prefix="${1:-server}"
     local sim_log protected_re protected_hits
@@ -258,7 +274,7 @@ xpam_guarded_autoremove(){
 
     # These packages are part of the XPAM Script runtime, remote access, TLS, firewall,
     # or optional 3x-ui/Xray WireGuard outbounds. Weekly maintenance must not remove them.
-    protected_re='^(openssh-server|openssh-client|ssh|systemd|systemd-resolved|systemd-sysv|nginx|haproxy|x-ui|xray|xray-linux-amd64|certbot|cron|ufw|fail2ban|ca-certificates|curl|wget|gnupg|lsb-release|python3|python3-minimal|python3-venv|sqlite3|jq|dnsutils|iproute2|wireguard|wireguard-tools|ubuntu-minimal|ubuntu-server-minimal|ubuntu-standard|ubuntu-server)$'
+    protected_re='^(openssh-server|openssh-client|ssh|systemd|systemd-resolved|systemd-sysv|nginx|haproxy|x-ui|xray|xray-linux-amd64|certbot|cron|ufw|fail2ban|ca-certificates|curl|wget|gnupg|lsb-release|python3|python3-minimal|python3-venv|python3-systemd|sqlite3|jq|dnsutils|iproute2|wireguard|wireguard-tools|ubuntu-minimal|ubuntu-server-minimal|ubuntu-standard|ubuntu-server)$'
 
     echo
     echo "===== AUTOREMOVE SIMULATION ====="
@@ -327,6 +343,29 @@ xpam_kernel_reboot_check(){
     if [ -n "${newest:-}" ] && [ "$running" != "$newest" ]; then echo "WARNING: reboot recommended to load newest installed kernel"; return 1; fi
     echo "OK: running kernel matches newest installed kernel"
 }
+
+xpam_debian_networking_provider_warning_ok(){
+    local j fail=0
+    [ -r /etc/os-release ] || return 1
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    [ "${ID:-}" = "debian" ] && [ "${VERSION_ID:-}" = "12" ] || return 1
+    systemctl is-failed --quiet networking.service || return 1
+
+    ip -4 route show default 2>/dev/null | grep -q . || fail=1
+    ip route get 1.1.1.1 >/dev/null 2>&1 || fail=1
+    getent ahostsv4 github.com >/dev/null 2>&1 || fail=1
+    [ "$fail" -eq 0 ] || return 1
+
+    j="$(journalctl -u networking -b --no-pager -n 240 2>/dev/null || true)"
+    if printf '%s\n' "$j" | grep -Eiq 'RTNETLINK answers: File exists|File exists|already exists|Failed to bring up|resolvconf|dns-nameservers|dns \{'; then
+        echo "WARN: Debian 12 provider networking.service issue detected; active network works"
+        echo "INFO: XPAM не переписывает /etc/network/interfaces автоматически. Для деталей: sudo ${XPAM_PREFIX:-<prefix>}-netdiag"
+        return 0
+    fi
+    return 1
+}
+
 xpam_tls_endpoint_check(){
     local label="$1" host="$2" port="$3" sni="$4" expected_dns="$5" cert_file info_file fail=0
     echo; echo "--- $label: ${host}:${port} SNI ${sni}, expect DNS:${expected_dns}"
@@ -404,13 +443,34 @@ tcp_rows=parse_ss(['ss','-H','-lnt'])
 udp_rows=parse_ss(['ss','-H','-lnu'])
 fail=False
 
-def nonlocal_tcp(p): return [l for port,h,l in tcp_rows if port==p and not loop(h)]
+try:
+    global_ipv6=bool(subprocess.check_output(['ip','-6','addr','show','scope','global'], text=True, stderr=subprocess.DEVNULL).strip())
+except Exception:
+    global_ipv6=False
+
+def is_ipv6_nonloop(h):
+    h=h.strip('[]')
+    return ':' in h and h not in ('::1','localhost') and not h.startswith('::ffff:127.')
+
+def public_ipv4(h):
+    h=h.strip('[]')
+    return h == '0.0.0.0' or re.match(r'^(?:\d{1,3}\.){3}\d{1,3}$', h)
+
+def public_ipv4_tcp(p): return [l for port,h,l in tcp_rows if port==p and public_ipv4(h)]
+def public_ipv6_tcp(p): return [l for port,h,l in tcp_rows if port==p and is_ipv6_nonloop(h)]
 def local_tcp(p): return [l for port,h,l in tcp_rows if port==p and loop(h)]
 
 for p in sorted(required_public_tcp):
-    e=nonlocal_tcp(p)
-    if e: print(f'OK: required public TCP port {p}: {", ".join(e)}')
-    else: print(f'FAIL: required public TCP port {p} has no non-loopback listener'); fail=True
+    e=public_ipv4_tcp(p)
+    if e: print(f'OK: required public IPv4 TCP port {p}: {", ".join(e)}')
+    else: print(f'FAIL: required public IPv4 TCP port {p} has no listener'); fail=True
+    v6=public_ipv6_tcp(p)
+    if v6:
+        msg=f'unexpected public IPv6 TCP listener on port {p}: {", ".join(v6)}'
+        if global_ipv6:
+            print(f'FAIL: {msg}'); fail=True
+        else:
+            print(f'WARNING: {msg}; no global IPv6 is currently assigned, but XPAM should bind public services to IPv4 only')
 for p in sorted(required_local_tcp):
     e=local_tcp(p)
     if e: print(f'OK: required loopback TCP port {p}: {", ".join(e)}')
@@ -757,7 +817,13 @@ except Exception as e:
     warn(f'could not inspect system default route: {e}')
 
 try:
-    status=subprocess.check_output(['resolvectl','status'], text=True, stderr=subprocess.DEVNULL)
+
+    import shutil
+    if not shutil.which('resolvectl'):
+        ok('resolvectl is not installed; systemd-resolved DNS scope check is not applicable')
+        status=''
+    else:
+        status=subprocess.run(['resolvectl','status'], text=True, stderr=subprocess.DEVNULL, stdout=subprocess.PIPE, timeout=3).stdout
     lines=status.splitlines()
     block=[]; capture=False
     for line in lines:
@@ -774,7 +840,7 @@ try:
     else:
         ok('wg0 has no resolvectl DNS block')
 except Exception as e:
-    warn(f'could not inspect resolvectl wg0 state: {e}')
+    ok(f'resolvectl wg0 state check skipped: {e}')
 if errs: sys.exit(1)
 print('\nOK: 3x-ui / Xray config looks correct')
 EOF_PY_XUI
@@ -855,7 +921,7 @@ xpam_apply_service_hygiene(){
       apport.service apport-autoreport.service apport-forward@.service \
       unattended-upgrades.service apt-daily.timer apt-daily-upgrade.timer apt-daily.service apt-daily-upgrade.service \
       motd-news.timer update-notifier-download.timer update-notifier-motd.timer \
-      thermald.service open-iscsi.service iscsid.service multipathd.service lvm2-monitor.service
+      thermald.service sysstat.service sysstat-collect.timer sysstat-summary.timer
     do
         xpam_stop_disable_mask_unit "$unit"
     done
@@ -870,7 +936,7 @@ xpam_apply_service_hygiene(){
         xpam_unit_exists haproxy.service && systemctl enable haproxy.service >/dev/null 2>&1 || true
         xpam_unit_exists mtprotoproxy.service && systemctl enable mtprotoproxy.service >/dev/null 2>&1 || true
     fi
-    for pkg in snapd packagekit packagekit-tools fwupd apport apport-core-dump-handler unattended-upgrades thermald open-iscsi multipath-tools; do
+    for pkg in snapd packagekit packagekit-tools fwupd apport apport-core-dump-handler unattended-upgrades thermald sysstat; do
         xpam_guarded_purge_package "$pkg"
     done
     systemctl daemon-reload || true
@@ -891,7 +957,7 @@ xpam_service_hygiene_check(){
       fwupd.service fwupd-refresh.service \
       apport.service apport-autoreport.service \
       unattended-upgrades.service apt-daily.service apt-daily-upgrade.service \
-      thermald.service open-iscsi.service iscsid.service multipathd.service lvm2-monitor.service
+      thermald.service sysstat.service
     do
         state="$(systemctl is-active "$unit" 2>/dev/null || true)"
         enabled="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
@@ -902,7 +968,7 @@ xpam_service_hygiene_check(){
             echo "OK: $unit active=$state enabled=${enabled:-unknown}"
         fi
     done
-    for unit in snapd.snap-repair.timer snapd.refresh.timer fwupd-refresh.timer apt-daily.timer apt-daily-upgrade.timer motd-news.timer update-notifier-download.timer update-notifier-motd.timer; do
+    for unit in snapd.snap-repair.timer snapd.refresh.timer fwupd-refresh.timer apt-daily.timer apt-daily-upgrade.timer motd-news.timer update-notifier-download.timer update-notifier-motd.timer sysstat-collect.timer sysstat-summary.timer; do
         enabled="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
         state="$(systemctl is-active "$unit" 2>/dev/null || true)"
         if [ "$state" = "active" ] || [ "$enabled" = "enabled" ]; then
@@ -940,6 +1006,15 @@ xpam_post_install_cleanup(){
     rm -rf /var/cache/apt/archives/partial/* 2>/dev/null || true
     rm -f /tmp/service-audit-*.txt /tmp/tls-cert.* /tmp/tls-info.* 2>/dev/null || true
     rm -f /root/recipe_*.log /root/recipe_-*.log /root/exec_recipe.log 2>/dev/null || true
+    rm -f /root/de-health-*.txt /root/de-health-debian-*.txt 2>/dev/null || true
+    rm -f /root/xpam-script-v*-*.log /root/xpam-script-*.log 2>/dev/null || true
+    rm -f /root/.Xauthority /root/.lesshst 2>/dev/null || true
+    for xpam_empty_cache_dir in /root/.ansible /root/.local; do
+        if [ -d "$xpam_empty_cache_dir" ]; then
+            find "$xpam_empty_cache_dir" -depth -type d -empty -delete 2>/dev/null || true
+            rmdir "$xpam_empty_cache_dir" 2>/dev/null || true
+        fi
+    done
     rm -f /root/site-nginx-snapshot-*.tar.gz /root/*-nginx-snapshot-*.tar.gz 2>/dev/null || true
     find /root -maxdepth 1 -type d \( -name 'site-nginx-snapshot-*' -o -name '*-nginx-snapshot-*' \) -print -exec rm -rf {} + 2>/dev/null || true
     find /root/.ssh -maxdepth 1 -type f -name 'authorized_keys.bak-before-*' -print -delete 2>/dev/null || true
@@ -990,18 +1065,26 @@ xpam_weekly_safe_cleanup(){
          -o -name 'recipe_*.log' \
          -o -name 'recipe_-*.log' \
          -o -name 'exec_recipe.log' \
+         -o -name 'de-health-*.txt' \
+         -o -name 'de-health-debian-*.txt' \
+         -o -name 'xpam-script-v*-*.log' \
+         -o -name 'xpam-script-*.log' \
+         -o -name '.Xauthority' \
          -o -name 'site-nginx-snapshot-*.tar.gz' \
          -o -name '*-nginx-snapshot-*.tar.gz' \) \
       -print -delete 2>/dev/null || true
 
     echo; echo "--- XPAM Script log and backup retention"
-    xpam_prune_keep_latest "/var/log/${prefix}-maintenance" 'weekly-*.log' 4
-    xpam_prune_keep_latest /root/config-backups "${prefix}-config-*.tar.gz" 4
-    xpam_prune_keep_latest /root/manual-backups/health-logs "${prefix}-*.log" 4
-    xpam_prune_keep_latest /root/manual-backups 'site-replace-check-*' 4
-    xpam_prune_keep_latest /root/manual-backups 'site-reset-*' 4
-    xpam_prune_keep_latest /root/manual-backups 'mtproto-users-*' 4
-    xpam_prune_keep_latest /root/manual-backups/xui-warp-normalize 'x-ui.db.*' 4
+    xpam_prune_keep_latest "/var/log/xpam-script" "${prefix}-weekly-*.log" "${XPAM_WEEKLY_LOG_KEEP:-4}"
+    xpam_prune_keep_latest "/var/log/xpam-script" "${prefix}-health-*.log" "${XPAM_HEALTH_LOG_KEEP:-4}"
+    xpam_prune_keep_latest /root/config-backups "${prefix}-config-*.tar.gz" "${XPAM_BACKUP_KEEP:-2}"
+    xpam_prune_keep_latest /root/manual-backups 'site-replace-check-*' "${XPAM_BACKUP_KEEP:-2}"
+    xpam_prune_keep_latest /root/manual-backups 'site-reset-*' "${XPAM_BACKUP_KEEP:-2}"
+    xpam_prune_keep_latest /root/manual-backups 'mtproto-users-*' "${XPAM_BACKUP_KEEP:-2}"
+    xpam_prune_keep_latest /root/manual-backups/xui-warp-normalize 'x-ui.db.*' "${XPAM_BACKUP_KEEP:-2}"
+    xpam_prune_keep_latest /root/manual-backups/xui-subscription-disable 'x-ui.db.*' "${XPAM_BACKUP_KEEP:-2}"
+    xpam_prune_keep_latest /root/manual-backups 'mtproto-config.py.*' "${XPAM_BACKUP_KEEP:-2}"
+    find /root/manual-backups -type d -empty -delete 2>/dev/null || true
 
     echo; echo "--- older generic backup files"
     find /usr/local/sbin /etc/nginx /etc/haproxy /etc/systemd/system /etc/letsencrypt/renewal-hooks/deploy /etc/ssh /etc/fail2ban /etc/ufw \
@@ -1016,10 +1099,17 @@ xpam_weekly_safe_cleanup(){
     rm -rf /var/cache/apt/archives/partial/* 2>/dev/null || true
 
     echo; echo "--- journal vacuum"
-    journalctl --vacuum-size=64M 2>/dev/null || true
+    journalctl --vacuum-size=24M 2>/dev/null || true
     journalctl --disk-usage 2>/dev/null || true
 
+    for xpam_empty_cache_dir in /root/.ansible /root/.local; do
+        if [ -d "$xpam_empty_cache_dir" ]; then
+            find "$xpam_empty_cache_dir" -depth -type d -empty -delete 2>/dev/null || true
+            rmdir "$xpam_empty_cache_dir" 2>/dev/null || true
+        fi
+    done
+
     echo; echo "--- cleanup summary"
-    du -sh /root /var/cache /var/cache/apt /var/log /usr/local/sbin 2>/dev/null || true
+    du -sh /root /var/cache /var/cache/apt /var/log /tmp /opt /usr/local/sbin 2>/dev/null || true
     echo "OK: weekly safe cleanup finished for $prefix"
 }

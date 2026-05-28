@@ -8,7 +8,8 @@ XPAM Script is a server automation tool that handles sensitive operational data.
 
 | Version | Status |
 |---|---|
-| 1.0.10 | Supported baseline |
+| 1.1.0 | Supported |
+| 1.0.10 | Previous stable |
 | older versions | Unsupported |
 
 ---
@@ -31,10 +32,10 @@ Steps to reproduce:
 Redacted logs:
 ```
 
-Replace the contact placeholder before publishing this repository:
+Use one of these public reporting channels:
 
 ```text
-stas.khramov.github@gmail.com
+GitHub Security Advisories or repository issue tracker
 ```
 
 ---

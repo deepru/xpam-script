@@ -42,14 +42,14 @@ for f in templates/*.sh.tpl; do bash -n "$f"; done
 Recommended release asset name:
 
 ```text
-xpam-script-v1.0.10-ubuntu24-debian12.tar.gz
+xpam-script-v1.1.0-ubuntu24-debian12.tar.gz
 ```
 
 Build:
 
 ```bash
-tar -czf xpam-script-v1.0.10-ubuntu24-debian12.tar.gz xpam-script-v1.0.10
-sha256sum xpam-script-v1.0.10-ubuntu24-debian12.tar.gz > xpam-script-v1.0.10-ubuntu24-debian12.tar.gz.sha256
+tar -czf xpam-script-v1.1.0-ubuntu24-debian12.tar.gz xpam-script-v1.1.0
+sha256sum xpam-script-v1.1.0-ubuntu24-debian12.tar.gz > xpam-script-v1.1.0-ubuntu24-debian12.tar.gz.sha256
 ```
 
 ---
@@ -59,9 +59,9 @@ sha256sum xpam-script-v1.0.10-ubuntu24-debian12.tar.gz > xpam-script-v1.0.10-ubu
 Create a GitHub Release with:
 
 ```text
-tag: v1.0.10
-asset: xpam-script-v1.0.10-ubuntu24-debian12.tar.gz
-asset: xpam-script-v1.0.10-ubuntu24-debian12.tar.gz.sha256
+tag: v1.1.0
+asset: xpam-script-v1.1.0-ubuntu24-debian12.tar.gz
+asset: xpam-script-v1.1.0-ubuntu24-debian12.tar.gz.sha256
 ```
 
 ---

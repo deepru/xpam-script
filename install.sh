@@ -4,9 +4,10 @@ KIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/xpam-core.sh
 source "$KIT_DIR/scripts/xpam-core.sh"
 
-# Keep live terminal output and a root log, but wait for tee before returning to
-# the interactive shell. This avoids confusing prompt/output interleaving on
-# slow terminals after long install stages.
+# Keep live terminal output and a root log. All output is routed through tee,
+# including early exits from sourced functions. The EXIT trap restores stdout
+# and waits for tee before the interactive shell prompt returns; otherwise the
+# user can see leftover separator lines after the prompt on slow terminals.
 exec 3>&1 4>&2
 LOG_PIPE="$(mktemp -u /tmp/xpam-script-log.XXXXXX)"
 mkfifo "$LOG_PIPE"
@@ -15,12 +16,16 @@ TEE_PID=$!
 exec > "$LOG_PIPE" 2>&1
 rm -f "$LOG_PIPE"
 
-set +e
-main_menu "$@"
-RC=$?
-set -e
+xpam_install_cleanup(){
+  local rc=$?
+  trap - EXIT
+  set +e
+  exec 1>&3 2>&4
+  exec 3>&- 4>&-
+  wait "$TEE_PID" 2>/dev/null || true
+  exit "$rc"
+}
+trap xpam_install_cleanup EXIT
 
-exec 1>&3 2>&4
-exec 3>&- 4>&-
-wait "$TEE_PID" 2>/dev/null || true
-exit "$RC"
+main_menu "$@"
+exit $?

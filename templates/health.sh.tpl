@@ -1,5 +1,45 @@
 #!/usr/bin/env bash
 set +e
+
+if [[ "${1:-}" != "--deep" ]]; then
+  XPAM_PREFIX="{{SERVER_PREFIX}}"
+  LOG_DIR="/var/log/xpam-script"
+  mkdir -p "$LOG_DIR"
+  chmod 700 "$LOG_DIR" 2>/dev/null || true
+  LOG="$LOG_DIR/${XPAM_PREFIX}-health-$(date +%Y%m%d-%H%M%S).log"
+  bash "$0" --deep >"$LOG" 2>&1
+  rc=$?
+  chmod 600 "$LOG" 2>/dev/null || true
+
+  echo "===== XPAM HEALTH: {{SERVER_PREFIX_UP}} ====="
+  date
+  echo
+  if [[ $rc -eq 0 ]]; then
+    if grep -q 'OK WITH WARNINGS' "$LOG" 2>/dev/null || grep -q 'provider networking.service issue' "$LOG" 2>/dev/null; then
+      echo "Статус: OK WITH WARNINGS"
+    else
+      echo "Статус: OK"
+    fi
+  else
+    echo "Статус: FAIL"
+  fi
+  echo
+  grep -E '^(OK|WARN|FAIL): (services summary|networking.service|DNS-проверка|TLS|UFW|port exposure|3x-ui/Xray|WARP|disk|swap|running kernel|сервер|service hygiene|config snapshot)' "$LOG" 2>/dev/null | tail -40 || true
+  if [[ $rc -ne 0 ]]; then
+    echo
+    echo "Причины FAIL:"
+    grep -E '^(FAIL|ERROR): ' "$LOG" 2>/dev/null | head -n 12 || true
+    echo
+    echo "Последние строки подробного лога:"
+    tail -n 50 "$LOG" 2>/dev/null || true
+  fi
+  echo
+  echo "Подробный лог: $LOG"
+  echo "Для полной диагностики выполните: sudo {{SERVER_PREFIX}}-health --deep"
+  exit "$rc"
+fi
+shift || true
+
 XPAM_PREFIX="{{SERVER_PREFIX}}"
 XPAM_CONFIG="/etc/xpam-script/config.env"
 FAIL=0
@@ -21,7 +61,7 @@ check_redirect(){
   fi
 }
 
-echo "===== {{SERVER_PREFIX_UP}} QUICK HEALTH CHECK ====="
+echo "===== {{SERVER_PREFIX_UP}} DEEP HEALTH CHECK ====="
 date
 
 echo
@@ -29,14 +69,20 @@ echo "===== FAILED SYSTEMD UNITS ====="
 _FAILED_SYSTEMD_UNITS="$(systemctl --failed --no-legend --no-pager 2>/dev/null | awk 'NF{print}')"
 if [ -n "$_FAILED_SYSTEMD_UNITS" ]; then
     systemctl --failed --no-pager || true
-    warn_fail "failed systemd units present"
+    _FAILED_NAMES="$(printf '%s\n' "$_FAILED_SYSTEMD_UNITS" | awk '{print $1}' | xargs 2>/dev/null || true)"
+    if [ "$_FAILED_NAMES" = "networking.service" ] && xpam_debian_networking_provider_warning_ok; then
+        echo "WARN: networking.service failed, но активная сеть работает; считаем это предупреждением провайдерского Debian 12 образа"
+    else
+        warn_fail "failed systemd units present"
+    fi
 else
-    systemctl --failed --no-pager || true
     echo "OK: no failed systemd units"
 fi
 
 uptime
+svc_fail_before="$FAIL"
 for svc in nginx x-ui fail2ban certbot.timer ufw cron; do check_active "$svc"; done
+if [ "$FAIL" = "$svc_fail_before" ]; then echo "OK: services summary"; else echo "FAIL: services summary"; fi
 if ! xpam_ssh_runtime_check; then FAIL=1; fi
 if ! xpam_ufw_expected_policy_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-ufw-policy-fail" "[$(xpam_server_label $XPAM_PREFIX)] UFW expected policy check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi
 nginx -t >/dev/null 2>&1 && echo "OK: nginx config" || warn_fail "nginx config failed"

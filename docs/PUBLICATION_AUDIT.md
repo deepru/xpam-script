@@ -90,13 +90,13 @@ vless://...
 
 ```text
 deepru
-stas.khramov.github@gmail.com
+SECURITY_CONTACT_PLACEHOLDER
 ```
 
 Минимум:
 
 ```bash
-grep -RIn 'deepru\|stas.khramov.github@gmail.com' .
+grep -RIn 'example\\.com\\|YOUR_\\|TOKEN\\|PASSWORD\\|SECRET\\|PRIVATE KEY' .
 ```
 
 После выбора GitHub owner/repo можно заменить `deepru` на реальный GitHub username или organization.

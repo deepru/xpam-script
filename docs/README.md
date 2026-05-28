@@ -5,7 +5,7 @@ This directory contains technical documentation for operators and maintainers.
 | Document | Purpose |
 |---|---|
 | `ARCHITECTURE.md` | service topology and data flow |
-| `INSTALLATION.md` | bootstrap and manual installation |
+| `INSTALLATION.md` | GitHub bootstrap installation |
 | `CONFIGURATION.md` | runtime config model |
 | `PROFILES.md` | deployment profiles |
 | `SECURITY_MODEL.md` | security posture and limitations |
