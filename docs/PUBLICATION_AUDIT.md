@@ -1,107 +1,115 @@
-# XPAM Script v1.0.7 GitHub publication audit
+# XPAM Script v1.1.0 publication audit
 
-Дата подготовки: 2026-05-26  
-Базовый архив: `xpam-script-final-20260526-v1.0.7-ubuntu24-debian12.tar.gz`  
-SHA256 базового архива: `8cae6b4f3f99b1e8f83e49ee7c109252d452dce0b5337147d787edcdbe49afb4`
+Дата публикации: 2026-05-28
+
+Релиз: `v1.1.0`
+
+GitHub repository: `deepru/xpam-script`
+
+Release assets:
+
+- `xpam-script-v1.1.0-ubuntu24-debian12.tar.gz`
+- `xpam-script-v1.1.0-ubuntu24-debian12.tar.gz.sha256`
 
 ## Результат
 
-Подготовлен отдельный GitHub-ready пакет на базе v1.0.7.
+XPAM Script v1.1.0 опубликован как GitHub Release и проверен через GitHub bootstrap.
 
-Архив был статически разобран: проверена структура, синтаксис shell-файлов, шаблоны, документация и потенциальные утечки.
+Проверено:
 
-## Что проверено
+- tag `v1.1.0` опубликован;
+- branch `main` обновлён;
+- release assets загружаются с GitHub;
+- SHA256-проверка архива проходит успешно;
+- bootstrap скачивает именно `v1.1.0`;
+- installer запускается как `XPAM Script v1.1.0`;
+- рабочий сервер после bootstrap-проверки остаётся healthy.
 
-- `install.sh`
-- `scripts/xpam-core.sh`
-- `templates/*.sh.tpl`
-- nginx templates
-- HAProxy template
-- MTProto templates
-- health/weekly templates
-- stock websites under `sites/`
-- README and generated docs
+## Проверенные системы
 
-## Синтаксис
+- Ubuntu 24.04 LTS
+- Debian 12
 
-Проверки прошли успешно:
+## Проверенные области
 
-```bash
-bash -n install.sh
-bash -n scripts/xpam-core.sh
-for f in templates/*.sh.tpl; do bash -n "$f"; done
-bash -n bootstrap.sh
-```
+- SSH hardening;
+- prefix-команды;
+- установка и продолжение установки после reboot;
+- DNS safe mode;
+- Debian 12 provider/minimal VPS behavior;
+- `/etc/hosts` и hostname normalization;
+- fail2ban systemd backend;
+- UFW policy;
+- nginx;
+- HAProxy;
+- Certbot / Let's Encrypt;
+- 3x-ui / Xray;
+- VLESS;
+- MTProto;
+- Telegram notifications;
+- Telegram HTTPS Relay;
+- WARP через Xray outbound;
+- quick health;
+- deep health;
+- production cleanup;
+- safe output для команд подключения.
 
-## Что было исправлено
+## Public sanitation
 
-В исходной v1.0.7-сборке оставались косметические legacy-строки с прежним внутренним путём/версией в старых предупреждениях и MTProto notes. Они заменены на актуальное нейтральное описание XPAM Script v1.0.7.
+Перед публикацией проверено отсутствие:
 
-## Персональные данные и секреты
+- личных доменов;
+- личных IP-адресов;
+- приватных email;
+- токенов;
+- паролей;
+- VLESS/MTProto ссылок;
+- WARP private keys;
+- Telegram bot tokens;
+- dev/test-хвостов;
+- тестовых hostname/prefix;
+- hardcoded пользовательских prefix-команд.
 
-В GitHub-ready дереве не найдено:
-
-- реальных пользовательских доменов;
-- реальных IP тестовых VPS;
-- личных имён, email или аккаунтов;
-- Telegram bot token;
-- Relay token;
-- private keys;
-- реальные VLESS ссылки;
-- реальные MTProto ссылки;
-- `/root/secure-notes`;
-- `/etc/xpam-script/config.env`;
-- серверные логи;
-- config backups.
-
-## Допустимые совпадения
-
-В коде остались строки генерации ссылок вида:
+В публичных документах команды указываются через универсальный формат:
 
 ```text
-tg://proxy?server=${SYNC_DOMAIN}...
-vless://...
+sudo <prefix>-install
+sudo <prefix>-health
+sudo <prefix>-links
+sudo <prefix>-vless
+sudo <prefix>-telega
+sudo <prefix>-netdiag
+sudo <prefix>-repair
 ```
 
-Это не реальные секреты, а шаблоны/генераторы, необходимые для работы скрипта.
+Допускаются только обезличенные учебные примеры prefix, например `srv`.
 
-В коде также есть Cloudflare DNS `1.1.1.1` и `1.0.0.1`; это ожидаемая DNS policy, а не старая версия проекта.
+## Документация
 
-## Добавлено для GitHub
+К релизу приложена обновлённая русская инструкция:
 
-- `README.md` — техническое описание на английском.
-- `README_RU.md` — краткое техническое описание на русском.
-- `LICENSE` — MIT для собственного кода XPAM Script.
-- `THIRD_PARTY.md` — upstream-компоненты и лицензии.
-- `SECURITY.md` — политика безопасности и редактирования секретов.
-- `CHANGELOG.md` — changelog v1.0.7.
-- `NOTICE.md` — независимость проекта.
-- `.gitignore`
-- `bootstrap.sh`
-- `.github/ISSUE_TEMPLATE/*`
-- `.github/pull_request_template.md`
-- `docs/*.md`
 - `docs/USER_GUIDE_RU.pdf`
-- `docs/PRESS_RELEASE_RU.md`
+- `docs/USER_GUIDE_RU.docx`
 
-## Перед публикацией
+README и release notes обновлены так, чтобы пользователь понимал:
 
-Нужно заменить placeholder-значения:
+- что делает XPAM Script;
+- какие компоненты он устанавливает;
+- какие части VPS меняет;
+- почему перед запуском нужно прочитать инструкцию;
+- какие команды доступны после установки;
+- что можно и нельзя делать на сервере.
+
+## Итог
+
+Релиз `v1.1.0` готов к публичному использованию.
+
+Статус:
 
 ```text
-deepru
-SECURITY_CONTACT_PLACEHOLDER
+Ubuntu 24.04 LTS: PASS
+Debian 12: PASS
+GitHub Release: PASS
+GitHub bootstrap: PASS
+Documentation: PASS
 ```
-
-Минимум:
-
-```bash
-grep -RIn 'example\\.com\\|YOUR_\\|TOKEN\\|PASSWORD\\|SECRET\\|PRIVATE KEY' .
-```
-
-После выбора GitHub owner/repo можно заменить `deepru` на реальный GitHub username или organization.
-
-## Рекомендация
-
-Публиковать не старый tar.gz как репозиторий, а именно GitHub-ready пакет.  
-Release asset можно прикреплять отдельно как `xpam-script-v1.0.7-ubuntu24-debian12.tar.gz` вместе с `.sha256`.

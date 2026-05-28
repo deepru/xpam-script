@@ -1,19 +1,15 @@
-# XPAM Script technical documentation
+# XPAM Script documentation
 
-This directory contains technical documentation for operators and maintainers.
+Основной документ для пользователя:
 
-| Document | Purpose |
-|---|---|
-| `ARCHITECTURE.md` | service topology and data flow |
-| `INSTALLATION.md` | GitHub bootstrap installation |
-| `CONFIGURATION.md` | runtime config model |
-| `PROFILES.md` | deployment profiles |
-| `SECURITY_MODEL.md` | security posture and limitations |
-| `HEALTHCHECKS.md` | health-check internals |
-| `MAINTENANCE.md` | weekly maintenance model |
-| `TELEGRAM_NOTIFICATIONS.md` | direct, relay-client and relay-server modes |
-| `WARP.md` | 3x-ui/Xray WARP routing model |
-| `SITES.md` | website and fallback surface model |
-| `TROUBLESHOOTING.md` | operational troubleshooting |
-| `RELEASE_PROCESS.md` | release packaging process |
-| `USER_GUIDE_RU.pdf` | Russian end-user manual |
+- [`USER_GUIDE_RU.pdf`](USER_GUIDE_RU.pdf)
+- [`USER_GUIDE_RU.docx`](USER_GUIDE_RU.docx)
+
+Перед запуском XPAM Script полную инструкцию нужно прочитать обязательно. Скрипт меняет SSH, firewall, nginx, HAProxy, 3x-ui/Xray, MTProto, Certbot, fail2ban, systemd-юниты, health/maintenance scripts, DNS-проверки, `/etc/hosts` и другие элементы VPS.
+
+Дополнительные документы:
+
+- [`INSTALLATION.md`](INSTALLATION.md)
+- [`RELEASE_PROCESS.md`](RELEASE_PROCESS.md)
+- [`PRESS_RELEASE_RU.md`](PRESS_RELEASE_RU.md)
+- [`PUBLICATION_AUDIT.md`](PUBLICATION_AUDIT.md)
