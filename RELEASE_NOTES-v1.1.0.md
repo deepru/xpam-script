@@ -28,8 +28,8 @@ sudo XPAM_REPO="deepru/xpam-script" bash xpam-bootstrap.sh
 
 Перед установкой обязательно прочитайте инструкцию:
 
-- `docs/USER_GUIDE_RU.pdf`
-- `docs/USER_GUIDE_RU.docx`
+- [Полная инструкция пользователя, PDF](https://github.com/deepru/xpam-script/blob/main/docs/USER_GUIDE_RU.pdf)
+- [Редактируемая версия инструкции, DOCX](https://github.com/deepru/xpam-script/blob/main/docs/USER_GUIDE_RU.docx)
 
 ---
 
