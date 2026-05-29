@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-KIT_VERSION="v1.1.0"
+KIT_VERSION="v1.1.1"
 KIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG_DIR="/etc/xpam-script"
 CONFIG_FILE="${CONFIG_DIR}/config.env"
@@ -225,6 +225,20 @@ uses_mtproto(){ [[ "$PROFILE" == "subdomains_mtproto" || "$PROFILE" == "root_mtp
 uses_haproxy(){ uses_mtproto; }
 web_cert_name(){ [[ -n "$WEB_CERT_NAME" ]] && echo "$WEB_CERT_NAME" || echo "$PRIMARY_DOMAIN"; }
 expected_xray_port(){ uses_haproxy && echo "$XRAY_LOCAL_PORT" || echo "$XRAY_PUBLIC_PORT"; }
+expected_xray_listen_host(){
+  if uses_haproxy; then
+    echo "127.0.0.1"
+  else
+    server_public_ipv4
+  fi
+}
+wait_for_xray_vless(){
+  local timeout="${1:-30}" host port
+  host="$(expected_xray_listen_host)"
+  port="$(expected_xray_port)"
+  [[ -n "$host" ]] || fail "Could not detect public IPv4 for Xray/VLESS listener check"
+  /usr/local/sbin/wait-for-local-port.sh "$host" "$port" "$timeout" xray-vless
+}
 root_web_domains(){ [[ "$PROFILE" == "root_mtproto" ]] && unique_domains "$ROOT_DOMAIN" "$WWW_DOMAIN" || true; }
 web_domains(){ case "$PROFILE" in vless_direct|subdomains_mtproto) unique_domains "$PRIMARY_DOMAIN" ;; root_mtproto) unique_domains "$ROOT_DOMAIN" "$WWW_DOMAIN" "$PRIMARY_DOMAIN" ;; *) echo "" ;; esac; }
 root_site_dir(){ if [[ -n "${ROOT_DOMAIN:-}" ]]; then echo "/var/www/${ROOT_DOMAIN}"; else echo "/var/www/${SERVER_PREFIX}-main-site"; fi; }
@@ -2082,14 +2096,13 @@ write_manual_3xui_note(){
   local note="/root/secure-notes/${SERVER_PREFIX}-manual-3xui-setup.txt" xray_port xray_listen sniffing external_proxy_block proxy_protocol_note warp_block server_prefix_up
   server_prefix_up="$(printf '%s' "$SERVER_PREFIX" | tr '[:lower:]' '[:upper:]')"
   xray_port="$(expected_xray_port)"
+  external_proxy_block="External Proxy: ENABLED\n  Force TLS: same / Тот же\n  Dest/Host: ${PRIMARY_DOMAIN}\n  Port: ${XRAY_PUBLIC_PORT}\n  Remark: ${server_prefix_up}-public-${XRAY_PUBLIC_PORT}\n  Purpose: generated VLESS links must always use ${PRIMARY_DOMAIN}:${XRAY_PUBLIC_PORT}, regardless of whether Xray listens directly on the public IPv4 address or behind HAProxy."
   if uses_haproxy; then
     xray_listen="127.0.0.1"
     sniffing="OFF by default. If you later enable WARP/domain routing inside 3x-ui/Xray, XPAM Script can switch sniffing to Route only for that routing use-case."
-    external_proxy_block="External Proxy: ENABLED\n  Force TLS: same / Тот же\n  Dest/Host: ${PRIMARY_DOMAIN}\n  Port: ${XRAY_PUBLIC_PORT}\n  Remark: ${server_prefix_up}-public-${XRAY_PUBLIC_PORT}\n  Purpose: generated VLESS links must use ${PRIMARY_DOMAIN}:${XRAY_PUBLIC_PORT}, not 127.0.0.1:${XRAY_LOCAL_PORT}."
   else
-    xray_listen="empty / 0.0.0.0"
+    xray_listen="server public IPv4 address, for example 203.0.113.10"
     sniffing="ON: HTTP, TLS, QUIC; Route only ON. This is required only if you use Xray routing/WARP rules like selected-domain WARP routing."
-    external_proxy_block="External Proxy: DISABLED / empty. Direct mode exposes Xray itself on public ${XRAY_PUBLIC_PORT}; no HAProxy rewrite is needed."
   fi
   proxy_protocol_note="Proxy Protocol: OFF. Do not enable it unless HAProxy backend is also changed to send-proxy and health checks/nginx are adjusted.\nFallback PROXY/xVer: OFF / 0. Do not enable unless nginx fallback listens with proxy_protocol.\nFallback SNI/name: empty. Empty means catch-all fallback to the masked website; do not narrow it to one domain unless you intentionally maintain several fallback destinations.\nAuthentication: None / empty. Do not enable X25519/ML-KEM auth for this VLESS+TLS+fallback layout."
   warp_block="Direct profile optional WARP notes:\n  WARP is configured manually inside 3x-ui/Xray, not by XPAM Script.\n  Recommended outbound values: tag=warp, protocol=wireguard, MTU=1420, domainStrategy=ForceIPv4, workers=2, noKernelTun=false.\n  Use reserved from your WARP profile and peer keepAlive=25.\n  Peer allowedIPs should be IPv4-only: 0.0.0.0/0. Do not add ::/0.\n  Address should be IPv4-only, for example 172.16.0.2/32. Do not add Cloudflare IPv6 address 2606:.../128 on this IPv4-only public layout.\n  Endpoint is usually engage.cloudflareclient.com:2408, but follow your actual WARP profile if it differs.\n  Use routing rules for selected domains only; keep system DNS independent from wg0/WARP.\n  wg0 may be lazy/absent immediately after reboot; health treats that as acceptable when WireGuard outbound exists.\n  Never paste WARP private keys into XPAM Script files, notes, screenshots or support messages."
@@ -2197,20 +2210,20 @@ PYUUID
   subid="$(openssl rand -hex 8)"
   xray_port="$(expected_xray_port)"
   client_name="${SERVER_PREFIX}-vless-client"
+  external_proxy_remark="${SERVER_PREFIX}-public-${XRAY_PUBLIC_PORT}"
+  external_proxy_json='[{"forceTls":"same","dest":"'"${PRIMARY_DOMAIN}"'","port":'"${XRAY_PUBLIC_PORT}"',"remark":"'"${external_proxy_remark}"'"}]'
 
   if uses_haproxy; then
     xray_listen="127.0.0.1"
     sniff_enabled="false"
     sniff_route="false"
     inbound_remark="${SERVER_PREFIX}-vless-local-${xray_port}"
-    external_proxy_remark="${SERVER_PREFIX}-public-${XRAY_PUBLIC_PORT}"
-    external_proxy_json='[{"forceTls":"same","dest":"'"${PRIMARY_DOMAIN}"'","port":'"${XRAY_PUBLIC_PORT}"',"remark":"'"${external_proxy_remark}"'"}]'
   else
-    xray_listen=""
+    xray_listen="$(server_public_ipv4)"
+    [[ "$xray_listen" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || fail "Could not detect public IPv4 for direct VLESS bind"
     sniff_enabled="true"
     sniff_route="true"
     inbound_remark="${SERVER_PREFIX}-vless-public-${xray_port}"
-    external_proxy_json='[]'
   fi
 
   cert="/etc/letsencrypt/live/$(web_cert_name)/fullchain.pem"
@@ -2393,6 +2406,129 @@ SQL
 
   ok "3x-ui subscription listener is disabled"
 }
+
+xui_enforce_vless_inbound_policy(){
+  local db="/etc/x-ui/x-ui.db" ip4 expected_port expected_listen expected_remark mode backup_dir backup
+  expected_port="$(expected_xray_port)"
+  if uses_haproxy; then
+    mode="local"
+    expected_listen="127.0.0.1"
+    expected_remark="${SERVER_PREFIX}-vless-local-${expected_port}"
+  else
+    mode="direct"
+    ip4="$(server_public_ipv4)"
+    [[ "$ip4" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || fail "Could not detect public IPv4 for direct VLESS bind"
+    expected_listen="$ip4"
+    expected_remark="${SERVER_PREFIX}-vless-public-${expected_port}"
+  fi
+  [[ -s "$db" ]] || fail "3x-ui DB missing: $db"
+
+  backup_dir="/root/manual-backups/xui-vless-policy"
+  mkdir -p "$backup_dir"
+  chmod 700 "$backup_dir"
+  backup="${backup_dir}/x-ui.db.$(date +%Y%m%d-%H%M%S)"
+  cp -a "$db" "$backup" || fail "Could not create 3x-ui DB backup before VLESS policy enforcement"
+  chmod 600 "$backup" 2>/dev/null || true
+  prune_keep_latest "$backup_dir" "x-ui.db.*" 4
+
+  XPAM_XUI_DB="$db" \
+  XPAM_SERVER_PREFIX="$SERVER_PREFIX" \
+  XPAM_EXPECTED_PORT="$expected_port" \
+  XPAM_EXPECTED_LISTEN="$expected_listen" \
+  XPAM_EXPECTED_REMARK="$expected_remark" \
+  XPAM_PRIMARY_DOMAIN="$PRIMARY_DOMAIN" \
+  XPAM_PUBLIC_PORT="$XRAY_PUBLIC_PORT" \
+  XPAM_MODE="$mode" \
+  python3 <<'PY_XUI_VLESS_POLICY'
+import json, os, sqlite3, sys
+
+db=os.environ['XPAM_XUI_DB']
+prefix=os.environ['XPAM_SERVER_PREFIX']
+port=int(os.environ['XPAM_EXPECTED_PORT'])
+expected_listen=os.environ['XPAM_EXPECTED_LISTEN']
+expected_remark=os.environ['XPAM_EXPECTED_REMARK']
+primary=os.environ['XPAM_PRIMARY_DOMAIN']
+public_port=int(os.environ['XPAM_PUBLIC_PORT'])
+mode=os.environ['XPAM_MODE']
+expected_proxy={
+    'forceTls': 'same',
+    'dest': primary,
+    'port': public_port,
+    'remark': f'{prefix}-public-{public_port}',
+}
+
+def fail(msg):
+    print('ERROR:', msg, file=sys.stderr)
+    sys.exit(1)
+
+def ok(msg):
+    print('OK:', msg)
+
+def load_json(raw, default):
+    if raw is None or raw == '':
+        return default
+    try:
+        data=json.loads(raw)
+        return data if isinstance(data, type(default)) else default
+    except Exception:
+        return default
+
+conn=sqlite3.connect(db)
+conn.row_factory=sqlite3.Row
+cur=conn.cursor()
+cols=[r[1] for r in cur.execute('PRAGMA table_info(inbounds)').fetchall()]
+base_required={'id','listen','port','protocol'}
+if not base_required <= set(cols):
+    fail(f'3x-ui inbounds schema is not compatible; missing {sorted(base_required-set(cols))}')
+stream_col=next((c for c in ('stream_settings','streamSettings','stream') if c in cols), None)
+if not stream_col:
+    fail('3x-ui inbounds schema is not compatible; stream settings column not found')
+select_cols=[c for c in ('id','remark','listen','port','protocol',stream_col) if c in cols]
+select_sql='SELECT '+','.join('"'+c.replace('"','""')+'"' for c in select_cols)+" FROM inbounds WHERE lower(protocol)='vless' AND port=?"
+rows=[dict(r) for r in cur.execute(select_sql, (port,)).fetchall()]
+if not rows:
+    fail(f'XPAM VLESS inbound on port {port} was not found')
+managed=[r for r in rows if str(r.get('remark') or '') == expected_remark]
+if not managed and len(rows)==1:
+    managed=rows
+if len(managed)!=1:
+    fail(f'Could not uniquely identify XPAM-managed VLESS inbound on port {port}; candidates={[(r.get("id"), r.get("remark"), r.get("listen")) for r in rows]}')
+row=managed[0]
+changed=False
+old_listen=str(row.get('listen') or '')
+if old_listen == expected_listen:
+    if mode == 'direct':
+        ok(f'direct VLESS inbound already binds public IPv4 {expected_listen}:{port}')
+    else:
+        ok(f'HAProxy-mode VLESS inbound already binds local listener {expected_listen}:{port}')
+else:
+    cur.execute('UPDATE inbounds SET listen=? WHERE id=?', (expected_listen, row['id']))
+    changed=True
+    if mode == 'direct':
+        ok(f'direct VLESS inbound listen updated from {old_listen or "<empty>"} to {expected_listen}:{port}')
+    else:
+        ok(f'HAProxy-mode VLESS inbound listen updated from {old_listen or "<empty>"} to {expected_listen}:{port}')
+
+stream=load_json(row.get(stream_col), {})
+if not isinstance(stream, dict):
+    stream={}
+current=stream.get('externalProxy')
+if current == [expected_proxy]:
+    ok(f'External Proxy already points generated links to {primary}:{public_port}')
+else:
+    stream['externalProxy']=[expected_proxy]
+    cur.execute('UPDATE inbounds SET "'+stream_col.replace('\"','\"\"')+'"=? WHERE id=?', (json.dumps(stream, separators=(',',':')), row['id']))
+    changed=True
+    ok(f'External Proxy normalized to {primary}:{public_port} for generated VLESS links')
+if changed:
+    conn.commit()
+conn.close()
+PY_XUI_VLESS_POLICY
+}
+
+xui_enforce_direct_ipv4_bind(){
+  xui_enforce_vless_inbound_policy
+}
 xui_add_vless_inbound_auto(){
   local base payload ids uuid subid client_name inbound_remark rc token note vless_link panel_path_clean
   panel_path_clean="${PANEL_PATH#/}"
@@ -2547,10 +2683,11 @@ install_configure_3xui_auto(){
   write_wait_for_port
   /usr/local/sbin/wait-for-local-port.sh 127.0.0.1 "$XUI_PANEL_PORT" 30 xui-panel
   xui_add_vless_inbound_auto
+  xui_enforce_direct_ipv4_bind
   systemctl restart x-ui || true
   sleep 2
   /usr/local/sbin/wait-for-local-port.sh 127.0.0.1 "$XUI_PANEL_PORT" 30 xui-panel
-  /usr/local/sbin/wait-for-local-port.sh 127.0.0.1 "$(expected_xray_port)" 30 xray-vless
+  wait_for_xray_vless 30
   ok "Automatic 3x-ui install/configure complete"
   echo "Panel URL after setup: https://${PRIMARY_DOMAIN}/${PANEL_PATH}/"
   echo "3x-ui username: ${XUI_ADMIN_USER}"
@@ -2574,7 +2711,11 @@ verify_xui_manual_setup(){
   systemctl restart x-ui || fail "x-ui restart failed"
   sleep 2
   /usr/local/sbin/wait-for-local-port.sh 127.0.0.1 "$XUI_PANEL_PORT" 20 xui-panel
-  /usr/local/sbin/wait-for-local-port.sh 127.0.0.1 "$(expected_xray_port)" 20 xray-vless
+  xui_enforce_direct_ipv4_bind
+  systemctl restart x-ui || fail "x-ui restart failed after direct IPv4 bind enforcement"
+  sleep 2
+  /usr/local/sbin/wait-for-local-port.sh 127.0.0.1 "$XUI_PANEL_PORT" 20 xui-panel
+  wait_for_xray_vless 20
   ok "3x-ui/VLESS ports reachable. Deep validation will run in health."
 }
 write_nginx_final(){ export_vars; cleanup_legacy_nginx_files; if uses_mtproto; then ensure_telegram_relay_nginx_snippet; render_template "$KIT_DIR/templates/nginx-mtproto.conf.tpl" /etc/nginx/sites-available/xpam-script-final.conf; else render_template "$KIT_DIR/templates/nginx-direct.conf.tpl" /etc/nginx/sites-available/xpam-script-final.conf; fi; rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/xpam-script-certonly.conf; ln -sf /etc/nginx/sites-available/xpam-script-final.conf /etc/nginx/sites-enabled/xpam-script-final.conf; ensure_htpasswd; nginx -t; systemctl reload nginx || systemctl restart nginx; }
@@ -3176,7 +3317,7 @@ ask_layout(){
   echo "  Cert name: $(web_cert_name)"
   echo "  Public ports: SSH ${SSH_PUBLIC_PORT}, HTTP ${HTTP_PUBLIC_PORT}, TLS ${XRAY_PUBLIC_PORT}"
   echo "  3x-ui panel: 127.0.0.1:${XUI_PANEL_PORT}, public path https://${PRIMARY_DOMAIN}/${PANEL_PATH}/"
-  echo "  VLESS/Xray inbound: $(uses_haproxy && echo 127.0.0.1 || echo 0.0.0.0):$(expected_xray_port)"
+  echo "  VLESS/Xray inbound: $(uses_haproxy && echo 127.0.0.1 || server_public_ipv4):$(expected_xray_port)"
   echo "  3x-ui automation: ${XUI_AUTO_SETUP}"
   confirm "Продолжить?" yes || fail "Cancelled"
 }
@@ -4130,11 +4271,7 @@ PY_XUI_WARP_FIX
   sleep 5
   write_wait_for_port
   /usr/local/sbin/wait-for-local-port.sh 127.0.0.1 "$XUI_PANEL_PORT" 30 xui-panel
-  if uses_haproxy; then
-    /usr/local/sbin/wait-for-local-port.sh 127.0.0.1 "$(expected_xray_port)" 30 xray-vless
-  else
-    ss -H -lntp 2>/dev/null | grep -Eq "(^|[[:space:]])(0\.0\.0\.0|\*|\[::\]|:::|):$(expected_xray_port)\b|:$(expected_xray_port)\b" || warn "Не увидел Xray listener на $(expected_xray_port) через ss; health проверит глубже"
-  fi
+  wait_for_xray_vless 30
   if [[ -x "/usr/local/sbin/${SERVER_PREFIX}-health" ]]; then
     run_health_quiet "warp-3xui-update" || fail "Health check failed after WARP 3x-ui update"
   fi
@@ -4916,6 +5053,7 @@ stage_repair(){
   write_wait_for_port || true
   write_certbot_hook || true
   write_health_weekly || true
+  xui_enforce_direct_ipv4_bind || true
   apply_service_hygiene || true
   nginx -t >/dev/null 2>&1 && systemctl reload nginx || systemctl restart nginx || true
   systemctl try-restart x-ui || true

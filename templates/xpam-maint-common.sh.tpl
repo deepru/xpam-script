@@ -366,6 +366,21 @@ xpam_debian_networking_provider_warning_ok(){
     return 1
 }
 
+xpam_detect_public_ipv4(){
+    local ip
+    ip="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}' || true)"
+    if printf '%s' "$ip" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$'; then
+        printf '%s\n' "$ip"
+        return 0
+    fi
+    ip="$(ip -4 addr show scope global 2>/dev/null | awk '/ inet /{sub(/\/.*/,"",$2); print $2; exit}' || true)"
+    if printf '%s' "$ip" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$'; then
+        printf '%s\n' "$ip"
+        return 0
+    fi
+    return 1
+}
+
 xpam_tls_endpoint_check(){
     local label="$1" host="$2" port="$3" sni="$4" expected_dns="$5" cert_file info_file fail=0
     echo; echo "--- $label: ${host}:${port} SNI ${sni}, expect DNS:${expected_dns}"
@@ -386,7 +401,13 @@ xpam_tls_cert_check(){
     echo; echo "===== TLS / CERTIFICATE CONSISTENCY CHECK ====="
     xpam_tls_endpoint_check "x-ui panel" "127.0.0.1" "$XUI_PANEL_PORT" "$PRIMARY_DOMAIN" "$PRIMARY_DOMAIN" || fail=1
     if [ "$PROFILE" = "vless_direct" ]; then
-        xpam_tls_endpoint_check "xray vless" "127.0.0.1" "$XRAY_PUBLIC_PORT" "$PRIMARY_DOMAIN" "$PRIMARY_DOMAIN" || fail=1
+        direct_host="$(xpam_detect_public_ipv4 || true)"
+        if [ -n "$direct_host" ]; then
+            xpam_tls_endpoint_check "xray vless" "$direct_host" "$XRAY_PUBLIC_PORT" "$PRIMARY_DOMAIN" "$PRIMARY_DOMAIN" || fail=1
+        else
+            echo "FAIL: could not detect public IPv4 for direct VLESS TLS check"
+            fail=1
+        fi
     else
         xpam_tls_endpoint_check "xray vless" "127.0.0.1" "$XRAY_LOCAL_PORT" "$PRIMARY_DOMAIN" "$PRIMARY_DOMAIN" || fail=1
         if [ "$PROFILE" = "root_mtproto" ]; then
@@ -401,14 +422,22 @@ xpam_tls_cert_check(){
 xpam_port_exposure_check(){
     local cfg="$1"
     echo; echo "===== PORT EXPOSURE CHECK ====="
-    ss -H -lntup 2>/dev/null || true
+    echo "--- IPv4 TCP listeners ---"
+    ss -H -4 -lntup 2>/dev/null || true
+    echo "--- IPv6 TCP listeners ---"
+    ss -H -6 -lntup 2>/dev/null || true
+    echo "--- UDP listeners ---"
+    ss -H -lnup 2>/dev/null || true
     python3 - "$cfg" <<'PY_PORT'
 import re, subprocess, sys
 from pathlib import Path
 cfg={}
 for line in Path(sys.argv[1]).read_text().splitlines():
-    if not line or line.startswith('#') or '=' not in line: continue
-    k,v=line.split('=',1); cfg[k]=v.strip().strip("'").strip('"')
+    if not line or line.startswith('#') or '=' not in line:
+        continue
+    k,v=line.split('=',1)
+    cfg[k]=v.strip().strip("'").strip('"')
+
 profile=cfg['PROFILE']
 required_public_tcp={int(cfg['SSH_PUBLIC_PORT']), int(cfg['HTTP_PUBLIC_PORT']), int(cfg['XRAY_PUBLIC_PORT'])}
 required_local_tcp={int(cfg['XUI_PANEL_PORT']), int(cfg['SITE_BACKEND_PORT'])}
@@ -419,11 +448,19 @@ if profile!='vless_direct':
 else:
     allowed_local_tcp |= {int(cfg.get('XRAY_LOCAL_PORT','1443')), int(cfg.get('MTPROTO_PORT','47827')), int(cfg.get('SYNC_BACKEND_PORT','9443'))}
 
+def normalize_host(h):
+    h=(h or '').strip()
+    if h.startswith('[') and ']' in h:
+        h=h[1:h.index(']')]
+    else:
+        h=h.strip('[]')
+    return h
+
 def loop(h):
-    h=h.strip('[]')
+    h=normalize_host(h)
     return h in ('localhost','::1') or h.startswith('127.') or h.startswith('::ffff:127.')
 
-def parse_ss(args):
+def parse_ss(args, family, proto):
     try:
         out=subprocess.check_output(args, text=True, stderr=subprocess.DEVNULL)
     except Exception:
@@ -431,52 +468,75 @@ def parse_ss(args):
     rows=[]
     for line in out.splitlines():
         parts=line.split()
-        if len(parts)<4: continue
-        local=parts[3]
-        m=re.search(r':(\d+)$', local)
-        if not m: continue
-        port=int(m.group(1)); host=local[:-(len(m.group(1))+1)].strip('[]')
-        rows.append((port,host,local))
+        if len(parts)<4:
+            continue
+        local=None
+        for candidate in parts[3:7]:
+            if re.search(r':\d+$', candidate):
+                local=candidate
+                break
+        if not local:
+            continue
+        if local.startswith('['):
+            m=re.match(r'^\[([^\]]+)\]:(\d+)$', local)
+            if not m:
+                continue
+            host=m.group(1); port=int(m.group(2))
+        else:
+            m=re.search(r':(\d+)$', local)
+            if not m:
+                continue
+            port=int(m.group(1)); host=local[:-(len(m.group(1))+1)]
+        rows.append({'family':family, 'proto':proto, 'port':port, 'host':normalize_host(host), 'local':local})
     return rows
 
-tcp_rows=parse_ss(['ss','-H','-lnt'])
-udp_rows=parse_ss(['ss','-H','-lnu'])
+tcp4_rows=parse_ss(['ss','-H','-4','-lnt'], 'ipv4', 'tcp')
+tcp6_rows=parse_ss(['ss','-H','-6','-lnt'], 'ipv6', 'tcp')
+udp_rows=parse_ss(['ss','-H','-lnu'], 'any', 'udp')
+tcp_rows=tcp4_rows+tcp6_rows
 fail=False
 
-try:
-    global_ipv6=bool(subprocess.check_output(['ip','-6','addr','show','scope','global'], text=True, stderr=subprocess.DEVNULL).strip())
-except Exception:
-    global_ipv6=False
+def public_ipv4_host(h):
+    h=normalize_host(h)
+    return h in ('0.0.0.0','*') or re.match(r'^(?:\d{1,3}\.){3}\d{1,3}$', h)
 
-def is_ipv6_nonloop(h):
-    h=h.strip('[]')
-    return ':' in h and h not in ('::1','localhost') and not h.startswith('::ffff:127.')
+def public_ipv6_host(h):
+    h=normalize_host(h)
+    if loop(h):
+        return False
+    return h in ('*','::') or ':' in h
 
-def public_ipv4(h):
-    h=h.strip('[]')
-    return h == '0.0.0.0' or re.match(r'^(?:\d{1,3}\.){3}\d{1,3}$', h)
+def public_ipv4_tcp(p):
+    return [r['local'] for r in tcp4_rows if r['port']==p and public_ipv4_host(r['host'])]
 
-def public_ipv4_tcp(p): return [l for port,h,l in tcp_rows if port==p and public_ipv4(h)]
-def public_ipv6_tcp(p): return [l for port,h,l in tcp_rows if port==p and is_ipv6_nonloop(h)]
-def local_tcp(p): return [l for port,h,l in tcp_rows if port==p and loop(h)]
+def public_ipv6_tcp(p):
+    return [r['local'] for r in tcp6_rows if r['port']==p and public_ipv6_host(r['host'])]
+
+def local_tcp(p):
+    return [r['local'] for r in tcp_rows if r['port']==p and loop(r['host'])]
 
 for p in sorted(required_public_tcp):
     e=public_ipv4_tcp(p)
-    if e: print(f'OK: required public IPv4 TCP port {p}: {", ".join(e)}')
-    else: print(f'FAIL: required public IPv4 TCP port {p} has no listener'); fail=True
+    if e:
+        print(f'OK: required public IPv4 TCP port {p}: {", ".join(e)}')
+    else:
+        print(f'FAIL: required public IPv4 TCP port {p} has no IPv4 listener')
+        fail=True
     v6=public_ipv6_tcp(p)
     if v6:
-        msg=f'unexpected public IPv6 TCP listener on port {p}: {", ".join(v6)}'
-        if global_ipv6:
-            print(f'FAIL: {msg}'); fail=True
-        else:
-            print(f'WARNING: {msg}; no global IPv6 is currently assigned, but XPAM should bind public services to IPv4 only')
+        print(f'FAIL: unexpected public IPv6 TCP listener on port {p}: {", ".join(v6)}; XPAM public surface is IPv4-only')
+        fail=True
+
 for p in sorted(required_local_tcp):
     e=local_tcp(p)
-    if e: print(f'OK: required loopback TCP port {p}: {", ".join(e)}')
-    else: print(f'FAIL: required loopback TCP port {p} has no listener'); fail=True
+    if e:
+        print(f'OK: required loopback TCP port {p}: {", ".join(e)}')
+    else:
+        print(f'FAIL: required loopback TCP port {p} has no listener')
+        fail=True
 
-for port,host,local in sorted(tcp_rows):
+for r in sorted(tcp_rows, key=lambda x:(x['port'], x['family'], x['local'])):
+    port, host, local = r['port'], r['host'], r['local']
     if loop(host):
         if port in allowed_local_tcp or port in required_public_tcp:
             continue
@@ -493,12 +553,14 @@ for port,host,local in sorted(tcp_rows):
     print(f'FAIL: unexpected public TCP listener {local}; allowed public TCP ports are {sorted(required_public_tcp)}')
     fail=True
 
-for port,host,local in sorted(udp_rows):
+for r in sorted(udp_rows, key=lambda x:(x['port'], x['local'])):
+    port, host, local = r['port'], r['host'], r['local']
     if loop(host) or port==53:
         continue
     print(f'WARNING: public UDP listener {local}; verify it is intentional and firewalled as expected')
 
-if fail: sys.exit(1)
+if fail:
+    sys.exit(1)
 print('OK: port exposure policy looks correct')
 PY_PORT
 }
@@ -587,7 +649,7 @@ xpam_xui_xray_config_check(){
     local cfg="$1"
     echo; echo "===== 3X-UI / XRAY CONFIG CHECK ====="
     python3 - "$cfg" <<'EOF_PY_XUI'
-import json, sqlite3, subprocess, sys
+import json, re, sqlite3, subprocess, sys
 from pathlib import Path
 cfg={}
 for line in Path(sys.argv[1]).read_text().splitlines():
@@ -600,6 +662,27 @@ expected_port=int(cfg['XRAY_LOCAL_PORT'] if profile!='vless_direct' else cfg['XR
 mode='local' if profile!='vless_direct' else 'public'
 fallback=f"127.0.0.1:{cfg['SITE_BACKEND_PORT']}"
 public_port=int(cfg['XRAY_PUBLIC_PORT'])
+
+def detect_public_ipv4():
+    try:
+        out=subprocess.check_output(['ip','route','get','1.1.1.1'], text=True, stderr=subprocess.DEVNULL)
+        parts=out.split()
+        if 'src' in parts:
+            ip=parts[parts.index('src')+1]
+            if re.match(r'^(?:\d{1,3}\.){3}\d{1,3}$', ip):
+                return ip
+    except Exception:
+        pass
+    try:
+        out=subprocess.check_output(['ip','-4','addr','show','scope','global'], text=True, stderr=subprocess.DEVNULL)
+        m=re.search(r'\binet\s+((?:\d{1,3}\.){3}\d{1,3})/', out)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    return ''
+
+public_ipv4=detect_public_ipv4() if mode=='public' else ''
 errs=[]
 def ok(m): print('OK: '+m)
 def warn(m): print('WARNING: '+m)
@@ -648,8 +731,12 @@ else:
         if listen=='127.0.0.1': ok('database VLESS inbound listen is local-only: 127.0.0.1')
         else: bad(f'database VLESS listen expected 127.0.0.1 got {listen!r}')
     else:
-        if listen in ('','0.0.0.0','::','*'): ok(f'database VLESS inbound listen is public as expected: {listen or "<empty/omitted>"}')
-        else: bad(f'database VLESS listen expected public/empty got {listen!r}')
+        if not public_ipv4:
+            bad('could not detect public IPv4 for direct VLESS listen validation')
+        elif listen == public_ipv4:
+            ok(f'database VLESS inbound listen is IPv4-only: {public_ipv4}')
+        else:
+            bad(f'database VLESS listen expected public IPv4 {public_ipv4!r} got {listen or "<empty>"!r}')
     st=jloads(db_inb.get('stream_settings') or db_inb.get('streamSettings'), {})
     sett=jloads(db_inb.get('settings'), {})
     sniff=jloads(db_inb.get('sniffing'), {})
@@ -690,15 +777,13 @@ else:
     else:
         bad(f'database VLESS fallback to {fallback} not found')
     ep=st.get('externalProxy') or []
-    if mode=='local':
-        match=[x for x in ep if isinstance(x,dict) and str(x.get('dest','')).lower()==primary.lower() and int(x.get('port') or 0)==public_port and str(x.get('forceTls','')).lower()=='same']
-        if match: ok(f'database External Proxy points generated links to {primary}:{public_port} with forceTls=same')
-        else:
-            bad(f'database External Proxy must contain forceTls=same, dest={primary}, port={public_port}; current={ep!r}')
-            if any(isinstance(x,dict) and int(x.get('port') or 0)==expected_port for x in ep): bad(f'External Proxy incorrectly uses internal port {expected_port}; it must use public port {public_port}')
+    match=[x for x in ep if isinstance(x,dict) and str(x.get('dest','')).lower()==primary.lower() and int(x.get('port') or 0)==public_port and str(x.get('forceTls','')).lower()=='same']
+    if match:
+        ok(f'database External Proxy points generated links to {primary}:{public_port} with forceTls=same')
     else:
-        if ep: bad(f'direct VLESS mode should have External Proxy empty; current={ep!r}')
-        else: ok('database External Proxy is empty for direct VLESS mode')
+        bad(f'database External Proxy must contain forceTls=same, dest={primary}, port={public_port}; current={ep!r}')
+        if expected_port != public_port and any(isinstance(x,dict) and int(x.get('port') or 0)==expected_port for x in ep):
+            bad(f'External Proxy incorrectly uses internal port {expected_port}; it must use public port {public_port}')
     if mode=='local':
         if sniff.get('enabled') in (False, None, 0):
             ok('database sniffing is OFF for HAProxy mode')
@@ -726,8 +811,14 @@ for ib in config.get('inbounds') or []:
         print(f"protocol=vless, listen={listen or '<empty>'}, port={ib.get('port')}")
         if mode=='local' and listen=='127.0.0.1': ok('generated Xray VLESS inbound listen is local-only: 127.0.0.1')
         elif mode=='local': bad(f'generated Xray VLESS listen expected 127.0.0.1 got {listen!r}')
-        elif mode=='public' and listen in ('','0.0.0.0','::','*'): ok(f'generated Xray VLESS inbound listen is public as expected: {listen or "<empty>"}')
-        else: bad(f'generated Xray VLESS listen expected public/empty got {listen!r}')
+        elif mode=='public':
+            if not public_ipv4:
+                bad('could not detect public IPv4 for generated Xray listen validation')
+            elif listen == public_ipv4:
+                ok(f'generated Xray VLESS inbound listen is IPv4-only: {public_ipv4}')
+            else:
+                bad(f'generated Xray VLESS listen expected public IPv4 {public_ipv4!r} got {listen or "<empty>"!r}')
+        else: bad(f'generated Xray VLESS listen expected local/public mode got {listen!r}')
         st=ib.get('streamSettings') or {}; tls=st.get('tlsSettings') or {}
         if st.get('network')=='tcp': ok('generated Xray VLESS network is tcp')
         else: bad('generated Xray VLESS network must be tcp')
@@ -817,7 +908,7 @@ except Exception as e:
     warn(f'could not inspect system default route: {e}')
 
 try:
-
+    
     import shutil
     if not shutil.which('resolvectl'):
         ok('resolvectl is not installed; systemd-resolved DNS scope check is not applicable')
@@ -859,6 +950,10 @@ xpam_stop_disable_mask_unit(){
     state="$(systemctl is-active "$unit" 2>/dev/null || true)"
     enabled="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
     if [ "$state" != "active" ] && [ "$enabled" = "masked" ]; then
+        if systemctl is-failed --quiet "$unit" 2>/dev/null; then
+            systemctl reset-failed "$unit" >/dev/null 2>&1 || true
+            echo "FIXED: reset stale failed state for masked hygiene unit $unit"
+        fi
         echo "OK: $unit already masked"
         return 0
     fi
@@ -866,6 +961,10 @@ xpam_stop_disable_mask_unit(){
     systemctl stop "$unit" >/dev/null 2>&1 || true
     systemctl disable "$unit" >/dev/null 2>&1 || true
     systemctl mask "$unit" >/dev/null 2>&1 || true
+    if systemctl is-failed --quiet "$unit" 2>/dev/null; then
+        systemctl reset-failed "$unit" >/dev/null 2>&1 || true
+        echo "FIXED: reset stale failed state for hygiene unit $unit"
+    fi
 }
 
 xpam_guarded_purge_package(){
