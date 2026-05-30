@@ -1,98 +1,34 @@
-# Security policy
-
-XPAM Script is a server automation tool that handles sensitive operational data. Treat issue reports, logs, and screenshots with care.
-
----
+# Security Policy
 
 ## Supported versions
 
 | Version | Status |
 |---|---|
-| 1.1.0 | Supported |
-| 1.0.10 | Previous stable |
+| 1.1.x | Supported |
 | older versions | Unsupported |
 
----
+## Reporting a vulnerability
 
-## Reporting security issues
+Please report security issues privately. Do not publish secrets, server IPs, VLESS links, MTProto links, Telegram tokens, panel credentials, or WARP keys in public issues.
 
-If you find a security issue, do not open a public issue with secrets, tokens, domains, IP addresses, or private logs.
+For reports, include:
 
-Recommended report format:
+- XPAM Script version;
+- OS version;
+- installation profile;
+- relevant sanitized health/deep-health output;
+- sanitized logs with secrets removed.
 
-```text
-Subject: XPAM Script security issue
+## Public data hygiene
 
-Version:
-OS:
-Profile:
-Short description:
-Impact:
-Steps to reproduce:
-Redacted logs:
-```
+Do not include real domains, IP addresses, tokens, passwords, UUIDs, private keys, or connection links in public examples.
 
-Use one of these public reporting channels:
+Use placeholders such as:
 
 ```text
-GitHub Security Advisories or repository issue tracker
+example.com
+vless.example.com
+tg.example.com
+SERVER_IP
+<prefix>
 ```
-
----
-
-## Never publish these values
-
-Before posting logs or screenshots, redact:
-
-```text
-VLESS links
-MTProto links
-Telegram bot tokens
-Telegram chat IDs, if private
-Telegram HTTPS Relay tokens
-WARP private keys
-certificate private keys
-/root/secure-notes/*
-/etc/xpam-script/config.env
-real domains, if private
-public IP addresses, if private
-SSH public keys, if you do not want them tied to your identity
-SSH private keys, always
-```
-
----
-
-## Expected security model
-
-XPAM Script assumes:
-
-- root access to a fresh VPS;
-- operator-controlled domain and DNS zone;
-- SSH key access confirmed before password login is disabled;
-- only one operator or a small trusted operator group;
-- no untrusted shell users on the VPS.
-
-The script does not protect against:
-
-- a compromised root account;
-- malicious upstream packages;
-- a compromised DNS account;
-- a compromised domain registrar;
-- malicious VPS provider access;
-- improper manual changes after installation.
-
----
-
-## Operational precautions
-
-Use the built-in commands instead of hand-editing service files when possible:
-
-```text
-sudo <prefix>-install
-sudo <prefix>-health
-sudo <prefix>-links
-sudo <prefix>-vless
-sudo <prefix>-telega
-```
-
-Do not manually publish `/root/secure-notes`, `/etc/xpam-script/config.env`, or config backups.

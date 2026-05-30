@@ -2,8 +2,7 @@
 
 **XPAM Script** is a Bash automation toolkit for preparing a clean Ubuntu 24.04 LTS or Debian 12 VPS with an IPv4-first HTTPS/TLS surface, VLESS, MTProto, masking sites, 3x-ui/Xray, HAProxy, nginx, Certbot, firewall policy, fail2ban, health checks, Telegram notifications, optional HTTPS Relay, optional WARP through Xray and final production cleanup.
 
-Current public release: **v1.1.0**.
-
+Release archives are available in [GitHub Releases](https://github.com/deepru/xpam-script/releases).
 > Before using XPAM Script, read the [full Russian user guide in PDF](docs/USER_GUIDE_RU.pdf).
 >
 > XPAM Script changes SSH, firewall, nginx, HAProxy, 3x-ui/Xray, MTProto, Certbot, fail2ban, systemd units, health/maintenance scripts, DNS checks, `/etc/hosts` and VPS networking-related policy. Use it on a clean VPS, not on a production server with existing important services.
@@ -51,7 +50,7 @@ sudo <prefix>-repair
 
 Public exposure remains limited to IPv4 TCP 22/80/443. Backend services stay on loopback.
 
-## v1.1.0 highlights
+## Highlights
 
 - Safe DNS behavior: working provider DNS is accepted and not rewritten.
 - Improved Debian 12 minimal/provider VPS compatibility.
@@ -65,9 +64,10 @@ Public exposure remains limited to IPv4 TCP 22/80/443. Backend services stay on 
 ## Documentation
 
 - [Full Russian user guide, PDF](docs/USER_GUIDE_RU.pdf)
-- [`RELEASE_NOTES-v1.1.0.md`](RELEASE_NOTES-v1.1.0.md)
-- [`CHANGELOG-v1.1.0.md`](CHANGELOG-v1.1.0.md)
-- [`TESTING-v1.1.0.md`](TESTING-v1.1.0.md)
+- [CHANGELOG.md](CHANGELOG.md)
+- [TESTING.md](TESTING.md)
+- [SECURITY.md](SECURITY.md)
+- [GitHub Releases](https://github.com/deepru/xpam-script/releases)
 - [`THIRD_PARTY.md`](THIRD_PARTY.md)
 - [`SECURITY.md`](SECURITY.md)
 
