@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-KIT_VERSION="v1.1.1"
+KIT_VERSION="v1.2.0"
 KIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG_DIR="/etc/xpam-script"
 CONFIG_FILE="${CONFIG_DIR}/config.env"
 PREFIX_BOOTSTRAP_FILE="${CONFIG_DIR}/prefix.env"
-LOG="/root/xpam-script-${KIT_VERSION}-$(date +%F-%H%M%S).log"
+LOG="/var/log/xpam-script/xpam-script-${KIT_VERSION}-$(date +%F-%H%M%S).log"
 RUNTIME_KIT_DIR="/opt/xpam-script"
 PREPARE_DONE_FILE="${CONFIG_DIR}/stage-prepare.done"
 
@@ -109,6 +109,95 @@ xui_installed_ok(){
   [[ -x /usr/local/x-ui/x-ui && -s /etc/x-ui/x-ui.db ]] || return 1
   systemctl cat x-ui.service >/dev/null 2>&1 || return 1
   return 0
+}
+
+xui_env_file(){
+  echo "/etc/default/x-ui"
+}
+
+xui_env_value(){
+  local key="$1" file
+  file="$(xui_env_file)"
+  [[ -f "$file" ]] || return 0
+  awk -F= -v k="$key" '
+    $1 == k {
+      v=$0; sub(/^[^=]*=/, "", v);
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v);
+      gsub(/^"|"$/, "", v);
+      gsub(/^'"'"'|'"'"'$/, "", v);
+      print v
+    }
+  ' "$file" 2>/dev/null | tail -n 1
+}
+
+xui_backend_type(){
+  local db_type norm
+  db_type="${XUI_DB_TYPE:-}"
+  [[ -n "$db_type" ]] || db_type="$(xui_env_value XUI_DB_TYPE || true)"
+  norm="$(printf '%s' "$db_type" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  case "$norm" in
+    ""|sqlite|sqlite3) echo "sqlite" ;;
+    postgres|postgresql|pg) echo "postgres" ;;
+    *) echo "unsupported:$db_type" ;;
+  esac
+}
+
+xui_prepare_sqlite_backend_for_install(){
+  local backend env_file tmp
+  backend="$(xui_backend_type)"
+  env_file="$(xui_env_file)"
+  case "$backend" in
+    sqlite) ;;
+    postgres|unsupported:*)
+      if systemctl cat x-ui.service >/dev/null 2>&1 || [[ -x /usr/local/x-ui/x-ui || -s /etc/x-ui/x-ui.db ]]; then
+        fail "3x-ui backend is not supported by XPAM Script: ${backend}. XPAM supports only 3x-ui SQLite backend at /etc/x-ui/x-ui.db."
+      fi
+      warn "Removing pre-existing 3x-ui PostgreSQL backend env before fresh SQLite install: $env_file"
+      ;;
+  esac
+  if [[ -f "$env_file" ]]; then
+    tmp="$(mktemp /tmp/xpam-xui-env.XXXXXX)"
+    grep -Ev '^(XUI_DB_TYPE|XUI_DB_DSN)=' "$env_file" > "$tmp" || true
+    cat "$tmp" > "$env_file"
+    rm -f "$tmp"
+    chmod 600 "$env_file" 2>/dev/null || true
+  fi
+  unset XUI_DB_TYPE XUI_DB_DSN
+}
+
+xui_assert_sqlite_backend(){
+  local backend
+  backend="$(xui_backend_type)"
+  case "$backend" in
+    sqlite) return 0 ;;
+    postgres) fail "3x-ui PostgreSQL backend detected. XPAM Script supports only 3x-ui SQLite backend at /etc/x-ui/x-ui.db. No 3x-ui data changes were made." ;;
+    unsupported:*) fail "Unsupported 3x-ui backend detected (${backend#unsupported:}). XPAM Script supports only 3x-ui SQLite backend at /etc/x-ui/x-ui.db." ;;
+  esac
+}
+
+xui_validate_sqlite_contract(){
+  local db="/etc/x-ui/x-ui.db"
+  xui_assert_sqlite_backend
+  [[ -s "$db" ]] || fail "3x-ui SQLite DB missing: $db"
+  python3 - <<'PY_XUI_SQLITE_CONTRACT'
+import sqlite3, sys
+
+db='/etc/x-ui/x-ui.db'
+try:
+    conn=sqlite3.connect(db)
+    cur=conn.cursor()
+    cur.execute('PRAGMA integrity_check')
+    cols=[r[1] for r in cur.execute('PRAGMA table_info(inbounds)').fetchall()]
+except Exception as exc:
+    sys.exit(f'3x-ui SQLite DB is not readable: {exc}')
+if not cols:
+    sys.exit('3x-ui SQLite schema is not compatible: inbounds table missing or empty schema')
+stream_col=next((c for c in ('stream_settings','streamSettings','stream') if c in cols), None)
+if not stream_col:
+    sys.exit('3x-ui SQLite schema is not compatible: stream settings column not found')
+print(f'OK: 3x-ui backend SQLite OK: {db}')
+print(f'OK: 3x-ui backend SQLite schema OK: stream settings column = {stream_col}')
+PY_XUI_SQLITE_CONTRACT
 }
 
 ensure_xui_ready_for_finalize(){
@@ -515,24 +604,24 @@ EOF_LINKS_LAUNCHER
   ok "Connection data command available: sudo ${safe_prefix}-links"
 }
 
-write_telega_launcher(){
+write_tg_launcher(){
   [[ -n "${SERVER_PREFIX:-}" ]] || return 0
 
   local safe_prefix launcher bin_link kit_dir_real
   safe_prefix="$(printf '%s' "$SERVER_PREFIX" | tr -cd 'A-Za-z0-9_-')"
 
-  [[ -n "$safe_prefix" ]] || fail "SERVER_PREFIX is empty; cannot create telega launcher"
+  [[ -n "$safe_prefix" ]] || fail "SERVER_PREFIX is empty; cannot create tg launcher"
   [[ "$safe_prefix" == "$SERVER_PREFIX" ]] || fail "SERVER_PREFIX contains unsupported chars for launcher command: $SERVER_PREFIX"
 
-  launcher="/usr/local/sbin/${safe_prefix}-telega"
-  bin_link="/usr/local/bin/${safe_prefix}-telega"
+  launcher="/usr/local/sbin/${safe_prefix}-tg"
+  bin_link="/usr/local/bin/${safe_prefix}-tg"
   kit_dir_real="$RUNTIME_KIT_DIR"
 
-  cat > "$launcher" <<EOF_TELEGA_LAUNCHER
+  cat > "$launcher" <<EOF_TG_LAUNCHER
 #!/usr/bin/env bash
 set -euo pipefail
 
-LAUNCHER="/usr/local/sbin/${safe_prefix}-telega"
+LAUNCHER="/usr/local/sbin/${safe_prefix}-tg"
 KIT_DIR="${kit_dir_real}"
 
 if [ "\$(id -u)" -ne 0 ]; then
@@ -548,13 +637,14 @@ fi
 export XPAM_SCRIPT_QUIET_LOAD_CONFIG=1
 # shellcheck source=/dev/null
 source "\$KIT_DIR/scripts/xpam-core.sh"
-stage_telega_direct "\$@"
-EOF_TELEGA_LAUNCHER
+stage_tg_direct "\$@"
+EOF_TG_LAUNCHER
 
   chmod 755 "$launcher"
   ln -sf "$launcher" "$bin_link" 2>/dev/null || true
+  rm -f "/usr/local/sbin/${safe_prefix}-tg" "/usr/local/bin/${safe_prefix}-tg" 2>/dev/null || true
 
-  ok "MTProto users command available: sudo ${safe_prefix}-telega"
+  ok "MTProto users command available: sudo ${safe_prefix}-tg"
 }
 
 write_vless_launcher(){
@@ -798,7 +888,7 @@ save_config(){
   write_install_launcher || true
   write_links_launcher || true
   write_vless_launcher || true
-  write_telega_launcher || true
+  write_tg_launcher || true
   write_repair_launcher || true
   write_netdiag_launcher || true
 }
@@ -1568,6 +1658,7 @@ net.ipv4.tcp_tw_reuse = 2
 net.ipv4.ip_local_port_range = 1024 65535
 EOF_TUNING_SYSCTL
   sysctl --system
+  sysctl -w net.ipv4.tcp_syncookies=1 >/dev/null 2>&1 || warn "could not apply runtime net.ipv4.tcp_syncookies=1; provider/kernel may override this setting"
   local dev
   dev="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}' || true)"
   if [[ -n "${dev:-}" ]] && ! tc qdisc show dev "$dev" 2>/dev/null | grep -q 'fq'; then
@@ -2107,7 +2198,7 @@ write_manual_3xui_note(){
   proxy_protocol_note="Proxy Protocol: OFF. Do not enable it unless HAProxy backend is also changed to send-proxy and health checks/nginx are adjusted.\nFallback PROXY/xVer: OFF / 0. Do not enable unless nginx fallback listens with proxy_protocol.\nFallback SNI/name: empty. Empty means catch-all fallback to the masked website; do not narrow it to one domain unless you intentionally maintain several fallback destinations.\nAuthentication: None / empty. Do not enable X25519/ML-KEM auth for this VLESS+TLS+fallback layout."
   warp_block="Direct profile optional WARP notes:\n  WARP is configured manually inside 3x-ui/Xray, not by XPAM Script.\n  Recommended outbound values: tag=warp, protocol=wireguard, MTU=1420, domainStrategy=ForceIPv4, workers=2, noKernelTun=false.\n  Use reserved from your WARP profile and peer keepAlive=25.\n  Peer allowedIPs should be IPv4-only: 0.0.0.0/0. Do not add ::/0.\n  Address should be IPv4-only, for example 172.16.0.2/32. Do not add Cloudflare IPv6 address 2606:.../128 on this IPv4-only public layout.\n  Endpoint is usually engage.cloudflareclient.com:2408, but follow your actual WARP profile if it differs.\n  Use routing rules for selected domains only; keep system DNS independent from wg0/WARP.\n  wg0 may be lazy/absent immediately after reboot; health treats that as acceptable when WireGuard outbound exists.\n  Never paste WARP private keys into XPAM Script files, notes, screenshots or support messages."
   cat > "$note" <<EOF
-Manual 3x-ui setup for xpam-script ${KIT_VERSION}
+Manual 3x-ui setup for XPAM Script
 =========================================================
 VLESS/masking domain: ${PRIMARY_DOMAIN}
 Panel URL after final setup: https://${PRIMARY_DOMAIN}/${PANEL_PATH}/
@@ -2143,7 +2234,7 @@ VLESS inbound:
   transport/transmission: TCP/RAW
   security: TLS
   TLS min/max: 1.2 / 1.3
-  uTLS/fingerprint: chrome
+  uTLS/fingerprint: firefox
   ALPN: http/1.1
   cert/key: same as above
   decryption/encryption: none
@@ -2180,10 +2271,20 @@ reboot_status_notice(){
   if [[ -f /var/run/reboot-required ]]; then
     warn "Reboot is required by installed packages: /var/run/reboot-required exists"
   elif [[ -n "$newest" && -n "$running" && "$newest" != "$running" ]]; then
-    warn "A newer installed kernel appears to be available: running=$running, newest=$newest. Reboot after finishing the current stage."
+    warn "A newer installed kernel appears to be available: running=$running, newest=$newest. Reboot is required before final setup."
   else
     ok "No reboot marker detected"
   fi
+}
+
+reboot_recommended_before_finalize(){
+  local running newest
+  if [[ -f /var/run/reboot-required ]]; then
+    return 0
+  fi
+  running="$(uname -r 2>/dev/null || true)"
+  newest="$(ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's#^/boot/vmlinuz-##' | sort -V | tail -1 || true)"
+  [[ -n "$newest" && -n "$running" && "$newest" != "$running" ]]
 }
 
 xui_latest_release_tag_any(){
@@ -2217,13 +2318,13 @@ PYUUID
     xray_listen="127.0.0.1"
     sniff_enabled="false"
     sniff_route="false"
-    inbound_remark="${SERVER_PREFIX}-vless-local-${xray_port}"
+    inbound_remark="${SERVER_PREFIX}-vless"
   else
     xray_listen="$(server_public_ipv4)"
     [[ "$xray_listen" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || fail "Could not detect public IPv4 for direct VLESS bind"
     sniff_enabled="true"
     sniff_route="true"
-    inbound_remark="${SERVER_PREFIX}-vless-public-${xray_port}"
+    inbound_remark="${SERVER_PREFIX}-vless"
   fi
 
   cert="/etc/letsencrypt/live/$(web_cert_name)/fullchain.pem"
@@ -2265,7 +2366,7 @@ stream={
     "cipherSuites":"",
     "certificates":[{"certificateFile":os.environ["XPAM_CERT"],"keyFile":os.environ["XPAM_KEY"],"ocspStapling":3600}],
     "alpn":["http/1.1"],
-    "settings":{"allowInsecure":False,"fingerprint":"chrome"}
+    "settings":{"allowInsecure":False,"fingerprint":"firefox"}
   },
   "tcpSettings":{"acceptProxyProtocol":False,"header":{"type":"none"}}
 }
@@ -2305,6 +2406,7 @@ PYXUIPAYLOAD
 }
 
 xui_api_token(){
+  xui_assert_sqlite_backend
   python3 - <<'PYXUITOKEN'
 import sqlite3, sys
 db = "/etc/x-ui/x-ui.db"
@@ -2333,6 +2435,7 @@ PYXUITOKEN
 xui_disable_subscription(){
   local db="/etc/x-ui/x-ui.db" backup_dir backup
   say "Disabling 3x-ui subscription server"
+  xui_assert_sqlite_backend
   [[ -s "$db" ]] || fail "3x-ui DB missing: $db"
 
   backup_dir="/root/manual-backups/xui-subscription-disable"
@@ -2413,13 +2516,13 @@ xui_enforce_vless_inbound_policy(){
   if uses_haproxy; then
     mode="local"
     expected_listen="127.0.0.1"
-    expected_remark="${SERVER_PREFIX}-vless-local-${expected_port}"
+    expected_remark="${SERVER_PREFIX}-vless"
   else
     mode="direct"
     ip4="$(server_public_ipv4)"
     [[ "$ip4" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || fail "Could not detect public IPv4 for direct VLESS bind"
     expected_listen="$ip4"
-    expected_remark="${SERVER_PREFIX}-vless-public-${expected_port}"
+    expected_remark="${SERVER_PREFIX}-vless"
   fi
   [[ -s "$db" ]] || fail "3x-ui DB missing: $db"
 
@@ -2488,13 +2591,28 @@ select_sql='SELECT '+','.join('"'+c.replace('"','""')+'"' for c in select_cols)+
 rows=[dict(r) for r in cur.execute(select_sql, (port,)).fetchall()]
 if not rows:
     fail(f'XPAM VLESS inbound on port {port} was not found')
-managed=[r for r in rows if str(r.get('remark') or '') == expected_remark]
-if not managed and len(rows)==1:
+legacy_remarks={f'{prefix}-vless-local-{port}', f'{prefix}-vless-public-{port}'}
+canonical=[r for r in rows if str(r.get('remark') or '') == expected_remark]
+legacy=[r for r in rows if str(r.get('remark') or '') in legacy_remarks]
+if len(canonical)==1:
+    managed=canonical
+elif len(legacy)==1:
+    managed=legacy
+elif len(rows)==1:
     managed=rows
+else:
+    managed=[]
 if len(managed)!=1:
     fail(f'Could not uniquely identify XPAM-managed VLESS inbound on port {port}; candidates={[(r.get("id"), r.get("remark"), r.get("listen")) for r in rows]}')
 row=managed[0]
 changed=False
+old_remark=str(row.get('remark') or '')
+if 'remark' in cols and old_remark in legacy_remarks and old_remark != expected_remark:
+    cur.execute('UPDATE inbounds SET remark=? WHERE id=?', (expected_remark, row['id']))
+    changed=True
+    ok(f'VLESS inbound legacy name normalized from {old_remark} to {expected_remark}')
+elif old_remark and old_remark != expected_remark:
+    ok(f'VLESS inbound custom name preserved: {old_remark}')
 old_listen=str(row.get('listen') or '')
 if old_listen == expected_listen:
     if mode == 'direct':
@@ -2530,48 +2648,132 @@ xui_enforce_direct_ipv4_bind(){
   xui_enforce_vless_inbound_policy
 }
 xui_add_vless_inbound_auto(){
-  local base payload ids uuid subid client_name inbound_remark rc token note vless_link panel_path_clean
+  local base payload ids uuid subid client_name inbound_remark rc token note vless_link panel_path_clean expected_listen
   panel_path_clean="${PANEL_PATH#/}"
   panel_path_clean="${panel_path_clean%/}"
   base="https://127.0.0.1:${XUI_PANEL_PORT}/${panel_path_clean}"
   payload="$(mktemp /tmp/xpam-script-xui-inbound.XXXXXX.json)"
+  if uses_haproxy; then
+    expected_listen="127.0.0.1"
+  else
+    expected_listen="$(server_public_ipv4)"
+  fi
 
   say "Reading local 3x-ui v3 API token from SQLite"
   token="$(xui_api_token)" || fail "Could not read enabled 3x-ui API token from /etc/x-ui/x-ui.db"
 
   say "Проверка существующего XPAM-managed VLESS inbound"
-  existing="$(SERVER_PREFIX="$SERVER_PREFIX" PRIMARY_DOMAIN="$PRIMARY_DOMAIN" XRAY_PUBLIC_PORT="$XRAY_PUBLIC_PORT" EXPECTED_PORT="$(expected_xray_port)" python3 - <<'PY_EXISTING_VLESS' 2>/dev/null || true
+  existing="$(SERVER_PREFIX="$SERVER_PREFIX" PRIMARY_DOMAIN="$PRIMARY_DOMAIN" XRAY_PUBLIC_PORT="$XRAY_PUBLIC_PORT" EXPECTED_PORT="$(expected_xray_port)" EXPECTED_LISTEN="$expected_listen" python3 - <<'PY_EXISTING_VLESS' 2>/dev/null || true
 import json, os, sqlite3, sys
+from urllib.parse import quote, urlencode
 DB='/etc/x-ui/x-ui.db'
 prefix=os.environ['SERVER_PREFIX']
 primary=os.environ['PRIMARY_DOMAIN']
 public_port=os.environ['XRAY_PUBLIC_PORT']
 expected_port=str(os.environ['EXPECTED_PORT'])
-client_email=f'{prefix}-vless-client'
+expected_listen=os.environ.get('EXPECTED_LISTEN','')
+
+def enabled(value):
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() not in {'0','false','no','off','disabled'}
+
+def load_json(raw, default):
+    try:
+        data=json.loads(raw or '{}')
+        return data if isinstance(data, type(default)) else default
+    except Exception:
+        return default
+
+def first_external_proxy(stream):
+    proxies=stream.get('externalProxy') or stream.get('external_proxy') or []
+    if isinstance(proxies, dict):
+        proxies=[proxies]
+    if not isinstance(proxies, list):
+        return None
+    for proxy in proxies:
+        if isinstance(proxy, dict) and proxy.get('dest') and proxy.get('port'):
+            return proxy
+    return None
+
+def alpn_value(tls):
+    alpn=tls.get('alpn')
+    if isinstance(alpn, list):
+        return ','.join(str(x) for x in alpn if x) or 'http/1.1'
+    if alpn is None:
+        return 'http/1.1'
+    return str(alpn)
+
+def client_name(client, idx):
+    for key in ('email','remark','name'):
+        value=client.get(key)
+        if value:
+            return str(value)
+    return f'client-{idx}'
+
+def build_link(uuid, name, client, stream):
+    ext=first_external_proxy(stream)
+    host=str(ext.get('dest') if ext else primary).strip() or primary
+    port=str(ext.get('port') if ext else public_port).strip() or str(public_port)
+    network=str(stream.get('network') or 'tcp')
+    security=str(stream.get('security') or 'tls')
+    tls=stream.get('tlsSettings') or stream.get('tls_settings') or {}
+    if not isinstance(tls, dict):
+        tls={}
+    tls_settings=tls.get('settings') if isinstance(tls.get('settings'), dict) else {}
+    params={'type':network,'security':security}
+    flow=str(client.get('flow') or '').strip()
+    if flow:
+        params['flow']=flow
+    sni=str(tls.get('serverName') or tls.get('server_name') or host).strip()
+    if security in {'tls','reality'} and sni:
+        params['sni']=sni
+    fp=str(tls_settings.get('fingerprint') or tls.get('fingerprint') or 'firefox').strip()
+    if security in {'tls','reality'} and fp:
+        params['fp']=fp
+    alpn=alpn_value(tls)
+    if security == 'tls' and alpn:
+        params['alpn']=alpn
+    return f'vless://{uuid}@{host}:{port}?{urlencode(params, safe=",")}#{quote(name)}'
+
 conn=sqlite3.connect(DB)
 conn.row_factory=sqlite3.Row
 cur=conn.cursor()
+rows=[]
 for row in cur.execute('SELECT * FROM inbounds ORDER BY id ASC'):
     r=dict(row)
     if str(r.get('protocol','')).lower()!='vless':
         continue
     if str(r.get('port','')) != expected_port:
         continue
-    remark=str(r.get('remark',''))
-    settings=json.loads(r.get('settings') or '{}')
-    clients=settings.get('clients') or []
-    if isinstance(clients, dict): clients=[clients]
-    for c in clients:
-        if not isinstance(c, dict):
-            continue
-        if c.get('email') != client_email:
-            continue
-        uuid=c.get('id') or c.get('uuid')
-        if not uuid:
-            continue
-        link=f'vless://{uuid}@{primary}:{public_port}?type=tcp&security=tls&flow=xtls-rprx-vision&sni={primary}&fp=chrome&alpn=http%2F1.1#{client_email}'
-        print('\t'.join([str(uuid), client_email, remark or f'{prefix}-vless', link]))
-        sys.exit(0)
+    if expected_listen and str(r.get('listen') or '') != expected_listen:
+        continue
+    rows.append(r)
+if len(rows) != 1:
+    sys.exit(0)
+r=rows[0]
+remark=str(r.get('remark','')) or f'{prefix}-vless'
+settings=load_json(r.get('settings'), {})
+stream=load_json(r.get('stream_settings') or r.get('streamSettings') or r.get('stream'), {})
+clients=settings.get('clients') or []
+if isinstance(clients, dict):
+    clients=[clients]
+if not isinstance(clients, list):
+    clients=[]
+for idx, c in enumerate(clients, 1):
+    if not isinstance(c, dict) or not enabled(c.get('enable', c.get('enabled', True))):
+        continue
+    uuid=c.get('id') or c.get('uuid')
+    if not uuid:
+        continue
+    name=client_name(c, idx)
+    link=build_link(str(uuid), name, c, stream)
+    print('	'.join([str(uuid), name, remark, link]))
+    sys.exit(0)
 PY_EXISTING_VLESS
 )"
   if [[ -n "$existing" ]]; then
@@ -2580,7 +2782,7 @@ PY_EXISTING_VLESS
     mkdir -p /root/secure-notes
     chmod 700 /root/secure-notes
     cat > "$note" <<EOF_XUINOTE_EXISTING
-3x-ui / VLESS setup for xpam-script ${KIT_VERSION}
+3x-ui / VLESS setup for XPAM Script
 =======================================================
 Installed 3x-ui tag: ${XUI_INSTALLED_TAG}
 
@@ -2627,11 +2829,11 @@ EOF_XUINOTE_EXISTING
   mkdir -p /root/secure-notes
   chmod 700 /root/secure-notes
 
-  vless_link="vless://${uuid}@${PRIMARY_DOMAIN}:${XRAY_PUBLIC_PORT}?type=tcp&security=tls&flow=xtls-rprx-vision&sni=${PRIMARY_DOMAIN}&fp=chrome&alpn=http%2F1.1#${client_name}"
+  vless_link="vless://${uuid}@${PRIMARY_DOMAIN}:${XRAY_PUBLIC_PORT}?type=tcp&security=tls&flow=xtls-rprx-vision&sni=${PRIMARY_DOMAIN}&fp=firefox&alpn=http%2F1.1#${client_name}"
   note="/root/secure-notes/${SERVER_PREFIX}-3x-ui-auto.txt"
 
   cat > "$note" <<EOF_XUINOTE
-3x-ui / VLESS setup for xpam-script ${KIT_VERSION}
+3x-ui / VLESS setup for XPAM Script
 =======================================================
 Installed 3x-ui tag: ${XUI_INSTALLED_TAG}
 
@@ -2663,16 +2865,18 @@ install_configure_3xui_auto(){
   XUI_INSTALLED_TAG="$tag"
   save_config
   say "Installing 3x-ui tag ${tag} (latest GitHub release including pre-release)"
+  xui_prepare_sqlite_backend_for_install
   installer="$(mktemp /tmp/3x-ui-install.XXXXXX.sh)"
   curl -4fsSL --connect-timeout 8 --max-time 30 -o "$installer" https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh || fail "Could not download 3x-ui installer"
   chmod +x "$installer"
-  # Current 3x-ui installer flow for first install:
-  # customize panel port -> port -> SSL option 4 skip -> bind panel to 127.0.0.1.
+  # Preserve the known-good upstream installer stdin flow. SQLite is enforced by pre/post backend guards.
+  # Flow: customize panel port -> port -> SSL option 4 skip -> bind panel to 127.0.0.1.
   if ! printf 'y\n%s\n4\ny\n' "$XUI_PANEL_PORT" | bash "$installer" "$tag"; then
     rm -f "$installer"
     fail "3x-ui installer failed"
   fi
   rm -f "$installer"
+  xui_validate_sqlite_contract
 
   say "Forcing XPAM Script panel settings"
   /usr/local/x-ui/x-ui setting -username "$XUI_ADMIN_USER" -password "$XUI_ADMIN_PASS" -port "$XUI_PANEL_PORT" -webBasePath "/${PANEL_PATH}/" -listenIP "127.0.0.1" || fail "x-ui setting failed"
@@ -2707,6 +2911,7 @@ stage_xui_auto_only(){
 verify_xui_manual_setup(){
   say "Verifying 3x-ui setup"
   xui_installed_ok || fail "3x-ui is not installed/configured"
+  xui_validate_sqlite_contract
   write_wait_for_port
   systemctl restart x-ui || fail "x-ui restart failed"
   sleep 2
@@ -2773,7 +2978,7 @@ PY_MTPROTO_VALIDATE
     chmod 600 /opt/mtprotoproxy/config.py
     note="/root/secure-notes/${SERVER_PREFIX}-mtproto.txt"
     cat > "$note" <<EOF_MTPROTO_NOTE
-MTProto proxy for xpam-script ${KIT_VERSION}
+MTProto proxy for XPAM Script
 ==================================================
 Link: tg://proxy?server=${SYNC_DOMAIN}&port=443&secret=ee${secret}${tag}
 EOF_MTPROTO_NOTE
@@ -2813,7 +3018,7 @@ EOF_MTPROTO_RESTART
 }
 
 write_haproxy(){ uses_mtproto || return 0; export_vars; render_template "$KIT_DIR/templates/haproxy.cfg.tpl" /etc/haproxy/haproxy.cfg; haproxy -c -f /etc/haproxy/haproxy.cfg; mkdir -p /etc/systemd/system/haproxy.service.d; render_template "$KIT_DIR/templates/backend-order.conf.tpl" /etc/systemd/system/haproxy.service.d/backend-order.conf; systemctl daemon-reload; systemctl enable haproxy; systemctl restart haproxy; }
-write_health_weekly(){ say "Writing health and weekly scripts"; write_common_library; write_dns_policy_script; write_network_tuning_policy_script; write_telegram_https_relay_worker; migrate_legacy_system_file_names || true; export_vars; render_template "$KIT_DIR/templates/health.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-health"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-health"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-health"; write_health_launcher || true; write_links_launcher || true; write_vless_launcher || true; write_telega_launcher || true; write_repair_launcher || true; write_netdiag_launcher || true; render_template "$KIT_DIR/templates/weekly.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; write_weekly_launcher || true; local cron_min=35; [[ "$SERVER_PREFIX" == "se" ]] && cron_min=30; [[ "$SERVER_PREFIX" == "lt" ]] && cron_min=40; cat > "/etc/cron.d/${SERVER_PREFIX}-weekly-maintenance" <<EOF
+write_health_weekly(){ say "Writing health and weekly scripts"; write_common_library; write_dns_policy_script; write_network_tuning_policy_script; write_telegram_https_relay_worker; migrate_legacy_system_file_names || true; export_vars; render_template "$KIT_DIR/templates/health.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-health"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-health"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-health"; write_health_launcher || true; write_links_launcher || true; write_vless_launcher || true; write_tg_launcher || true; write_repair_launcher || true; write_netdiag_launcher || true; render_template "$KIT_DIR/templates/weekly.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; write_weekly_launcher || true; local cron_min=35; [[ "$SERVER_PREFIX" == "se" ]] && cron_min=30; [[ "$SERVER_PREFIX" == "lt" ]] && cron_min=40; cat > "/etc/cron.d/${SERVER_PREFIX}-weekly-maintenance" <<EOF
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ${cron_min} 4 * * 0 root /usr/bin/nice -n 19 /usr/bin/ionice -c3 /usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh >/dev/null 2>&1
@@ -3341,7 +3546,7 @@ cleanup_root_test_leftovers(){
   local mode="${1:-safe}"
   shopt -s nullglob
 
-  rm -f /root/de-health-*.txt /root/de-health-debian-*.txt 2>/dev/null || true
+  rm -f /root/*-health-*.txt /root/*-health-debian-*.txt 2>/dev/null || true
   rm -f /root/xpam-script-v*-*.log /root/xpam-script-*.log 2>/dev/null || true
   rm -f /root/.Xauthority /root/.lesshst 2>/dev/null || true
   rm -rf /root/xpam-install /root/xpam-release-build /root/xpam-script-test-* 2>/dev/null || true
@@ -3381,7 +3586,7 @@ final_production_cleanup(){
   write_weekly_launcher || true
   write_links_launcher || true
   write_vless_launcher || true
-  write_telega_launcher || true
+  write_tg_launcher || true
   write_repair_launcher || true
   write_netdiag_launcher || true
   write_health_weekly || true
@@ -3583,7 +3788,7 @@ stage_prepare(){
   reboot_status_notice
   echo
   echo "============================================================"
-  if [[ -f /var/run/reboot-required ]]; then
+  if reboot_recommended_before_finalize; then
     warn "Первый этап завершён. Перед финальной настройкой требуется перезагрузка."
     echo "Выполните сейчас:"
     echo "  sudo reboot"
@@ -3725,7 +3930,7 @@ def build_link(uuid, name, client, stream, inbound_port):
     if security in {"tls", "reality"} and sni:
         params["sni"] = sni
 
-    fp = str(tls_settings.get("fingerprint") or tls.get("fingerprint") or "chrome").strip()
+    fp = str(tls_settings.get("fingerprint") or tls.get("fingerprint") or "firefox").strip()
     if security in {"tls", "reality"} and fp:
         params["fp"] = fp
 
@@ -3897,8 +4102,8 @@ print_connection_summary(){
   echo "Показать секреты на экран только осознанно:"
   echo "  VLESS-ссылки:         sudo ${SERVER_PREFIX}-vless --show"
   if uses_mtproto; then
-    echo "  MTProto-ссылки:       sudo ${SERVER_PREFIX}-telega --show"
-    echo "  MTProto управление:   sudo ${SERVER_PREFIX}-telega --manage"
+    echo "  MTProto-ссылки:       sudo ${SERVER_PREFIX}-tg --show"
+    echo "  MTProto управление:   sudo ${SERVER_PREFIX}-tg --manage"
   fi
   echo "  Всё сразу:            sudo ${SERVER_PREFIX}-links --show-secrets"
   echo
@@ -3960,7 +4165,7 @@ print_connection_secrets_summary(){
   echo "  Показать безопасную сводку:     sudo ${SERVER_PREFIX}-links"
   echo "  Показать VLESS-ссылки:           sudo ${SERVER_PREFIX}-vless"
   if uses_mtproto; then
-    echo "  Управление MTProto пользователями: sudo ${SERVER_PREFIX}-telega"
+    echo "  Управление MTProto пользователями: sudo ${SERVER_PREFIX}-tg"
   fi
   echo "  Проверить состояние сервера:     sudo ${SERVER_PREFIX}-health"
   echo
@@ -4062,7 +4267,7 @@ warp_print_3xui_manual_steps(){
   echo "------------------------------------------------------------"
   echo
   echo "Откройте панель:"
-  echo "  https://${PRIMARY_DOMAIN}${PANEL_PATH}/"
+  echo "  https://${PRIMARY_DOMAIN}/${PANEL_PATH}/"
   echo
   echo "В панели 3x-ui:"
   echo "  1. Откройте: Настройки Xray -> Исходящие подключения."
@@ -4106,6 +4311,7 @@ warp_print_3xui_manual_steps(){
 xui_warp_youtube_fix(){
   local db backup_dir backup expected_port
   db="/etc/x-ui/x-ui.db"
+  xui_assert_sqlite_backend
   [[ -s "$db" ]] || fail "3x-ui DB не найден: $db"
   expected_port="$(expected_xray_port)"
   backup_dir="/root/manual-backups/xui-warp-normalize"
@@ -4198,6 +4404,12 @@ if not isinstance(peers, list) or not peers or not isinstance(peers[0], dict):
 peers[0]['allowedIPs']=['0.0.0.0/0']
 peers[0]['keepAlive']=25
 settings['peers']=peers
+def valid_reserved(v):
+    return isinstance(v, list) and len(v)==3 and all(isinstance(x, int) and 0 <= x <= 255 for x in v)
+if valid_reserved(settings.get('reserved')) or valid_reserved(peers[0].get('reserved')):
+    ok("WARP reserved bytes сохранены")
+elif 'cloudflareclient.com' in str(peers[0].get('endpoint') or '').lower():
+    print("WARNING: WARP reserved bytes отсутствуют. XPAM их не генерирует и не выдумывает; если текущий 3x-ui создал WARP без reserved, health покажет WARN.")
 ok("WARP outbound приведён к настройкам XPAM Script")
 
 routing=cfg.setdefault('routing', {})
@@ -4266,6 +4478,7 @@ conn.close()
 ok("3x-ui xrayTemplateConfig сохранён")
 PY_XUI_WARP_FIX
 
+  warn "Сейчас будет перезапущен 3x-ui/Xray. Если ваша SSH-сессия идёт через этот же VLESS/прокси, соединение может оборваться. Это не означает поломку сервера: после переподключения выполните sudo ${SERVER_PREFIX}-health."
   say "Перезапускаем 3x-ui, чтобы Xray перечитал конфигурацию"
   systemctl restart x-ui || fail "x-ui restart failed after WARP update"
   sleep 5
@@ -4721,7 +4934,7 @@ def link_for(sec):
 
 def write_notes():
     notes.mkdir(mode=0o700, parents=True, exist_ok=True)
-    body=['MTProto users for XPAM Script v1.1.0','==================================================','']
+    body=['MTProto users for XPAM Script','==================================================','']
     for name, sec in users.items():
         body.append(f'User: {name}')
         body.append(f'Link: {link_for(sec)}')
@@ -4729,7 +4942,7 @@ def write_notes():
     users_note.write_text('\n'.join(body), encoding='utf-8')
     users_note.chmod(0o600)
     first_name = prefix if prefix in users else next(iter(users))
-    legacy_note.write_text('MTProto proxy for XPAM Script v1.1.0\n==================================================\nLink: '+link_for(users[first_name])+'\n', encoding='utf-8')
+    legacy_note.write_text('MTProto proxy for XPAM Script\n==================================================\nLink: '+link_for(users[first_name])+'\n', encoding='utf-8')
     legacy_note.chmod(0o600)
 
 if action == 'list':
@@ -4876,7 +5089,7 @@ mtproto_regenerate_user_key(){
   echo "new link: $link"
 }
 
-print_telega_summary(){
+print_tg_summary(){
   local mt_note mt_users_note
   mt_note="/root/secure-notes/${SERVER_PREFIX}-mtproto.txt"
   mt_users_note="/root/secure-notes/${SERVER_PREFIX}-mtproto-users.txt"
@@ -4892,10 +5105,10 @@ print_telega_summary(){
   [[ -f "$mt_users_note" ]] && echo "  Пользователи:          $mt_users_note"
   echo
   echo "Показать MTProto-ссылки на экран:"
-  echo "  sudo ${SERVER_PREFIX}-telega --show"
+  echo "  sudo ${SERVER_PREFIX}-tg --show"
   echo
   echo "Управлять MTProto-пользователями:"
-  echo "  sudo ${SERVER_PREFIX}-telega --manage"
+  echo "  sudo ${SERVER_PREFIX}-tg --manage"
   echo
   echo "Проверить сервер:"
   echo "  sudo ${SERVER_PREFIX}-health"
@@ -4917,7 +5130,7 @@ mtproto_show_all_links(){
   fi
 }
 
-stage_telega_direct(){
+stage_tg_direct(){
   need_root
   load_config
   validate_inputs
@@ -4933,10 +5146,10 @@ stage_telega_direct(){
       mtproto_list_users
       ;;
     ""|--help|-h)
-      print_telega_summary
+      print_tg_summary
       ;;
     *)
-      fail "Неизвестный параметр. Используйте: sudo ${SERVER_PREFIX}-telega, sudo ${SERVER_PREFIX}-telega --show или sudo ${SERVER_PREFIX}-telega --manage"
+      fail "Неизвестный параметр. Используйте: sudo ${SERVER_PREFIX}-tg, sudo ${SERVER_PREFIX}-tg --show или sudo ${SERVER_PREFIX}-tg --manage"
       ;;
   esac
 }
@@ -5053,6 +5266,7 @@ stage_repair(){
   write_wait_for_port || true
   write_certbot_hook || true
   write_health_weekly || true
+  xui_assert_sqlite_backend
   xui_enforce_direct_ipv4_bind || true
   apply_service_hygiene || true
   nginx -t >/dev/null 2>&1 && systemctl reload nginx || systemctl restart nginx || true

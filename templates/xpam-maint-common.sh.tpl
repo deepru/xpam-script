@@ -487,12 +487,12 @@ def parse_ss(args, family, proto):
             if not m:
                 continue
             port=int(m.group(1)); host=local[:-(len(m.group(1))+1)]
-        rows.append({'family':family, 'proto':proto, 'port':port, 'host':normalize_host(host), 'local':local})
+        rows.append({'family':family, 'proto':proto, 'port':port, 'host':normalize_host(host), 'local':local, 'raw':line})
     return rows
 
 tcp4_rows=parse_ss(['ss','-H','-4','-lnt'], 'ipv4', 'tcp')
 tcp6_rows=parse_ss(['ss','-H','-6','-lnt'], 'ipv6', 'tcp')
-udp_rows=parse_ss(['ss','-H','-lnu'], 'any', 'udp')
+udp_rows=parse_ss(['ss','-H','-lnup'], 'any', 'udp')
 tcp_rows=tcp4_rows+tcp6_rows
 fail=False
 
@@ -553,9 +553,27 @@ for r in sorted(tcp_rows, key=lambda x:(x['port'], x['family'], x['local'])):
     print(f'FAIL: unexpected public TCP listener {local}; allowed public TCP ports are {sorted(required_public_tcp)}')
     fail=True
 
+def ufw_udp_allowed(port):
+    try:
+        status=subprocess.check_output(['ufw','status'], text=True, stderr=subprocess.DEVNULL)
+    except Exception:
+        return False
+    for line in status.splitlines():
+        low=line.lower()
+        if f'{port}/udp' in low and 'allow' in low:
+            return True
+    return False
+
 for r in sorted(udp_rows, key=lambda x:(x['port'], x['local'])):
     port, host, local = r['port'], r['host'], r['local']
+    raw = r.get('raw','')
     if loop(host) or port==53:
+        continue
+    if 'xray' in raw.lower():
+        if ufw_udp_allowed(port):
+            print(f'WARNING: Xray/WARP UDP socket {local} is also allowed by UFW; verify this is intentional')
+        else:
+            print(f'OK: Xray/WARP UDP socket detected at {local}; no public UFW UDP allow rule found')
         continue
     print(f'WARNING: public UDP listener {local}; verify it is intentional and firewalled as expected')
 
@@ -651,6 +669,25 @@ xpam_xui_xray_config_check(){
     python3 - "$cfg" <<'EOF_PY_XUI'
 import json, re, sqlite3, subprocess, sys
 from pathlib import Path
+
+def xui_env_value(key):
+    path=Path('/etc/default/x-ui')
+    if not path.exists():
+        return ''
+    value=''
+    for line in path.read_text(errors='ignore').splitlines():
+        if line.startswith(key+'='):
+            value=line.split('=',1)[1].strip().strip('\"').strip("'")
+    return value
+
+def xui_backend_type():
+    raw=xui_env_value('XUI_DB_TYPE')
+    norm=''.join(str(raw).lower().split())
+    if norm in ('', 'sqlite', 'sqlite3'):
+        return 'sqlite'
+    if norm in ('postgres', 'postgresql', 'pg'):
+        return 'postgres'
+    return 'unsupported:'+str(raw)
 cfg={}
 for line in Path(sys.argv[1]).read_text().splitlines():
     if not line or line.startswith('#') or '=' not in line: continue
@@ -701,6 +738,15 @@ print(f"Profile: {cfg.get('SERVER_PREFIX', profile)}")
 print(f"Expected panel domain: {primary}")
 print(f"Expected panel cert: {cert}")
 print(f"Expected VLESS port: {expected_port}")
+backend=xui_backend_type()
+if backend != 'sqlite':
+    bad(f'3x-ui PostgreSQL/unsupported backend detected: {backend}. XPAM Script supports only 3x-ui SQLite backend at /etc/x-ui/x-ui.db.')
+    sys.exit(1)
+db_path=Path('/etc/x-ui/x-ui.db')
+if not db_path.exists() or db_path.stat().st_size == 0:
+    bad('3x-ui SQLite DB missing: /etc/x-ui/x-ui.db')
+    sys.exit(1)
+ok('3x-ui backend SQLite OK: /etc/x-ui/x-ui.db')
 conn=sqlite3.connect('/etc/x-ui/x-ui.db'); cur=conn.cursor()
 settings={str(k):'' if v is None else str(v) for k,v in cur.execute('select key,value from settings')}
 print('\n--- 3x-ui database settings ---')
@@ -712,17 +758,28 @@ for k,exp in expected_settings.items():
     else: bad(f'x-ui setting {k} expected {exp!r}, got {settings.get(k,"")!r}')
 print('\n--- 3x-ui inbound database validation ---')
 cols=[r[1] for r in cur.execute('PRAGMA table_info(inbounds)').fetchall()]
+stream_col=next((c for c in ('stream_settings','streamSettings','stream') if c in cols), None)
+if not cols:
+    bad('3x-ui SQLite schema is not compatible: inbounds table missing or empty schema')
+    sys.exit(1)
+if not stream_col:
+    bad('3x-ui SQLite schema is not compatible: stream settings column not found')
+    sys.exit(1)
+ok(f'3x-ui backend SQLite schema OK: stream settings column = {stream_col}')
 rows=[]
 if cols:
     q='select '+','.join('"'+c+'"' for c in cols)+' from inbounds'
     for tup in cur.execute(q): rows.append(dict(zip(cols,tup)))
-db_inb=None
-for r in rows:
-    if str(r.get('protocol','')).lower()=='vless' and int(r.get('port') or 0)==expected_port:
-        db_inb=r; break
-if not db_inb:
+db_candidates=[r for r in rows if str(r.get('protocol','')).lower()=='vless' and int(r.get('port') or 0)==expected_port]
+if not db_candidates:
+    db_inb=None
     bad(f'No database VLESS inbound on expected port {expected_port}')
+elif len(db_candidates) > 1:
+    db_inb=None
+    bad(f'Multiple database VLESS inbounds on expected port {expected_port}; candidates={[(r.get("id"), r.get("remark"), r.get("listen")) for r in db_candidates]}')
 else:
+    db_inb=db_candidates[0]
+if db_inb:
     print(f"id={db_inb.get('id')}, remark={db_inb.get('remark')}, enable={db_inb.get('enable')}, listen={db_inb.get('listen') or '<empty>'}, port={db_inb.get('port')}, protocol={db_inb.get('protocol')}")
     if as_bool(db_inb.get('enable', False)): ok('VLESS inbound is enabled in database')
     else: bad('VLESS inbound is disabled in database')
@@ -737,7 +794,7 @@ else:
             ok(f'database VLESS inbound listen is IPv4-only: {public_ipv4}')
         else:
             bad(f'database VLESS listen expected public IPv4 {public_ipv4!r} got {listen or "<empty>"!r}')
-    st=jloads(db_inb.get('stream_settings') or db_inb.get('streamSettings'), {})
+    st=jloads(db_inb.get('stream_settings') or db_inb.get('streamSettings') or db_inb.get('stream'), {})
     sett=jloads(db_inb.get('settings'), {})
     sniff=jloads(db_inb.get('sniffing'), {})
     if st.get('network')=='tcp': ok('database VLESS network is tcp')
@@ -756,8 +813,10 @@ else:
     if 'http/1.1' in (tls.get('alpn') or []): ok('database VLESS ALPN includes http/1.1')
     else: bad('database VLESS ALPN must include http/1.1')
     fp=(tls.get('settings') or {}).get('fingerprint') or st.get('fingerprint')
-    if fp in ('chrome', None, ''): ok('database uTLS/fingerprint is chrome or empty-compatible')
-    else: warn(f'database uTLS/fingerprint is {fp!r}; reference servers use chrome')
+    if fp in (None, ''):
+        ok('database uTLS/fingerprint is empty-compatible')
+    else:
+        ok(f'database uTLS/fingerprint is compatible: {fp!r}')
     fbs=sett.get('fallbacks') or []
     good_fb=[]
     for fb in fbs:
@@ -882,6 +941,17 @@ else:
         else: warn_setting(f'{tag}.domainStrategy', settings.get('domainStrategy'), 'ForceIPv4')
         if settings.get('workers')==2: ok(f'WARP {tag}: workers=2')
         else: warn_setting(f'{tag}.workers', settings.get('workers'), 2)
+        def valid_reserved(v):
+            return isinstance(v, list) and len(v)==3 and all(isinstance(x, int) and 0 <= x <= 255 for x in v)
+        reserved=settings.get('reserved')
+        peer_reserved=peer.get('reserved')
+        endpoint=str(peer.get('endpoint') or '')
+        if valid_reserved(reserved):
+            ok(f'WARP {tag}: reserved bytes present')
+        elif valid_reserved(peer_reserved):
+            ok(f'WARP {tag}: peer reserved bytes present')
+        elif tag == 'warp' and 'cloudflareclient.com' in endpoint.lower():
+            warn(f'WARP {tag}: reserved bytes are missing. Cloudflare WARP normally uses 3 reserved bytes/clientid; WARP may still work, but a WARP profile with reserved bytes is recommended.')
         allowed=peer.get('allowedIPs') or []
         if '0.0.0.0/0' in allowed and '::/0' not in allowed:
             ok(f'WARP {tag}: peer allowedIPs are IPv4-only')
@@ -967,6 +1037,91 @@ xpam_stop_disable_mask_unit(){
     fi
 }
 
+
+xpam_rc_local_is_safe_noop(){
+    [ -f /etc/rc.local ] || return 1
+    python3 - <<'PY_RC_LOCAL'
+from pathlib import Path
+p = Path('/etc/rc.local')
+try:
+    lines = p.read_text(errors='ignore').splitlines()
+except Exception:
+    raise SystemExit(1)
+body = []
+for line in lines:
+    stripped = line.strip()
+    if not stripped or stripped.startswith('#'):
+        continue
+    body.append(stripped)
+if body in (['exit 0'], ['exit 0;']):
+    raise SystemExit(0)
+raise SystemExit(1)
+PY_RC_LOCAL
+}
+
+xpam_normalize_rc_local_noop(){
+    # Some provider Debian images ship an enabled rc-local.service with a
+    # no-op /etc/rc.local that is not executable. That creates a failed unit
+    # even though there is no user payload. Fix only this safe no-op case.
+    xpam_unit_exists rc-local.service || return 0
+    [ -e /etc/rc.local ] || return 0
+    xpam_rc_local_is_safe_noop || return 0
+
+    local changed="no"
+    if [ ! -x /etc/rc.local ]; then
+        chmod 755 /etc/rc.local 2>/dev/null && changed="yes"
+    fi
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    if systemctl is-failed --quiet rc-local.service 2>/dev/null; then
+        systemctl reset-failed rc-local.service >/dev/null 2>&1 || true
+        changed="yes"
+    fi
+    # Starting a no-op rc.local is safe and clears the current boot state.
+    if ! systemctl is-active --quiet rc-local.service 2>/dev/null; then
+        systemctl start rc-local.service >/dev/null 2>&1 || true
+    fi
+    if [ "$changed" = "yes" ]; then
+        echo "FIXED: normalized provider no-op rc-local.service (/etc/rc.local executable, failed state reset)"
+    else
+        echo "OK: provider no-op rc-local.service looks clean"
+    fi
+}
+
+xpam_failed_units_check(){
+    local failed names unit names_csv fail=0
+    echo
+    echo "===== FAILED SYSTEMD UNITS ====="
+    failed="$(systemctl --failed --no-legend --no-pager 2>/dev/null | awk 'NF{print}')"
+    if [ -z "$failed" ]; then
+        echo "OK: no failed systemd units"
+        return 0
+    fi
+
+    systemctl --failed --no-pager || true
+    names="$(printf '%s\n' "$failed" | awk '{print $1}' | xargs 2>/dev/null || true)"
+    names_csv="$(printf '%s\n' $names | paste -sd ', ' - 2>/dev/null || printf '%s' "$names")"
+
+    if [ "$names" = "networking.service" ] && xpam_debian_networking_provider_warning_ok; then
+        echo "WARN: networking.service failed, but active networking works; treating it as a provider Debian image warning"
+        return 0
+    fi
+
+    for unit in $names; do
+        if [ "$unit" = "rc-local.service" ] && xpam_rc_local_is_safe_noop && [ ! -x /etc/rc.local ]; then
+            echo "FAIL: rc-local.service failed because provider no-op /etc/rc.local is not executable; run repair to normalize it safely"
+        else
+            echo "FAIL: failed systemd unit: $unit"
+        fi
+        fail=1
+    done
+    [ -n "$names_csv" ] && echo "FAIL: failed systemd units present: $names_csv"
+    return "$fail"
+}
+
+xpam_normalize_provider_quirks(){
+    xpam_normalize_rc_local_noop || true
+}
+
 xpam_guarded_purge_package(){
     local pkg="$1" sim protected
     dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed' || return 0
@@ -981,6 +1136,30 @@ xpam_guarded_purge_package(){
     xpam_run_with_heartbeat "apt purge $pkg" env NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get purge -y "$pkg" || true
 }
 
+
+
+xpam_ufw_runtime_check(){
+    local status_line status
+    if command -v ufw >/dev/null 2>&1; then
+        status_line="$(ufw status 2>/dev/null | awk -F': *' '/^Status:/ {print $2; exit}')"
+        status="$(printf '%s' "$status_line" | tr '[:upper:]' '[:lower:]')"
+        if [ "$status" = "active" ]; then
+            echo "OK: UFW status active"
+            return 0
+        fi
+        if systemctl is-active --quiet ufw.service 2>/dev/null; then
+            echo "WARN: ufw.service active but ufw status is ${status_line:-unknown}"
+        fi
+        echo "FAIL: UFW status is ${status_line:-unknown}"
+        return 1
+    fi
+    if systemctl is-active --quiet ufw.service 2>/dev/null; then
+        echo "OK: service ufw active"
+        return 0
+    fi
+    echo "FAIL: ufw command not found and ufw.service is not active"
+    return 1
+}
 
 xpam_ssh_runtime_check(){
     local fail=0
@@ -1013,6 +1192,7 @@ xpam_apply_service_hygiene(){
     . "$cfg"
     echo; echo "===== SERVICE HYGIENE APPLY ====="
     echo "Profile: ${PROFILE:-unknown}"
+    xpam_normalize_provider_quirks
     for unit in \
       snapd.service snapd.socket snapd.seeded.service snapd.snap-repair.timer snapd.refresh.timer \
       packagekit.service packagekit-offline-update.service \
@@ -1105,7 +1285,7 @@ xpam_post_install_cleanup(){
     rm -rf /var/cache/apt/archives/partial/* 2>/dev/null || true
     rm -f /tmp/service-audit-*.txt /tmp/tls-cert.* /tmp/tls-info.* 2>/dev/null || true
     rm -f /root/recipe_*.log /root/recipe_-*.log /root/exec_recipe.log 2>/dev/null || true
-    rm -f /root/de-health-*.txt /root/de-health-debian-*.txt 2>/dev/null || true
+    rm -f /root/*-health-*.txt /root/*-health-debian-*.txt 2>/dev/null || true
     rm -f /root/xpam-script-v*-*.log /root/xpam-script-*.log 2>/dev/null || true
     rm -f /root/.Xauthority /root/.lesshst 2>/dev/null || true
     for xpam_empty_cache_dir in /root/.ansible /root/.local; do
@@ -1121,7 +1301,9 @@ xpam_post_install_cleanup(){
     find /root -maxdepth 1 -type f \( -name 'xpam-script*.tar.gz' -o -name 'xpam-script*.tgz' -o -name 'xpam-script*.sha256' -o -name 'xpam-script*.tar.gz.sha256' -o -name 'xpam-script*.tgz.sha256' \) -mtime +1 -print -delete 2>/dev/null || true
     rm -f /root/.lesshst 2>/dev/null || true
     rm -rf /var/www/html 2>/dev/null || true
-    find /root -maxdepth 1 -type d -name 'xpam-script-v*' -mtime +1 -print -exec rm -rf {} + 2>/dev/null || true
+    # Do not delete extracted XPAM Script directories during post-install cleanup.
+    # The current install process may still need templates from that directory.
+    # Final production cleanup handles extracted kit directories after the install is complete.
     rm -rf /var/log/unattended-upgrades 2>/dev/null || true
     find /tmp /var/tmp -xdev -mindepth 1 -maxdepth 1 -type f -print -delete 2>/dev/null || true
     find /tmp /var/tmp -xdev -mindepth 1 -maxdepth 1 -type d -empty -print -delete 2>/dev/null || true
@@ -1164,8 +1346,8 @@ xpam_weekly_safe_cleanup(){
          -o -name 'recipe_*.log' \
          -o -name 'recipe_-*.log' \
          -o -name 'exec_recipe.log' \
-         -o -name 'de-health-*.txt' \
-         -o -name 'de-health-debian-*.txt' \
+         -o -name '*-health-*.txt' \
+         -o -name '*-health-debian-*.txt' \
          -o -name 'xpam-script-v*-*.log' \
          -o -name 'xpam-script-*.log' \
          -o -name '.Xauthority' \

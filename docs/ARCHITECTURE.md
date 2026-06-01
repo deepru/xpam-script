@@ -94,7 +94,7 @@ At install time, XPAM Script writes:
 /usr/local/sbin/<prefix>-health
 /usr/local/sbin/<prefix>-links
 /usr/local/sbin/<prefix>-vless
-/usr/local/sbin/<prefix>-telega
+/usr/local/sbin/<prefix>-tg
 /usr/local/sbin/<prefix>-weekly-maintenance.sh
 ```
 

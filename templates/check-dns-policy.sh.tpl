@@ -90,9 +90,9 @@ if [ -n "$default_dev" ] && command -v resolvectl >/dev/null 2>&1; then
     case "$MODE" in
       strict)
         if printf '%s\n' "$link_dns" | grep -Eq '1\.1\.1\.1.*1\.0\.0\.1|1\.0\.0\.1.*1\.1\.1\.1'; then
-          warn "strict DNS mode отключён в v1.1.0; provider/link DNS показан только для диагностики: $link_dns"
+          warn "strict DNS mode отключён; provider/link DNS показан только для диагностики: $link_dns"
         else
-          warn "strict DNS mode отключён в v1.1.0; provider/link DNS показан только для диагностики: $link_dns"
+          warn "strict DNS mode отключён; provider/link DNS показан только для диагностики: $link_dns"
         fi
         ;;
       *)

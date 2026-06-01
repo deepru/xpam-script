@@ -24,7 +24,7 @@ if [[ "${1:-}" != "--deep" ]]; then
     echo "Статус: FAIL"
   fi
   echo
-  grep -E '^(OK|WARN|FAIL): (services summary|networking.service|DNS-проверка|TLS|UFW|port exposure|3x-ui/Xray|WARP|disk|swap|running kernel|сервер|service hygiene|config snapshot)' "$LOG" 2>/dev/null | tail -40 || true
+  grep -E '^(OK|WARN|FAIL): (failed systemd units|failed systemd unit|rc-local.service|services summary|networking.service|DNS-проверка|TLS|UFW|port exposure|3x-ui backend|3x-ui/Xray|WARP|disk|swap|running kernel|сервер|service hygiene|config snapshot|network tuning policy)' "$LOG" 2>/dev/null | tail -40 || true
   if [[ $rc -ne 0 ]]; then
     echo
     echo "Причины FAIL:"
@@ -64,24 +64,14 @@ check_redirect(){
 echo "===== {{SERVER_PREFIX_UP}} DEEP HEALTH CHECK ====="
 date
 
-echo
-echo "===== FAILED SYSTEMD UNITS ====="
-_FAILED_SYSTEMD_UNITS="$(systemctl --failed --no-legend --no-pager 2>/dev/null | awk 'NF{print}')"
-if [ -n "$_FAILED_SYSTEMD_UNITS" ]; then
-    systemctl --failed --no-pager || true
-    _FAILED_NAMES="$(printf '%s\n' "$_FAILED_SYSTEMD_UNITS" | awk '{print $1}' | xargs 2>/dev/null || true)"
-    if [ "$_FAILED_NAMES" = "networking.service" ] && xpam_debian_networking_provider_warning_ok; then
-        echo "WARN: networking.service failed, но активная сеть работает; считаем это предупреждением провайдерского Debian 12 образа"
-    else
-        warn_fail "failed systemd units present"
-    fi
-else
-    echo "OK: no failed systemd units"
+if ! xpam_failed_units_check; then
+    FAIL=1
 fi
 
 uptime
 svc_fail_before="$FAIL"
-for svc in nginx x-ui fail2ban certbot.timer ufw cron; do check_active "$svc"; done
+for svc in nginx x-ui fail2ban certbot.timer cron; do check_active "$svc"; done
+if ! xpam_ufw_runtime_check; then FAIL=1; fi
 if [ "$FAIL" = "$svc_fail_before" ]; then echo "OK: services summary"; else echo "FAIL: services summary"; fi
 if ! xpam_ssh_runtime_check; then FAIL=1; fi
 if ! xpam_ufw_expected_policy_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-ufw-policy-fail" "[$(xpam_server_label $XPAM_PREFIX)] UFW expected policy check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi

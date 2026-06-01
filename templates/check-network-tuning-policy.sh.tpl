@@ -48,6 +48,42 @@ check_qdisc_dev() {
   fi
 }
 
+diagnose_tcp_syncookies() {
+  local actual xpam_file conflict_found line value
+  xpam_file="/etc/sysctl.d/99-xpam-script-network-tuning.conf"
+  actual="$(sysctl -n net.ipv4.tcp_syncookies 2>/dev/null | tr -d '[:space:]' || true)"
+
+  echo
+  echo "===== TCP SYNCOOKIES DIAGNOSTICS ====="
+
+  if [ ! -f "$xpam_file" ]; then
+    bad "tcp_syncookies persistent policy is missing: $xpam_file"
+  elif ! grep -Eq '^[[:space:]]*net\.ipv4\.tcp_syncookies[[:space:]]*=[[:space:]]*1([[:space:]]*(#.*)?)?$' "$xpam_file"; then
+    bad "tcp_syncookies XPAM policy is missing or broken in $xpam_file"
+  else
+    ok "tcp_syncookies XPAM policy file contains net.ipv4.tcp_syncookies = 1"
+  fi
+
+  conflict_found=0
+  while IFS= read -r line; do
+    value="$(printf '%s' "$line" | sed -E 's/^[^:]+:[0-9]+:[[:space:]]*net\.ipv4\.tcp_syncookies[[:space:]]*=[[:space:]]*([^#[:space:]]+).*/\1/')"
+    if [ "$value" != "1" ]; then
+      warn "conflicting persistent tcp_syncookies assignment: $line"
+      conflict_found=1
+    fi
+  done < <(grep -RnsE '^[[:space:]]*net\.ipv4\.tcp_syncookies[[:space:]]*=' /etc/sysctl.conf /etc/sysctl.d /run/sysctl.d /usr/local/lib/sysctl.d /usr/lib/sysctl.d /lib/sysctl.d 2>/dev/null || true)
+
+  if [ "$conflict_found" -eq 0 ]; then
+    ok "no conflicting persistent tcp_syncookies assignment found"
+  elif [ "$actual" = "1" ]; then
+    warn "tcp_syncookies runtime is currently 1, but a conflicting persistent assignment may override it after sysctl --system or reboot"
+  fi
+
+  if [ "$actual" != "1" ]; then
+    bad "tcp_syncookies runtime drift/override detected: expected 1, got ${actual:-missing}. Run sudo <prefix>-repair to restore XPAM runtime policy; if it returns to 0, provider/kernel or a later sysctl file is overriding it."
+  fi
+}
+
 echo "===== NETWORK TUNING POLICY CHECK ====="
 
 expect_sysctl net.ipv4.tcp_congestion_control "bbr"
@@ -84,6 +120,8 @@ if [ -f /etc/modules-load.d/tcp_bbr.conf ]; then
 else
   bad "missing /etc/modules-load.d/tcp_bbr.conf"
 fi
+
+diagnose_tcp_syncookies
 
 echo
 echo "===== QDISC CHECK ====="

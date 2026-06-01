@@ -94,7 +94,7 @@ Check:
 
 ```bash
 sudo <prefix>-health
-sudo <prefix>-telega
+sudo <prefix>-tg
 ```
 
 Verify:

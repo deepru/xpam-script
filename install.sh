@@ -4,10 +4,12 @@ KIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/xpam-core.sh
 source "$KIT_DIR/scripts/xpam-core.sh"
 
-# Keep live terminal output and a root log. All output is routed through tee,
+# Keep live terminal output and an install log. All output is routed through tee,
 # including early exits from sourced functions. The EXIT trap restores stdout
 # and waits for tee before the interactive shell prompt returns; otherwise the
 # user can see leftover separator lines after the prompt on slow terminals.
+mkdir -p "$(dirname "$LOG")"
+chmod 700 "$(dirname "$LOG")" 2>/dev/null || true
 exec 3>&1 4>&2
 LOG_PIPE="$(mktemp -u /tmp/xpam-script-log.XXXXXX)"
 mkfifo "$LOG_PIPE"

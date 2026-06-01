@@ -10,7 +10,8 @@ Before running XPAM Script, prepare:
 2. confirmed SSH key login;
 3. a domain name;
 4. access to DNS zone management;
-5. DNS `A` records pointing the required domains to the VPS IPv4 address.
+5. DNS `A` records pointing the required domains to the VPS IPv4 address;
+6. no AAAA records for XPAM-managed public domains unless you intentionally understand the IPv6 consequences.
 
 Do not start step `0` until SSH key login works in a separate SSH session.
 
@@ -37,7 +38,7 @@ sudo <prefix>-install
 sudo <prefix>-health
 sudo <prefix>-links
 sudo <prefix>-vless
-sudo <prefix>-telega
+sudo <prefix>-tg
 sudo <prefix>-netdiag
 sudo <prefix>-repair
 ```
@@ -56,7 +57,7 @@ Step `1` installs and configures the server. It may require a reboot. If a reboo
 sudo reboot
 ```
 
-After reconnecting by SSH key:
+After reconnecting to the VPS:
 
 ```bash
 sudo <prefix>-install
@@ -64,12 +65,17 @@ sudo <prefix>-install
 
 Then choose step `1` again to continue.
 
+## 3x-ui backend contract
+
+XPAM Script supports 3x-ui only with SQLite backend at `/etc/x-ui/x-ui.db`. PostgreSQL backend is not supported. Do not migrate an XPAM-managed 3x-ui installation to PostgreSQL.
+
 ## Post-install validation
 
 Run:
 
 ```bash
 sudo <prefix>-health
+sudo <prefix>-health --deep
 ```
 
 The health check should end with a healthy status. For ordinary usage, weekly maintenance is configured automatically and does not need to be run manually.
