@@ -43,10 +43,10 @@ sudo <prefix>-repair
 - MTProto proxy;
 - masking/fallback websites;
 - Telegram notifications and optional HTTPS Relay;
-- optional WARP as an Xray WireGuard outbound;
-- quick and deep health checks;
+- optional WARP as an Xray WireGuard outbound with normalize/reset menu flow;
+- compact quick health and full deep health diagnostics;
 - network diagnostics;
-- repair helper;
+- repair helper for the XPAM runtime/service policy;
 - secure notes, backups and production cleanup.
 
 Public exposure remains limited to IPv4 TCP 22/80/443. Backend services stay on loopback.
@@ -58,7 +58,7 @@ Public exposure remains limited to IPv4 TCP 22/80/443. Backend services stay on 
 - MTProto user command is `sudo <prefix>-tg`.
 - VLESS inbound created by XPAM Script is named `<prefix>-vless`.
 - User-managed inbound/client names and valid uTLS fingerprints are tolerated by health, repair and VLESS link output.
-- WARP is optional and remains an Xray outbound; XPAM Script does not install a system-wide VPN.
+- WARP is optional and remains an Xray outbound. XPAM can normalize the managed WARP state created through 3x-ui and can reset it back to the active profile baseline without making WARP a system-wide VPN.
 
 ## Documentation
 

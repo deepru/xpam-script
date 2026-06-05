@@ -1,46 +1,58 @@
-# Deployment profiles
+# Profiles
 
-XPAM Script supports three profiles.
-
----
-
-## `vless_direct`
-
-Use when only VLESS/Xray is needed.
-
-Characteristics:
-
-- no MTProto;
-- no HAProxy;
-- simplest TLS layout;
-- public `443` is used directly by Xray/VLESS;
-- fallback website is provided by nginx.
+XPAM Script has three supported installation profiles.
 
 ---
 
-## `subdomains_mtproto`
+## Profile 1: VLESS only, direct TLS
 
-Use when VLESS and MTProto are needed on separate domains.
+Use this profile when the server needs only VLESS and the protected 3x-ui panel.
 
-Characteristics:
+Expected shape:
 
-- HAProxy listens on `443`;
-- VLESS domain routes to Xray/VLESS backend;
-- MTProto domain routes to MTProto backend;
-- nginx provides web surface and relay-compatible HTTPS behavior.
+```text
+client -> VPS:443 -> Xray/VLESS -> nginx fallback site
+```
+
+This profile does not install HAProxy or MTProto.
+
+Direct VLESS keeps Route-only sniffing as its normal baseline for domain routing. If WARP is enabled and later reset, this profile returns to the same direct-VLESS baseline.
+
+Telegram direct notifications and Relay-client mode are available. HTTPS Relay-server mode is not shown for this profile.
 
 ---
 
-## `root_mtproto`
+## Profile 2: VLESS + MTProto, separate subdomains
 
-Use when the server should also expose a normal root website.
+Use this profile when VLESS and MTProto should be available on separate subdomains.
 
-Characteristics:
+Expected shape:
 
-- root domain website;
-- `www` redirect to root domain;
-- separate VLESS/panel domain;
-- separate MTProto/sync domain;
-- HAProxy routes by SNI.
+```text
+client -> VPS:443 -> HAProxy
+                  -> Xray/VLESS backend
+                  -> MTProto backend
+```
 
-This is the most complete profile.
+This profile supports HTTPS Telegram Relay-server mode through the existing HTTPS/443 surface.
+
+After WARP reset, VLESS sniffing returns to OFF for this HAProxy/MTProto baseline.
+
+---
+
+## Profile 3: Main/root website + VLESS + MTProto
+
+Use this profile when the server also needs a root masking website and `www` redirect in addition to VLESS and MTProto.
+
+Expected shape:
+
+```text
+root domain       -> nginx site
+www domain        -> redirect to root domain
+VLESS domain      -> HAProxy -> Xray/VLESS backend
+MTProto domain    -> HAProxy -> MTProto backend
+```
+
+This is the fullest public profile. It also supports HTTPS Telegram Relay-server mode through the existing HTTPS/443 surface.
+
+After WARP reset, VLESS sniffing returns to OFF for this HAProxy/MTProto baseline.

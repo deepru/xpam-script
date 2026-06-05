@@ -122,3 +122,64 @@ sudo <prefix>-install
 ```
 
 Then choose Telegram notifications.
+
+---
+
+## Health fails after a 3x-ui update
+
+3x-ui is an upstream component and may be updated through its own panel.
+
+After updating 3x-ui, run:
+
+```bash
+sudo <prefix>-health
+```
+
+If health reports a problem, run:
+
+```bash
+sudo <prefix>-repair
+sudo <prefix>-health
+```
+
+Do not edit the 3x-ui database or generated Xray config by hand unless you understand the XPAM profile contract.
+
+---
+
+## MTProto works in one network but not another
+
+If health is OK and MTProto works from one client or network but fails from another, check the external path before changing the server.
+
+Useful checks:
+
+```bash
+sudo <prefix>-health
+sudo <prefix>-health --deep
+```
+
+Also test:
+
+- the MTProto health URL in a browser;
+- another network, such as Wi-Fi versus LTE;
+- VLESS on the same network;
+- a freshly added MTProto proxy entry in the Telegram client.
+
+If the server-side checks are healthy and the problem appears only through one network or operator, it may be an external route or filtering issue rather than a broken XPAM installation.
+
+---
+
+## WARP reset completed, but sniffing is still enabled
+
+This depends on the active profile.
+
+For direct VLESS profile, Route-only sniffing is the normal baseline. Seeing it enabled after WARP reset is expected.
+
+For HAProxy/MTProto profiles, WARP reset should return sniffing to OFF.
+
+Run:
+
+```bash
+sudo <prefix>-health --deep
+```
+
+Deep health reports whether the current sniffing state matches the active profile baseline.

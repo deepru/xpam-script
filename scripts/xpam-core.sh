@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-KIT_VERSION="v1.2.0"
+KIT_VERSION="v1.3.0"
 KIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG_DIR="/etc/xpam-script"
 CONFIG_FILE="${CONFIG_DIR}/config.env"
@@ -9,6 +9,8 @@ PREFIX_BOOTSTRAP_FILE="${CONFIG_DIR}/prefix.env"
 LOG="/var/log/xpam-script/xpam-script-${KIT_VERSION}-$(date +%F-%H%M%S).log"
 RUNTIME_KIT_DIR="/opt/xpam-script"
 PREPARE_DONE_FILE="${CONFIG_DIR}/stage-prepare.done"
+XPAM_STATE_DIR="/var/lib/xpam-script"
+REBOOT_SENSITIVE_MARKER="${XPAM_STATE_DIR}/reboot-sensitive-upgrades"
 
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
@@ -440,255 +442,6 @@ install_runtime_kit(){
   ok "XPAM Script runtime installed: $dst"
 }
 
-write_install_launcher(){
-  [[ -n "${SERVER_PREFIX:-}" ]] || return 0
-
-  local safe_prefix launcher bin_link kit_dir_real
-  safe_prefix="$(printf '%s' "$SERVER_PREFIX" | tr -cd 'A-Za-z0-9_-')"
-
-  [[ -n "$safe_prefix" ]] || fail "SERVER_PREFIX is empty; cannot create install launcher"
-  [[ "$safe_prefix" == "$SERVER_PREFIX" ]] || fail "SERVER_PREFIX contains unsupported chars for launcher command: $SERVER_PREFIX"
-
-  launcher="/usr/local/sbin/${safe_prefix}-install"
-  bin_link="/usr/local/bin/${safe_prefix}-install"
-  kit_dir_real="$RUNTIME_KIT_DIR"
-
-  cat > "$launcher" <<EOF_LAUNCHER
-#!/usr/bin/env bash
-set -euo pipefail
-
-LAUNCHER="/usr/local/sbin/${safe_prefix}-install"
-KIT_DIR="${kit_dir_real}"
-
-if [ "\$(id -u)" -ne 0 ]; then
-  exec sudo "\$LAUNCHER" "\$@"
-fi
-
-if [ ! -f "\$KIT_DIR/install.sh" ]; then
-  echo "ERROR: XPAM Script runtime is missing: \$KIT_DIR/install.sh" >&2
-  echo "Re-upload the XPAM Script archive or restore /opt/xpam-script." >&2
-  exit 1
-fi
-
-cd "\$KIT_DIR"
-exec bash ./install.sh "\$@"
-EOF_LAUNCHER
-
-  chmod 755 "$launcher"
-  ln -sf "$launcher" "$bin_link" 2>/dev/null || true
-
-  ok "Install launcher created: sudo ${safe_prefix}-install"
-}
-
-write_health_launcher(){
-  [[ -n "${SERVER_PREFIX:-}" ]] || return 0
-  local safe_prefix health bin_link
-  safe_prefix="$(printf '%s' "$SERVER_PREFIX" | tr -cd 'A-Za-z0-9_-')"
-  [[ -n "$safe_prefix" && "$safe_prefix" == "$SERVER_PREFIX" ]] || return 0
-  health="/usr/local/sbin/${safe_prefix}-health"
-  bin_link="/usr/local/bin/${safe_prefix}-health"
-  if [[ -x "$health" ]]; then
-    ln -sf "$health" "$bin_link" 2>/dev/null || true
-    ok "Health command available: sudo ${safe_prefix}-health"
-  fi
-}
-
-
-
-write_repair_launcher(){
-  [[ -n "${SERVER_PREFIX:-}" ]] || return 0
-  local safe_prefix launcher bin_link kit_dir_real
-  safe_prefix="$(printf '%s' "$SERVER_PREFIX" | tr -cd 'A-Za-z0-9_-')"
-  launcher="/usr/local/sbin/${safe_prefix}-repair"
-  bin_link="/usr/local/bin/${safe_prefix}-repair"
-  kit_dir_real="$RUNTIME_KIT_DIR"
-  cat > "$launcher" <<EOF_REPAIR_LAUNCHER
-#!/usr/bin/env bash
-set -euo pipefail
-LAUNCHER="/usr/local/sbin/${safe_prefix}-repair"
-KIT_DIR="${kit_dir_real}"
-if [ "\$(id -u)" -ne 0 ]; then exec sudo "\$LAUNCHER" "\$@"; fi
-if [ ! -f "\$KIT_DIR/scripts/xpam-core.sh" ]; then
-  echo "ERROR: XPAM Script runtime missing: \$KIT_DIR/scripts/xpam-core.sh" >&2
-  exit 1
-fi
-export XPAM_SCRIPT_QUIET_LOAD_CONFIG=1
-# shellcheck source=/dev/null
-source "\$KIT_DIR/scripts/xpam-core.sh"
-stage_repair
-EOF_REPAIR_LAUNCHER
-  chmod 755 "$launcher"
-  ln -sf "$launcher" "$bin_link" 2>/dev/null || true
-  ok "Repair-команда доступна: sudo ${safe_prefix}-repair"
-}
-
-write_netdiag_launcher(){
-  [[ -n "${SERVER_PREFIX:-}" ]] || return 0
-  local safe_prefix launcher bin_link kit_dir_real
-  safe_prefix="$(printf '%s' "$SERVER_PREFIX" | tr -cd 'A-Za-z0-9_-')"
-  launcher="/usr/local/sbin/${safe_prefix}-netdiag"
-  bin_link="/usr/local/bin/${safe_prefix}-netdiag"
-  kit_dir_real="$RUNTIME_KIT_DIR"
-  cat > "$launcher" <<EOF_NETDIAG_LAUNCHER
-#!/usr/bin/env bash
-set -euo pipefail
-LAUNCHER="/usr/local/sbin/${safe_prefix}-netdiag"
-KIT_DIR="${kit_dir_real}"
-if [ "\$(id -u)" -ne 0 ]; then exec sudo "\$LAUNCHER" "\$@"; fi
-if [ ! -f "\$KIT_DIR/scripts/xpam-core.sh" ]; then
-  echo "ERROR: XPAM Script runtime missing: \$KIT_DIR/scripts/xpam-core.sh" >&2
-  exit 1
-fi
-export XPAM_SCRIPT_QUIET_LOAD_CONFIG=1
-# shellcheck source=/dev/null
-source "\$KIT_DIR/scripts/xpam-core.sh"
-stage_netdiag
-EOF_NETDIAG_LAUNCHER
-  chmod 755 "$launcher"
-  ln -sf "$launcher" "$bin_link" 2>/dev/null || true
-  ok "Диагностика сети доступна: sudo ${safe_prefix}-netdiag"
-}
-
-write_weekly_launcher(){
-  [[ -n "${SERVER_PREFIX:-}" ]] || return 0
-  local safe_prefix weekly bin_link
-  safe_prefix="$(printf '%s' "$SERVER_PREFIX" | tr -cd 'A-Za-z0-9_-')"
-  [[ -n "$safe_prefix" && "$safe_prefix" == "$SERVER_PREFIX" ]] || return 0
-  weekly="/usr/local/sbin/${safe_prefix}-weekly-maintenance.sh"
-  bin_link="/usr/local/bin/${safe_prefix}-weekly-maintenance"
-  if [[ -x "$weekly" ]]; then
-    ln -sf "$weekly" "$bin_link" 2>/dev/null || true
-    ok "Weekly maintenance is configured for automatic weekly run"
-  fi
-}
-
-write_links_launcher(){
-  [[ -n "${SERVER_PREFIX:-}" ]] || return 0
-
-  local safe_prefix launcher bin_link kit_dir_real
-  safe_prefix="$(printf '%s' "$SERVER_PREFIX" | tr -cd 'A-Za-z0-9_-')"
-
-  [[ -n "$safe_prefix" ]] || fail "SERVER_PREFIX is empty; cannot create links launcher"
-  [[ "$safe_prefix" == "$SERVER_PREFIX" ]] || fail "SERVER_PREFIX contains unsupported chars for launcher command: $SERVER_PREFIX"
-
-  launcher="/usr/local/sbin/${safe_prefix}-links"
-  bin_link="/usr/local/bin/${safe_prefix}-links"
-  kit_dir_real="$RUNTIME_KIT_DIR"
-
-  cat > "$launcher" <<EOF_LINKS_LAUNCHER
-#!/usr/bin/env bash
-set -euo pipefail
-
-LAUNCHER="/usr/local/sbin/${safe_prefix}-links"
-KIT_DIR="${kit_dir_real}"
-
-if [ "\$(id -u)" -ne 0 ]; then
-  exec sudo "\$LAUNCHER" "\$@"
-fi
-
-if [ ! -f "\$KIT_DIR/scripts/xpam-core.sh" ]; then
-  echo "ERROR: XPAM Script runtime is missing: \$KIT_DIR/scripts/xpam-core.sh" >&2
-  echo "Re-upload the XPAM Script archive or restore /opt/xpam-script." >&2
-  exit 1
-fi
-
-export XPAM_SCRIPT_QUIET_LOAD_CONFIG=1
-# shellcheck source=/dev/null
-source "\$KIT_DIR/scripts/xpam-core.sh"
-stage_links_direct "\$@"
-EOF_LINKS_LAUNCHER
-
-  chmod 755 "$launcher"
-  ln -sf "$launcher" "$bin_link" 2>/dev/null || true
-
-  ok "Connection data command available: sudo ${safe_prefix}-links"
-}
-
-write_tg_launcher(){
-  [[ -n "${SERVER_PREFIX:-}" ]] || return 0
-
-  local safe_prefix launcher bin_link kit_dir_real
-  safe_prefix="$(printf '%s' "$SERVER_PREFIX" | tr -cd 'A-Za-z0-9_-')"
-
-  [[ -n "$safe_prefix" ]] || fail "SERVER_PREFIX is empty; cannot create tg launcher"
-  [[ "$safe_prefix" == "$SERVER_PREFIX" ]] || fail "SERVER_PREFIX contains unsupported chars for launcher command: $SERVER_PREFIX"
-
-  launcher="/usr/local/sbin/${safe_prefix}-tg"
-  bin_link="/usr/local/bin/${safe_prefix}-tg"
-  kit_dir_real="$RUNTIME_KIT_DIR"
-
-  cat > "$launcher" <<EOF_TG_LAUNCHER
-#!/usr/bin/env bash
-set -euo pipefail
-
-LAUNCHER="/usr/local/sbin/${safe_prefix}-tg"
-KIT_DIR="${kit_dir_real}"
-
-if [ "\$(id -u)" -ne 0 ]; then
-  exec sudo "\$LAUNCHER" "\$@"
-fi
-
-if [ ! -f "\$KIT_DIR/scripts/xpam-core.sh" ]; then
-  echo "ERROR: XPAM Script runtime is missing: \$KIT_DIR/scripts/xpam-core.sh" >&2
-  echo "Re-upload the XPAM Script archive or restore /opt/xpam-script." >&2
-  exit 1
-fi
-
-export XPAM_SCRIPT_QUIET_LOAD_CONFIG=1
-# shellcheck source=/dev/null
-source "\$KIT_DIR/scripts/xpam-core.sh"
-stage_tg_direct "\$@"
-EOF_TG_LAUNCHER
-
-  chmod 755 "$launcher"
-  ln -sf "$launcher" "$bin_link" 2>/dev/null || true
-  rm -f "/usr/local/sbin/${safe_prefix}-tg" "/usr/local/bin/${safe_prefix}-tg" 2>/dev/null || true
-
-  ok "MTProto users command available: sudo ${safe_prefix}-tg"
-}
-
-write_vless_launcher(){
-  [[ -n "${SERVER_PREFIX:-}" ]] || return 0
-
-  local safe_prefix launcher bin_link kit_dir_real
-  safe_prefix="$(printf '%s' "$SERVER_PREFIX" | tr -cd 'A-Za-z0-9_-')"
-
-  [[ -n "$safe_prefix" ]] || fail "SERVER_PREFIX is empty; cannot create vless launcher"
-  [[ "$safe_prefix" == "$SERVER_PREFIX" ]] || fail "SERVER_PREFIX contains unsupported chars for launcher command: $SERVER_PREFIX"
-
-  launcher="/usr/local/sbin/${safe_prefix}-vless"
-  bin_link="/usr/local/bin/${safe_prefix}-vless"
-  kit_dir_real="$RUNTIME_KIT_DIR"
-
-  cat > "$launcher" <<EOF_VLESS_LAUNCHER
-#!/usr/bin/env bash
-set -euo pipefail
-
-LAUNCHER="/usr/local/sbin/${safe_prefix}-vless"
-KIT_DIR="${kit_dir_real}"
-
-if [ "\$(id -u)" -ne 0 ]; then
-  exec sudo "\$LAUNCHER" "\$@"
-fi
-
-if [ ! -f "\$KIT_DIR/scripts/xpam-core.sh" ]; then
-  echo "ERROR: XPAM Script runtime is missing: \$KIT_DIR/scripts/xpam-core.sh" >&2
-  echo "Re-upload the XPAM Script archive or restore /opt/xpam-script." >&2
-  exit 1
-fi
-
-export XPAM_SCRIPT_QUIET_LOAD_CONFIG=1
-# shellcheck source=/dev/null
-source "\$KIT_DIR/scripts/xpam-core.sh"
-stage_vless_direct "\$@"
-EOF_VLESS_LAUNCHER
-
-  chmod 755 "$launcher"
-  ln -sf "$launcher" "$bin_link" 2>/dev/null || true
-
-  ok "VLESS links command available: sudo ${safe_prefix}-vless"
-}
-
 server_prefix_valid(){
   local value="${1:-}"
   [[ -n "$value" && "$value" =~ ^[A-Za-z0-9_-]+$ ]]
@@ -978,12 +731,7 @@ EOF_ROOT_SITE_BLOCK
 check_active mtprotoproxy
 haproxy -c -f /etc/haproxy/haproxy.cfg >/dev/null 2>&1 && echo "OK: haproxy config" || warn_fail "haproxy config failed"
 check_http "'"$SYNC_DOMAIN"$'/health" 200 "https://'"$SYNC_DOMAIN"$'/health"
-check_http "'"$SYNC_DOMAIN"$'/v1" 401 "https://'"$SYNC_DOMAIN"$'/v1"
-_haproxy_since="$(systemctl show -p ActiveEnterTimestamp --value haproxy.service 2>/dev/null || true)"
-if [ -z "$_haproxy_since" ]; then _haproxy_since="now"; fi
-if journalctl -u haproxy -u mtprotoproxy --since "$_haproxy_since" --no-pager 2>/dev/null \
-  | grep -Eiv "Current worker .*exited with code 143|Exiting Master process|All workers exited|Deactivated successfully|Stopping haproxy.service|Stopped haproxy.service|Started haproxy.service|Starting haproxy.service|Loading success|New worker|haproxy version is|path to executable is" \
-  | grep -Eiq "no server available|backend be_mtproto has no server|backend be_xray has no server|Layer4 connection problem|Connection refused|Bad secret|Changing it to [0-9a-fA-F]{32}|failed|error"; then warn_fail "HAProxy/MTProto startup errors found"; else echo "OK: no HAProxy/MTProto startup errors in current HAProxy activation journal"; fi'
+check_http "'"$SYNC_DOMAIN"$'/v1" 401 "https://'"$SYNC_DOMAIN"$'/v1"'
     export MTPROTO_WEEKLY_BLOCK=$'haproxy -c -f /etc/haproxy/haproxy.cfg || warn_fail "haproxy config check failed"
 /usr/local/sbin/wait-for-local-port.sh 127.0.0.1 "$SYNC_BACKEND_PORT" 45 nginx-sync-backend || warn_fail "nginx sync backend port not reachable before HAProxy restart"
 /usr/local/sbin/wait-for-local-port.sh 127.0.0.1 "$XRAY_LOCAL_PORT" 45 xray-vless || warn_fail "xray local VLESS port not reachable before HAProxy restart"
@@ -1172,6 +920,98 @@ SSHCONF
     echo "Позже выполните: sudo ${SERVER_PREFIX}-install"
   fi
 }
+sensitive_package_patterns(){
+  cat <<'EOF'
+linux-image*
+linux-modules*
+linux-headers*
+linux-generic*
+linux-virtual*
+libc6
+systemd
+systemd-sysv
+systemd-resolved
+udev
+libudev1
+dbus
+openssh-server
+openssh-client
+openssl
+libssl*
+initramfs-tools
+grub*
+shim-signed
+cloud-init
+EOF
+}
+
+sensitive_package_snapshot(){
+  local out="$1" patterns=()
+  while IFS= read -r pattern; do
+    [[ -n "$pattern" ]] && patterns+=("$pattern")
+  done < <(sensitive_package_patterns)
+  dpkg-query -W -f='${binary:Package}\t${Version}\n' "${patterns[@]}" 2>/dev/null | sort -u > "$out" || true
+}
+
+current_boot_id(){
+  cat /proc/sys/kernel/random/boot_id 2>/dev/null || true
+}
+
+reboot_sensitive_marker_current(){
+  [[ -s "$REBOOT_SENSITIVE_MARKER" ]] || return 1
+  local marker_boot current_boot
+  marker_boot="$(awk -F= '$1=="boot_id"{print $2; exit}' "$REBOOT_SENSITIVE_MARKER" 2>/dev/null || true)"
+  current_boot="$(current_boot_id)"
+  [[ -z "$marker_boot" || -z "$current_boot" || "$marker_boot" == "$current_boot" ]]
+}
+
+clear_stale_reboot_sensitive_marker(){
+  [[ -s "$REBOOT_SENSITIVE_MARKER" ]] || return 0
+  local marker_boot current_boot
+  marker_boot="$(awk -F= '$1=="boot_id"{print $2; exit}' "$REBOOT_SENSITIVE_MARKER" 2>/dev/null || true)"
+  current_boot="$(current_boot_id)"
+  if [[ -n "$marker_boot" && -n "$current_boot" && "$marker_boot" != "$current_boot" ]]; then
+    rm -f "$REBOOT_SENSITIVE_MARKER" 2>/dev/null || true
+    ok "Previous sensitive package upgrade marker cleared after reboot"
+  fi
+}
+
+record_sensitive_package_changes(){
+  local context="$1" before="$2" after="$3" changes boot_id ts
+  changes="$(awk 'NR==FNR { old[$1]=$2; next } ($1 in old) && old[$1] != $2 { print $1 "	" old[$1] " -> " $2 }' "$before" "$after" 2>/dev/null || true)"
+  [[ -n "$changes" ]] || return 0
+  mkdir -p "$XPAM_STATE_DIR"
+  chmod 700 "$XPAM_STATE_DIR" 2>/dev/null || true
+  boot_id="$(current_boot_id)"
+  ts="$(date -Is)"
+  {
+    echo "boot_id=${boot_id}"
+    echo "timestamp=${ts}"
+    echo "context=${context}"
+    echo "packages:"
+    printf '%s\n' "$changes"
+  } > "$REBOOT_SENSITIVE_MARKER"
+  chmod 600 "$REBOOT_SENSITIVE_MARKER" 2>/dev/null || true
+  warn "Sensitive packages changed during ${context}; reboot will be required before final setup."
+  printf '%s\n' "$changes" | sed 's/^/  /'
+}
+
+track_sensitive_package_changes(){
+  local context="$1" before after rc
+  shift
+  before="$(mktemp /tmp/xpam-sensitive-before.XXXXXX)"
+  after="$(mktemp /tmp/xpam-sensitive-after.XXXXXX)"
+  sensitive_package_snapshot "$before"
+  set +e
+  "$@"
+  rc=$?
+  set -e
+  sensitive_package_snapshot "$after"
+  record_sensitive_package_changes "$context" "$before" "$after" || true
+  rm -f "$before" "$after"
+  return "$rc"
+}
+
 preinstall_system_update(){
   say "Updating repositories and upgrading existing packages before installation"
   apt_dpkg_recovery "preinstall"
@@ -1179,13 +1019,16 @@ preinstall_system_update(){
   # shellcheck source=/usr/local/sbin/xpam-maint-common.sh
   . /usr/local/sbin/xpam-maint-common.sh
   xpam_release_upgrade_guard || warn "release-upgrade guard returned non-zero"
-  xpam_guarded_full_upgrade "preinstall" || fail "Pre-install apt full-upgrade failed"
+  track_sensitive_package_changes "preinstall full-upgrade" xpam_guarded_full_upgrade "preinstall" || fail "Pre-install apt full-upgrade failed"
+}
+install_base_packages_inner(){
+  apt_get_safe "apt update before base packages" update &&
+  apt_get_safe "base package install" install -y --no-install-recommends ca-certificates curl wget gnupg lsb-release unzip tar gzip cron ufw fail2ban python3-systemd nginx certbot openssl python3 python3-venv xxd systemd-sysv rsync sqlite3 jq dnsutils openssh-client iproute2
 }
 install_base_packages(){
   say "Installing base packages"
   apt_dpkg_recovery "base packages"
-  apt_get_safe "apt update before base packages" update
-  apt_get_safe "base package install" install -y --no-install-recommends ca-certificates curl wget gnupg lsb-release unzip tar gzip cron ufw fail2ban python3-systemd nginx certbot openssl python3 python3-venv xxd systemd-sysv rsync sqlite3 jq dnsutils openssh-client iproute2
+  track_sensitive_package_changes "base package install" install_base_packages_inner || fail "Base package install failed"
   systemctl enable --now certbot.timer 2>/dev/null || true
 }
 
@@ -1888,177 +1731,6 @@ setup_dns_policy(){
   ensure_dns_safe_rescue_if_needed
   /usr/local/sbin/check-dns-policy.sh || fail "DNS-проверка не пройдена"
 }
-write_telegram_https_relay_worker(){
-  cat > /usr/local/sbin/telegram-https-relay.py <<'PYRELAY'
-#!/usr/bin/env python3
-import json
-import os
-import socket
-import socketserver
-import sys
-import urllib.error
-import urllib.parse
-import urllib.request
-from http.server import BaseHTTPRequestHandler
-
-SOCKET_PATH = os.environ.get("TELEGRAM_RELAY_SOCKET", "/run/xpam-script-telegram-relay.sock")
-NOTIFY_ENV = "/root/secure-notes/notify.env"
-RELAY_ENV = "/root/secure-notes/notify-relay.env"
-MAX_BODY = 4096
-
-
-def read_env(path):
-    data = {}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            for raw in f:
-                line = raw.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, value = line.split("=", 1)
-                key = key.strip()
-                value = value.strip()
-                if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-                    value = value[1:-1]
-                data[key] = value
-    except FileNotFoundError:
-        pass
-    return data
-
-
-def send_telegram(text):
-    notify = read_env(NOTIFY_ENV)
-    token = notify.get("TELEGRAM_BOT_TOKEN", "")
-    chat_id = notify.get("TELEGRAM_CHAT_ID", "")
-    if not token or not chat_id:
-        return False, "direct Telegram token/chat_id are not configured on relay server"
-    payload = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode("utf-8")
-    req = urllib.request.Request(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        data=payload,
-        method="POST",
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            if 200 <= resp.status < 300:
-                return True, "OK"
-            return False, f"Telegram HTTP {resp.status}"
-    except Exception as exc:
-        return False, str(exc)
-
-
-class Handler(BaseHTTPRequestHandler):
-    server_version = "ServerInstallKitTelegramRelay/1.0"
-
-    def log_message(self, fmt, *args):
-        return
-
-    def send_text(self, code, text):
-        body = (text + "\n").encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(body)))
-        if code == 401:
-            self.send_header("WWW-Authenticate", 'Bearer realm="telegram-relay"')
-        self.end_headers()
-        self.wfile.write(body)
-
-    def authorized(self):
-        relay = read_env(RELAY_ENV)
-        token = relay.get("TELEGRAM_HTTPS_RELAY_TOKEN", "")
-        auth = self.headers.get("Authorization", "")
-        return bool(token) and auth == f"Bearer {token}"
-
-    def do_GET(self):
-        if not self.authorized():
-            return self.send_text(401, "unauthorized")
-        return self.send_text(405, "method not allowed")
-
-    def do_PUT(self):
-        if not self.authorized():
-            return self.send_text(401, "unauthorized")
-        return self.send_text(405, "method not allowed")
-
-    def do_DELETE(self):
-        if not self.authorized():
-            return self.send_text(401, "unauthorized")
-        return self.send_text(405, "method not allowed")
-
-    def do_POST(self):
-        if not self.authorized():
-            return self.send_text(401, "unauthorized")
-        try:
-            length = int(self.headers.get("Content-Length", "0") or "0")
-        except ValueError:
-            length = 0
-        if length <= 0:
-            return self.send_text(400, "empty message")
-        if length > MAX_BODY:
-            return self.send_text(413, "message too large")
-        raw = self.rfile.read(length)
-        text = raw.decode("utf-8", "replace").strip()
-        ctype = (self.headers.get("Content-Type") or "").lower()
-        if "application/json" in ctype:
-            try:
-                obj = json.loads(text)
-                text = str(obj.get("text") or obj.get("message") or "").strip()
-            except Exception:
-                return self.send_text(400, "invalid json")
-        if not text:
-            return self.send_text(400, "empty message")
-        if len(text.encode("utf-8")) > MAX_BODY:
-            text = text[:3500]
-        ok, err = send_telegram(text)
-        if ok:
-            return self.send_text(200, "OK")
-        return self.send_text(502, "telegram delivery failed")
-
-
-class UnixHTTPServer(socketserver.UnixStreamServer):
-    allow_reuse_address = True
-
-
-def main():
-    try:
-        os.unlink(SOCKET_PATH)
-    except FileNotFoundError:
-        pass
-    os.makedirs(os.path.dirname(SOCKET_PATH), exist_ok=True)
-    server = UnixHTTPServer(SOCKET_PATH, Handler)
-    try:
-        import grp
-        gid = grp.getgrnam("www-data").gr_gid
-        os.chown(SOCKET_PATH, 0, gid)
-        os.chmod(SOCKET_PATH, 0o660)
-    except Exception:
-        os.chmod(SOCKET_PATH, 0o666)
-    try:
-        server.serve_forever()
-    finally:
-        server.server_close()
-        try:
-            os.unlink(SOCKET_PATH)
-        except FileNotFoundError:
-            pass
-
-
-if __name__ == "__main__":
-    main()
-PYRELAY
-  chmod 700 /usr/local/sbin/telegram-https-relay.py
-  python3 -m py_compile /usr/local/sbin/telegram-https-relay.py
-}
-
-ensure_telegram_relay_nginx_snippet(){
-  mkdir -p /etc/nginx/snippets
-  if [[ ! -f /etc/nginx/snippets/xpam-script-telegram-relay.conf ]]; then
-    : > /etc/nginx/snippets/xpam-script-telegram-relay.conf
-  fi
-}
-
-
 cleanup_legacy_nginx_files(){
   local f target ts backup_dir changed legacy_slug legacy_full_slug legacy_files
   ts="$(date +%Y%m%d-%H%M%S)"
@@ -2265,26 +1937,60 @@ EOF
 
 reboot_status_notice(){
   say "Reboot status"
+  clear_stale_reboot_sensitive_marker
   local running newest
   running="$(uname -r 2>/dev/null || true)"
   newest="$(ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's#^/boot/vmlinuz-##' | sort -V | tail -1 || true)"
   if [[ -f /var/run/reboot-required ]]; then
     warn "Reboot is required by installed packages: /var/run/reboot-required exists"
-  elif [[ -n "$newest" && -n "$running" && "$newest" != "$running" ]]; then
-    warn "A newer installed kernel appears to be available: running=$running, newest=$newest. Reboot is required before final setup."
+    if [[ -s /var/run/reboot-required.pkgs ]]; then
+      warn "Packages requesting reboot:"
+      sed 's/^/  /' /var/run/reboot-required.pkgs || true
+    fi
   else
-    ok "No reboot marker detected"
+    ok "No /var/run/reboot-required marker detected"
   fi
+  if [[ -n "$newest" && -n "$running" && "$newest" != "$running" ]]; then
+    warn "A newer installed kernel appears to be available: running=$running, newest=$newest. Reboot is required before final setup."
+  elif [[ -n "$newest" && -n "$running" ]]; then
+    ok "Running kernel matches newest installed kernel"
+  fi
+  if reboot_sensitive_marker_current; then
+    warn "Sensitive package upgrade marker is present for this boot; reboot is required before final setup."
+    awk 'BEGIN{show=0} /^packages:/{show=1; next} show{print "  " $0}' "$REBOOT_SENSITIVE_MARKER" 2>/dev/null || true
+  else
+    ok "No sensitive package upgrade marker for this boot"
+  fi
+  return 0
 }
 
 reboot_recommended_before_finalize(){
+  clear_stale_reboot_sensitive_marker
   local running newest
   if [[ -f /var/run/reboot-required ]]; then
     return 0
   fi
   running="$(uname -r 2>/dev/null || true)"
   newest="$(ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's#^/boot/vmlinuz-##' | sort -V | tail -1 || true)"
-  [[ -n "$newest" && -n "$running" && "$newest" != "$running" ]]
+  if [[ -n "$newest" && -n "$running" && "$newest" != "$running" ]]; then
+    return 0
+  fi
+  reboot_sensitive_marker_current
+}
+
+reboot_gate_before_finalize(){
+  if reboot_recommended_before_finalize; then
+    reboot_status_notice || true
+    echo
+    warn "Финальную настройку нельзя продолжать до перезагрузки."
+    echo "Выполните сейчас:"
+    echo "  sudo reboot"
+    echo
+    echo "После перезагрузки войдите по SSH-ключу и выполните:"
+    echo "  sudo ${SERVER_PREFIX}-install"
+    return 1
+  fi
+  return 0
 }
 
 xui_latest_release_tag_any(){
@@ -2406,30 +2112,7 @@ PYXUIPAYLOAD
 }
 
 xui_api_token(){
-  xui_assert_sqlite_backend
-  python3 - <<'PYXUITOKEN'
-import sqlite3, sys
-db = "/etc/x-ui/x-ui.db"
-conn = sqlite3.connect(db)
-cur = conn.cursor()
-cols = [r[1] for r in cur.execute("PRAGMA table_info(api_tokens)").fetchall()]
-if not cols:
-    sys.exit("api_tokens table is missing or empty schema")
-token_col = "token" if "token" in cols else None
-if token_col is None:
-    for c in cols:
-        if "token" in c.lower():
-            token_col = c
-            break
-if token_col is None:
-    sys.exit("api token column was not found in api_tokens table")
-where = "WHERE enable=1" if "enable" in cols else ""
-order = "ORDER BY id DESC" if "id" in cols else ""
-row = cur.execute(f"SELECT {token_col} FROM api_tokens {where} {order} LIMIT 1").fetchone()
-if not row or not row[0]:
-    sys.exit("enabled 3x-ui API token was not found")
-print(row[0])
-PYXUITOKEN
+  fail "3x-ui API token compatibility layer is not loaded. Expected: ${KIT_DIR}/scripts/lib/xpam-xui.sh"
 }
 
 xui_disable_subscription(){
@@ -2648,7 +2331,7 @@ xui_enforce_direct_ipv4_bind(){
   xui_enforce_vless_inbound_policy
 }
 xui_add_vless_inbound_auto(){
-  local base payload ids uuid subid client_name inbound_remark rc token note vless_link panel_path_clean expected_listen
+  local base payload ids uuid subid client_name inbound_remark rc note vless_link panel_path_clean expected_listen
   panel_path_clean="${PANEL_PATH#/}"
   panel_path_clean="${panel_path_clean%/}"
   base="https://127.0.0.1:${XUI_PANEL_PORT}/${panel_path_clean}"
@@ -2659,8 +2342,8 @@ xui_add_vless_inbound_auto(){
     expected_listen="$(server_public_ipv4)"
   fi
 
-  say "Reading local 3x-ui v3 API token from SQLite"
-  token="$(xui_api_token)" || fail "Could not read enabled 3x-ui API token from /etc/x-ui/x-ui.db"
+  say "Checking local 3x-ui API token in XPAM root-only storage"
+  xui_ensure_api_token || fail "Could not obtain usable 3x-ui API token"
 
   say "Проверка существующего XPAM-managed VLESS inbound"
   existing="$(SERVER_PREFIX="$SERVER_PREFIX" PRIMARY_DOMAIN="$PRIMARY_DOMAIN" XRAY_PUBLIC_PORT="$XRAY_PUBLIC_PORT" EXPECTED_PORT="$(expected_xray_port)" EXPECTED_LISTEN="$expected_listen" python3 - <<'PY_EXISTING_VLESS' 2>/dev/null || true
@@ -2809,14 +2492,11 @@ EOF_XUINOTE_EXISTING
 
   say "Adding VLESS inbound through 3x-ui Bearer API"
   rc=0
-  curl -ksS --connect-timeout 5 --max-time 30 \
-    -H "Authorization: Bearer ${token}" \
-    -H 'Content-Type: application/json' \
-    -H 'Accept: application/json' \
-    -d "@$payload" \
+  xpam_xui_api_post_json \
     "$base/panel/api/inbounds/add" \
-    >/tmp/xpam-script-xui-add-inbound.out \
-    2>/tmp/xpam-script-xui-add-inbound.err || rc=$?
+    "$payload" \
+    /tmp/xpam-script-xui-add-inbound.out \
+    /tmp/xpam-script-xui-add-inbound.err || rc=$?
 
   if [[ $rc -ne 0 ]] || ! grep -Eiq '"success"[[:space:]]*:[[:space:]]*true' /tmp/xpam-script-xui-add-inbound.out 2>/dev/null; then
     warn "3x-ui Bearer API add-inbound did not return clear success. Response follows:"
@@ -2869,9 +2549,7 @@ install_configure_3xui_auto(){
   installer="$(mktemp /tmp/3x-ui-install.XXXXXX.sh)"
   curl -4fsSL --connect-timeout 8 --max-time 30 -o "$installer" https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh || fail "Could not download 3x-ui installer"
   chmod +x "$installer"
-  # Preserve the known-good upstream installer stdin flow. SQLite is enforced by pre/post backend guards.
-  # Flow: customize panel port -> port -> SSL option 4 skip -> bind panel to 127.0.0.1.
-  if ! printf 'y\n%s\n4\ny\n' "$XUI_PANEL_PORT" | bash "$installer" "$tag"; then
+  if ! xpam_xui_run_installer_sanitized "$installer" "$tag" "$XUI_PANEL_PORT"; then
     rm -f "$installer"
     fail "3x-ui installer failed"
   fi
@@ -2886,6 +2564,7 @@ install_configure_3xui_auto(){
   systemctl restart x-ui || fail "x-ui restart failed"
   write_wait_for_port
   /usr/local/sbin/wait-for-local-port.sh 127.0.0.1 "$XUI_PANEL_PORT" 30 xui-panel
+  xui_ensure_api_token || fail "Could not obtain usable 3x-ui API token"
   xui_add_vless_inbound_auto
   xui_enforce_direct_ipv4_bind
   systemctl restart x-ui || true
@@ -2924,98 +2603,6 @@ verify_xui_manual_setup(){
   ok "3x-ui/VLESS ports reachable. Deep validation will run in health."
 }
 write_nginx_final(){ export_vars; cleanup_legacy_nginx_files; if uses_mtproto; then ensure_telegram_relay_nginx_snippet; render_template "$KIT_DIR/templates/nginx-mtproto.conf.tpl" /etc/nginx/sites-available/xpam-script-final.conf; else render_template "$KIT_DIR/templates/nginx-direct.conf.tpl" /etc/nginx/sites-available/xpam-script-final.conf; fi; rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/xpam-script-certonly.conf; ln -sf /etc/nginx/sites-available/xpam-script-final.conf /etc/nginx/sites-enabled/xpam-script-final.conf; ensure_htpasswd; nginx -t; systemctl reload nginx || systemctl restart nginx; }
-install_mtproto(){
-  uses_mtproto || return 0
-
-  say "Подготовка MTProto proxy"
-  mkdir -p /root/secure-notes
-  chmod 700 /root/secure-notes
-
-  local existing_ok="no" secret tag note backup_dir
-  if [[ -f /opt/mtprotoproxy/config.py ]]; then
-    if python3 - <<'PY_MTPROTO_VALIDATE' >/dev/null 2>&1
-import importlib.util
-p='/opt/mtprotoproxy/config.py'
-spec=importlib.util.spec_from_file_location('mtproto_config', p)
-mod=importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-users=getattr(mod,'USERS',{})
-assert isinstance(users, dict) and users
-for k,v in users.items():
-    assert isinstance(k,str) and k
-    assert isinstance(v,str) and len(v)==32 and all(c in '0123456789abcdefABCDEF' for c in v)
-PY_MTPROTO_VALIDATE
-    then
-      existing_ok="yes"
-      ok "Найден существующий валидный MTProto config.py; USERS/secrets будут сохранены"
-    else
-      warn "Существующий /opt/mtprotoproxy/config.py не прошёл проверку; перед изменением будет создан backup"
-    fi
-  fi
-
-  if [[ ! -x /opt/mtprotoproxy/mtprotoproxy.py ]]; then
-    say "Установка Python mtprotoproxy из upstream repo"
-    backup_dir="/root/manual-backups/mtprotoproxy-code-$(date +%Y%m%d-%H%M%S)"
-    if [[ -d /opt/mtprotoproxy ]]; then
-      mkdir -p "$backup_dir"
-      cp -a /opt/mtprotoproxy "$backup_dir/" 2>/dev/null || true
-      rm -rf /opt/mtprotoproxy
-    fi
-    git clone --depth 1 --branch "$MTPROTO_REPO_BRANCH" "$MTPROTO_REPO_URL" /opt/mtprotoproxy
-    chmod 755 /opt/mtprotoproxy /opt/mtprotoproxy/mtprotoproxy.py
-    rm -rf /opt/mtprotoproxy/.git /opt/mtprotoproxy/Dockerfile /opt/mtprotoproxy/docker-compose.yml || true
-  else
-    ok "MTProto upstream code already present: /opt/mtprotoproxy"
-  fi
-
-  if [[ "$existing_ok" != "yes" ]]; then
-    [[ -f /opt/mtprotoproxy/config.py ]] && cp -a /opt/mtprotoproxy/config.py "/root/manual-backups/mtproto-config.py.$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
-    secret="$(xxd -p -l 16 /dev/urandom)"
-    tag="$(echo -n "$SYNC_DOMAIN" | xxd -p -c 256)"
-    export MTPROTO_SECRET="$secret"
-    export_vars
-    render_template "$KIT_DIR/templates/mtprotoproxy-config.py.tpl" /opt/mtprotoproxy/config.py
-    chmod 600 /opt/mtprotoproxy/config.py
-    note="/root/secure-notes/${SERVER_PREFIX}-mtproto.txt"
-    cat > "$note" <<EOF_MTPROTO_NOTE
-MTProto proxy for XPAM Script
-==================================================
-Link: tg://proxy?server=${SYNC_DOMAIN}&port=443&secret=ee${secret}${tag}
-EOF_MTPROTO_NOTE
-    chmod 600 "$note"
-  fi
-
-  render_template "$KIT_DIR/templates/mtprotoproxy.service.tpl" /etc/systemd/system/mtprotoproxy.service
-  mkdir -p /etc/systemd/system/mtprotoproxy.service.d
-
-  cat > /etc/systemd/system/mtprotoproxy.service.d/logging.conf <<'EOF_MTPROTO_LOGGING'
-[Service]
-StandardOutput=null
-StandardError=journal
-EOF_MTPROTO_LOGGING
-
-  cat > /etc/systemd/system/mtprotoproxy.service.d/override.conf <<EOF_MTPROTO_OVERRIDE
-[Unit]
-Wants=network-online.target nginx.service
-After=network-online.target nginx.service
-
-[Service]
-ExecStartPre=
-ExecStartPre=/usr/local/sbin/wait-for-local-port.sh 127.0.0.1 ${SYNC_BACKEND_PORT} 30 nginx-sync-backend
-ExecStartPre=/bin/sleep 3
-EOF_MTPROTO_OVERRIDE
-
-  cat > /etc/systemd/system/mtprotoproxy.service.d/restart.conf <<'EOF_MTPROTO_RESTART'
-[Service]
-Restart=on-failure
-RestartSec=5s
-EOF_MTPROTO_RESTART
-
-  mtproto_python_update rewrite-notes >/dev/null 2>&1 || true
-  systemctl daemon-reload
-  systemctl enable mtprotoproxy
-  systemctl restart mtprotoproxy
-}
 
 write_haproxy(){ uses_mtproto || return 0; export_vars; render_template "$KIT_DIR/templates/haproxy.cfg.tpl" /etc/haproxy/haproxy.cfg; haproxy -c -f /etc/haproxy/haproxy.cfg; mkdir -p /etc/systemd/system/haproxy.service.d; render_template "$KIT_DIR/templates/backend-order.conf.tpl" /etc/systemd/system/haproxy.service.d/backend-order.conf; systemctl daemon-reload; systemctl enable haproxy; systemctl restart haproxy; }
 write_health_weekly(){ say "Writing health and weekly scripts"; write_common_library; write_dns_policy_script; write_network_tuning_policy_script; write_telegram_https_relay_worker; migrate_legacy_system_file_names || true; export_vars; render_template "$KIT_DIR/templates/health.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-health"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-health"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-health"; write_health_launcher || true; write_links_launcher || true; write_vless_launcher || true; write_tg_launcher || true; write_repair_launcher || true; write_netdiag_launcher || true; render_template "$KIT_DIR/templates/weekly.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; write_weekly_launcher || true; local cron_min=35; [[ "$SERVER_PREFIX" == "se" ]] && cron_min=30; [[ "$SERVER_PREFIX" == "lt" ]] && cron_min=40; cat > "/etc/cron.d/${SERVER_PREFIX}-weekly-maintenance" <<EOF
@@ -3024,448 +2611,6 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ${cron_min} 4 * * 0 root /usr/bin/nice -n 19 /usr/bin/ionice -c3 /usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh >/dev/null 2>&1
 EOF
 }
-
-prune_keep_latest(){
-  local dir="$1" pattern="$2" keep="${3:-4}" old_path
-  [[ -d "$dir" ]] || return 0
-  find "$dir" -mindepth 1 -maxdepth 1 -name "$pattern" -printf '%T@ %p\n' 2>/dev/null \
-    | sort -nr \
-    | awk -v keep="$keep" 'NR>keep {sub(/^[^ ]+ /,""); print}' \
-    | while IFS= read -r old_path; do
-        [[ -n "$old_path" ]] && rm -rf -- "$old_path" 2>/dev/null || true
-      done
-}
-
-run_health_quiet(){
-  local label="${1:-health-check}" ts log_dir log rc
-  [[ -n "${SERVER_PREFIX:-}" ]] || fail "SERVER_PREFIX is not loaded; cannot run health"
-  if [[ ! -x "/usr/local/sbin/${SERVER_PREFIX}-health" ]]; then
-    fail "Health command not found: /usr/local/sbin/${SERVER_PREFIX}-health"
-  fi
-
-  ts="$(date +%Y%m%d-%H%M%S)"
-  label="$(printf '%s' "$label" | tr -cd 'A-Za-z0-9_.-')"
-  [[ -n "$label" ]] || label="health-check"
-  log_dir="/var/log/xpam-script"
-  mkdir -p "$log_dir"
-  chmod 700 "$log_dir" 2>/dev/null || true
-  log="${log_dir}/${SERVER_PREFIX}-${label}-${ts}.log"
-
-  if "/usr/local/sbin/${SERVER_PREFIX}-health" >"$log" 2>&1; then
-    prune_keep_latest "$log_dir" "${SERVER_PREFIX}-*.log" 4
-    ok "Краткая health-проверка пройдена. Подробный лог: $log"
-    return 0
-  fi
-
-  rc=$?
-  prune_keep_latest "$log_dir" "${SERVER_PREFIX}-*.log" 4
-  warn "Health-check завершился ошибкой. Подробный лог: $log"
-  echo "Последние строки health-лога:"
-  tail -n 80 "$log" 2>/dev/null || true
-  return "$rc"
-}
-telegram_mask_token(){
-  local t="${1:-}"
-  local n=${#t}
-  if (( n <= 10 )); then
-    printf '%s' '[masked]'
-  else
-    printf '%s...%s' "${t:0:6}" "${t: -4}"
-  fi
-}
-telegram_api_base(){ printf 'https://api.telegram.org/bot%s' "$1"; }
-telegram_validate_token(){
-  local token="$1" json ok username
-  json="$(curl -4fsS --connect-timeout 5 --max-time 10 "$(telegram_api_base "$token")/getMe" 2>/dev/null || true)"
-  [[ -n "$json" ]] || return 1
-  ok="$(printf '%s' "$json" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("true" if d.get("ok") is True else "false")' 2>/dev/null || echo false)"
-  [[ "$ok" == "true" ]] || return 1
-  username="$(printf '%s' "$json" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("result",{}).get("username", ""))' 2>/dev/null || true)"
-  [[ -n "$username" ]] && ok "Telegram bot token действителен: @${username}" || ok "Telegram bot token is valid"
-  return 0
-}
-telegram_send_test(){
-  local token="$1" chat="$2" text="$3"
-  curl -4fsS --connect-timeout 5 --max-time 10 \
-    -X POST "$(telegram_api_base "$token")/sendMessage" \
-    -d "chat_id=${chat}" \
-    --data-urlencode "text=${text}" \
-    >/dev/null 2>&1
-}
-telegram_private_chat_id(){
-  local token="$1"
-  curl -4fsS --connect-timeout 5 --max-time 10 "$(telegram_api_base "$token")/getUpdates" 2>/dev/null | python3 -c 'import sys,json; d=json.load(sys.stdin); chats=[]
-for u in d.get("result",[]):
-    m=u.get("message") or u.get("edited_message") or {}
-    c=m.get("chat") or {}
-    if c.get("type")=="private" and c.get("id") is not None:
-        chats.append(str(c.get("id")))
-print(chats[-1] if chats else "")' 2>/dev/null || true
-}
-
-telegram_botfather_help(){
-  cat <<'EOF_TG_BOT_HELP'
-Подготовка Telegram-бота:
-
-XPAM Script использует только личный чат один-на-один с вашим Telegram-ботом.
-Группы, каналы и темы форумов в простой установке не используются.
-
-Если у вас уже есть bot token:
-  1. Используйте существующий token.
-  2. Откройте чат с вашим созданным ботом.
-  3. Отправьте боту /start, если ещё не делали этого раньше.
-  4. Повторно отправить /start безопасно.
-
-Если бота ещё нет:
-  1. Откройте Telegram.
-  2. Найдите @BotFather.
-  3. Отправьте ему /newbot.
-  4. Создайте имя и username бота.
-  5. Скопируйте token, который выдаст BotFather.
-  6. Откройте чат с вашим новым ботом, НЕ с @BotFather.
-  7. Отправьте вашему новому боту /start.
-  8. Вернитесь сюда и вставьте token в терминал.
-EOF_TG_BOT_HELP
-}
-
-
-setup_direct_telegram_env(){
-  local token chat direct_ok
-  if [[ -f /etc/xpam-script/config.env ]]; then
-    set +u
-    . /etc/xpam-script/config.env
-    set -u
-  fi
-  echo
-  echo "Режим прямой отправки Telegram уведомлений."
-  echo "Этот VPS сам отправляет сообщения в Telegram через вашего бота."
-  echo "Relay-сервер в этом режиме не используется."
-  echo
-  telegram_botfather_help
-  echo
-
-  while true; do
-    read -r -s -p "Введите Telegram bot token от @BotFather; пусто = отмена. Token сюда, в чат ChatGPT, не отправляйте: " token || true
-    echo
-    [[ -n "$token" ]] || { warn "Настройка Telegram отменена"; return 1; }
-    say "Проверяем Telegram bot token: $(telegram_mask_token "$token")"
-    telegram_validate_token "$token" && break
-    warn "Telegram bot token не прошёл проверку. Проверьте token, который выдал @BotFather."
-  done
-
-  echo
-  echo "Теперь откройте в Telegram чат с вашим созданным ботом, НЕ с @BotFather, и отправьте:"
-  echo "  /start"
-  echo
-  echo "Если чат с ботом уже был запущен раньше, повторно отправить /start безопасно."
-  echo
-  read -r -p "Нажмите Enter после отправки /start вашему боту: " _tg_enter || true
-
-  chat="$(telegram_private_chat_id "$token")"
-  if [[ -z "$chat" ]]; then
-    warn "Не удалось автоматически определить private chat_id. Убедитесь, что вы открыли созданного бота и отправили ему /start."
-    read -r -p "Нажмите Enter, чтобы попробовать getUpdates ещё раз, или Ctrl+C для отмены: " _tg_retry || true
-    chat="$(telegram_private_chat_id "$token")"
-  fi
-  [[ -n "$chat" ]] || fail "Private Telegram chat_id не найден. Отправьте /start вашему боту и запустите настройку Telegram снова."
-
-  cat > /root/secure-notes/notify.env <<EOF_NOTIFY
-TELEGRAM_MODE='direct'
-TELEGRAM_BOT_TOKEN='${token}'
-TELEGRAM_CHAT_ID='${chat}'
-EOF_NOTIFY
-  chmod 600 /root/secure-notes/notify.env
-
-  say "Отправляем тестовое Telegram сообщение"
-  direct_ok=no
-  if telegram_send_test "$token" "$chat" "[${SERVER_PREFIX:-$(hostname -s)}] Проверка Telegram уведомлений: OK"; then
-    ok "Telegram уведомления в личный чат работают напрямую"
-    direct_ok=yes
-  else
-    warn "Прямая отправка Telegram с этого сервера не сработала. Используйте HTTPS Relay, если этот VPS не может достучаться до api.telegram.org."
-  fi
-  say "Telegram настройки сохранены в /root/secure-notes/notify.env с правами 600"
-  [[ "$direct_ok" == "yes" ]]
-}
-
-setup_https_relay_client(){
-  local relay_url relay_token
-  if [[ -f /etc/xpam-script/config.env ]]; then
-    set +u
-    . /etc/xpam-script/config.env
-    set -u
-  fi
-  echo
-  echo "Режим отправки уведомлений через другой XPAM Script сервер."
-  echo
-  echo "Этот VPS будет клиентом Telegram Relay."
-  echo "Он НЕ использует Telegram bot token и НЕ пишет в Telegram напрямую."
-  echo "Он отправляет уведомления на основной XPAM Script сервер, где уже включён Telegram Relay."
-  echo
-  echo "Когда выбирать этот пункт:"
-  echo "  - этот сервер дополнительный;"
-  echo "  - основной сервер уже настроен как Telegram Relay через пункт 3;"
-  echo "  - вы хотите, чтобы этот сервер отправлял уведомления через основной сервер."
-  echo
-  echo "Что нужно взять с основного Relay-сервера:"
-  echo "  1. Relay URL"
-  echo "  2. Relay token"
-  echo
-  echo "Где взять Relay URL:"
-  echo "  На основном сервере выберите пункт 3:"
-  echo "  Сделать этот сервер Telegram Relay для других серверов."
-  echo "  После включения скрипт покажет Relay URL."
-  echo
-  echo "Где взять Relay token:"
-  echo "  На основном Relay-сервере он хранится в:"
-  echo "  /root/secure-notes/notify-relay.env"
-  echo
-  echo "Relay token — секрет. Не отправляйте его в чат, письма или публичные логи."
-  echo "Relay URL лучше копировать с завершающим /. Если / забыли, XPAM Script добавит его сам."
-  echo "Автоматического подставления Relay URL/token нет: пользователь вводит их вручную."
-  echo
-  ask relay_url "Введите Relay URL с основного Relay-сервера" ""
-  read -r -s -p "Введите Relay token с основного Relay-сервера; пусто = отмена: " relay_token || true
-  echo
-  relay_url="$(normalize_https_relay_url "$relay_url")"
-  [[ -n "$relay_token" ]] || { warn "Настройка HTTPS Relay отменена"; return 1; }
-  echo "Relay URL будет сохранён как: ${relay_url}"
-
-  say "Отправляем тестовое сообщение через HTTPS Relay"
-  if curl -4fsS --connect-timeout 5 --max-time 12 \
-      -X POST "$relay_url" \
-      -H "Authorization: Bearer ${relay_token}" \
-      --data-binary "[${SERVER_PREFIX:-$(hostname -s)}] Проверка отправки через HTTPS Relay: OK" \
-      >/dev/null 2>&1; then
-    ok "HTTPS Relay работает"
-  else
-    fail "Тест HTTPS Relay не прошёл. Проверьте Relay URL/token и то, что relay-сервер умеет отправлять Telegram уведомления."
-  fi
-
-  cat > /root/secure-notes/notify.env <<EOF_NOTIFY_RELAY
-TELEGRAM_MODE='https_relay'
-TELEGRAM_RELAY_URL='${relay_url}'
-TELEGRAM_RELAY_TOKEN='${relay_token}'
-EOF_NOTIFY_RELAY
-  chmod 600 /root/secure-notes/notify.env
-  ok "Настройки HTTPS Relay сохранены в /root/secure-notes/notify.env"
-}
-
-telegram_relay_wait_http_code(){
-  local url="$1" expect="$2" token="${3:-}" code=""
-  local i
-  for i in 1 2 3 4 5 6 7 8 9 10; do
-    if [[ -n "$token" ]]; then
-      code="$(curl -4ksS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 -H "Authorization: Bearer ${token}" "$url" 2>/dev/null || true)"
-    else
-      code="$(curl -4ksS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 "$url" 2>/dev/null || true)"
-    fi
-    [[ "$code" == "$expect" ]] && { echo "$code"; return 0; }
-    sleep 1
-  done
-  echo "${code:-none}"
-  return 1
-}
-
-telegram_relay_post_with_retry(){
-  local url="$1" token="$2" message="$3"
-  local i
-  for i in 1 2 3 4 5 6 7 8 9 10; do
-    if curl -4fsS --connect-timeout 5 --max-time 12 \
-        -X POST "$url" \
-        -H "Authorization: Bearer ${token}" \
-        --data-binary "$message" \
-        >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 1
-  done
-  return 1
-}
-
-setup_https_relay_server(){
-  local relay_path relay_token relay_url code
-  if [[ ! -f "$CONFIG_FILE" ]]; then
-    fail "Server config not found. Finish server setup first, then enable HTTPS Telegram relay."
-  fi
-  load_config
-  validate_inputs
-  uses_mtproto || fail "HTTPS relay server mode requires a profile with MTProto domain behind HAProxy. This keeps public ports limited to 22/80/443."
-  echo
-  echo "Режим Telegram Relay-сервера."
-  echo "Этот VPS будет принимать уведомления от других XPAM Script серверов и пересылать их в Telegram."
-  echo "Новый внешний порт НЕ открывается. Используется существующий HTTPS 443 через HAProxy/nginx."
-  echo "Так как именно этот сервер отправляет сообщения в Telegram, ему нужен Telegram bot token."
-  echo "Если бота ещё нет, следующий шаг объяснит, как создать его через @BotFather."
-  echo
-
-  if [[ ! -s /root/secure-notes/notify.env ]]; then
-    warn "Direct Telegram settings are required on the relay server. Configure them now."
-    setup_direct_telegram_env || fail "Direct Telegram setup is required before enabling this server as relay."
-  else
-    # Relay server must have real Telegram bot token/chat_id locally. A relay-client-only notify.env is not enough.
-    if ! bash -c '. /root/secure-notes/notify.env; [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]'; then
-      warn "This server does not have direct Telegram bot token/chat_id. Configure direct Telegram now."
-      setup_direct_telegram_env || fail "Direct Telegram setup is required before enabling this server as relay."
-    else
-      echo
-      echo "Перед включением Telegram Relay нужно проверить, что этот сервер сам может отправлять сообщения в Telegram."
-      echo "Сейчас будет отправлено тестовое сообщение в ваш Telegram."
-      echo
-      if ! bash -c '. /etc/xpam-script/config.env; . /usr/local/sbin/xpam-maint-common.sh; xpam_notify_send "[${SERVER_PREFIX:-$(hostname -s)}] Проверка перед включением Relay: прямая отправка в Telegram работает."'; then
-        fail "Сохранённые прямые Telegram настройки не сработали. Сначала обновите Direct Telegram token через пункт 1."
-      fi
-    fi
-  fi
-
-  relay_path="$(normalize_path "${TELEGRAM_RELAY_PATH:-api/internal/notify-relay}")"
-  read -r -p "Путь HTTPS Relay на ${SYNC_DOMAIN} [${relay_path}]: " _relay_path_ans || true
-  relay_path="$(normalize_path "${_relay_path_ans:-$relay_path}")"
-  [[ -n "$relay_path" ]] || fail "Relay path cannot be empty"
-  [[ "$relay_path" =~ ^[A-Za-z0-9._~/-]+$ ]] || fail "Relay path contains unsupported characters"
-  [[ "$relay_path" != *..* ]] || fail "Relay path must not contain .."
-  relay_token="$(openssl rand -hex 32)"
-
-  mkdir -p /root/secure-notes /etc/nginx/snippets
-  chmod 700 /root/secure-notes
-  cat > /root/secure-notes/notify-relay.env <<EOF_RELAY_ENV
-TELEGRAM_HTTPS_RELAY_TOKEN='${relay_token}'
-TELEGRAM_HTTPS_RELAY_PATH='${relay_path}'
-TELEGRAM_HTTPS_RELAY_SOCKET='${TELEGRAM_RELAY_SOCKET}'
-EOF_RELAY_ENV
-  chmod 600 /root/secure-notes/notify-relay.env
-
-  write_telegram_https_relay_worker
-  cat > /etc/systemd/system/telegram-https-relay.service <<EOF_RELAY_SERVICE
-[Unit]
-Description=XPAM Script HTTPS Telegram relay
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-Environment=TELEGRAM_RELAY_SOCKET=${TELEGRAM_RELAY_SOCKET}
-ExecStart=/usr/local/sbin/telegram-https-relay.py
-Restart=on-failure
-RestartSec=5
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectHome=false
-
-[Install]
-WantedBy=multi-user.target
-EOF_RELAY_SERVICE
-
-  cat > /etc/nginx/snippets/xpam-script-telegram-relay.conf <<EOF_RELAY_NGINX
-location = /${relay_path} { return 308 /${relay_path}/; }
-location ^~ /${relay_path}/ {
-    client_max_body_size 8k;
-    access_log off;
-    proxy_http_version 1.1;
-    proxy_set_header Host \$host;
-    proxy_set_header X-Real-IP \$remote_addr;
-    proxy_set_header Authorization \$http_authorization;
-    proxy_set_header Content-Type \$content_type;
-    proxy_pass http://unix:${TELEGRAM_RELAY_SOCKET}:/;
-}
-EOF_RELAY_NGINX
-
-  systemctl daemon-reload
-  systemctl enable --now telegram-https-relay.service
-  nginx -t
-  systemctl reload nginx || systemctl restart nginx
-
-  relay_url="https://${SYNC_DOMAIN}/${relay_path}/"
-
-  say "Проверяем HTTPS Relay endpoint без token; ожидается HTTP 401"
-  code="$(telegram_relay_wait_http_code "$relay_url" "401" "" || true)"
-  [[ "$code" == "401" ]] && ok "Relay endpoint без token возвращает HTTP 401" || fail "Relay endpoint без token вернул HTTP ${code:-none}; ожидался 401"
-
-  say "Отправляем тестовое сообщение через HTTPS Relay"
-  telegram_relay_post_with_retry "$relay_url" "$relay_token" "[${SERVER_PREFIX:-$(hostname -s)}] Проверка HTTPS Telegram Relay-сервера: OK" \
-    || fail "HTTPS Relay self-test не прошёл"
-
-  ok "HTTPS Telegram Relay-сервер включён"
-  echo
-  echo "ДАННЫЕ HTTPS RELAY — СОХРАНИТЕ ДЛЯ ДРУГИХ СЕРВЕРОВ"
-  echo
-  echo "Этот сервер теперь является основным Telegram Relay-сервером."
-  echo "Другие XPAM Script серверы могут отправлять Telegram уведомления через него."
-  echo
-  echo "На дополнительных серверах выберите:"
-  echo "  4) Настроить / проверить Telegram уведомления"
-  echo "  2) Отправлять уведомления через другой XPAM Script сервер"
-  echo
-  echo "Relay URL:"
-  echo "  ${relay_url}"
-  echo
-  echo "Relay token:"
-  echo "  сохранён безопасно в /root/secure-notes/notify-relay.env"
-  echo "  откройте этот файл на основном Relay-сервере и вручную скопируйте token"
-  echo "  token нужен только при настройке дополнительных серверов через пункт 2"
-  echo
-  echo "Relay token не печатается в терминал и обычные install logs."
-  echo "Relay token нельзя отправлять в чат, письма или публичные логи."
-}
-setup_notify_env(){
-  write_common_library
-  write_telegram_https_relay_worker
-  mkdir -p /root/secure-notes
-  chmod 700 /root/secure-notes
-
-  local choice
-  echo
-  printf '\033[0m'
-  echo "============================================================"
-  echo "Telegram-уведомления"
-  echo "============================================================"
-  echo
-  echo "XPAM использует личный чат один-на-один с вашим Telegram-ботом."
-  echo "Группы, каналы и темы форумов в простой установке не используются."
-  echo
-  echo "Что НЕ отправляется:"
-  echo "  - пароли;"
-  echo "  - VLESS/MTProto ссылки;"
-  echo "  - Telegram token;"
-  echo "  - WARP keys."
-  echo
-  echo "------------------------------------------------------------"
-  echo "Выберите режим Telegram"
-  echo "------------------------------------------------------------"
-  echo "1) Отправлять уведомления напрямую с этого сервера в Telegram"
-  echo "   Этот VPS сам пишет вам в Telegram. Нужен bot token от @BotFather."
-  echo
-  echo "2) Отправлять уведомления через другой XPAM Script сервер"
-  echo "   Этот VPS НЕ использует bot token. Нужны только Relay URL и Relay token с другого сервера."
-  echo
-  echo "3) Сделать этот сервер Telegram Relay для других серверов"
-  echo "   Этот VPS будет принимать уведомления от других серверов и пересылать их в Telegram."
-  echo "   Нужен bot token от @BotFather. Новый внешний порт не открывается, используется HTTPS 443."
-  echo
-  echo "4) Проверить уже сохранённые Telegram настройки"
-  echo "   Использует /root/secure-notes/notify.env. Ничего заново не настраивает."
-  echo
-  echo "5) Пропустить Telegram уведомления"
-  read -r -p "Выберите пункт [1-5]: " choice || true
-  choice="${choice:-5}"
-
-  case "$choice" in
-    1) setup_direct_telegram_env || true ;;
-    2) setup_https_relay_client ;;
-    3) setup_https_relay_server ;;
-    4)
-      if [[ -s /root/secure-notes/notify.env ]]; then
-        chmod 600 /root/secure-notes/notify.env
-        ok "Используем сохранённые Telegram настройки: /root/secure-notes/notify.env"
-        bash -c '. /etc/xpam-script/config.env; . /usr/local/sbin/xpam-maint-common.sh; xpam_notify_send "[${SERVER_PREFIX:-$(hostname -s)}] Проверка сохранённых Telegram настроек из xpam-script: OK"' || warn "Не удалось отправить Telegram test с сохранёнными настройками"
-      else
-        warn "No existing /root/secure-notes/notify.env found"
-      fi
-      ;;
-    5|*) warn "Telegram skipped" ;;
-  esac
-}
-
 
 ask_layout(){
   echo
@@ -3525,222 +2670,6 @@ ask_layout(){
   echo "  VLESS/Xray inbound: $(uses_haproxy && echo 127.0.0.1 || server_public_ipv4):$(expected_xray_port)"
   echo "  3x-ui automation: ${XUI_AUTO_SETUP}"
   confirm "Продолжить?" yes || fail "Cancelled"
-}
-
-apply_service_hygiene(){
-  say "Applying post-install service hygiene and cleanup policy"
-  write_common_library
-  bash -c '. /usr/local/sbin/xpam-maint-common.sh; xpam_apply_service_hygiene "'"$CONFIG_FILE"'"'
-}
-
-post_install_cleanup(){
-  say "Running post-install safe cleanup"
-  write_common_library
-  bash -c '. /usr/local/sbin/xpam-maint-common.sh; xpam_post_install_cleanup "'"$SERVER_PREFIX"'"'
-}
-
-cleanup_root_test_leftovers(){
-  # Keep /root clean after successful stage transitions. This helper removes
-  # only upload/test/debug leftovers and empty tool caches; it never touches
-  # user secrets, SSH keys, config snapshots or rollback backups.
-  local mode="${1:-safe}"
-  shopt -s nullglob
-
-  rm -f /root/*-health-*.txt /root/*-health-debian-*.txt 2>/dev/null || true
-  rm -f /root/xpam-script-v*-*.log /root/xpam-script-*.log 2>/dev/null || true
-  rm -f /root/.Xauthority /root/.lesshst 2>/dev/null || true
-  rm -rf /root/xpam-install /root/xpam-release-build /root/xpam-script-test-* 2>/dev/null || true
-  rm -rf /tmp/xpam-* /tmp/xpam-script-* /var/tmp/xpam-* /var/tmp/xpam-script-* 2>/dev/null || true
-  rm -f /tmp/service-audit-*.txt /tmp/tls-cert.* /tmp/tls-info.* 2>/dev/null || true
-
-  if [[ "$mode" == "stage1" || "$mode" == "final" ]]; then
-    rm -f /root/xpam-script-v*.tar.gz /root/xpam-script-v*.tgz /root/xpam-script-v*.zip 2>/dev/null || true
-    rm -f /root/xpam-script-v*.tar.gz.sha256 /root/xpam-script-v*.tgz.sha256 /root/xpam-script-v*.sha256 2>/dev/null || true
-  fi
-
-  # Remove empty helper/cache directory trees only when they contain no files.
-  for xpam_empty_cache_dir in /root/.ansible /root/.local; do
-    if [[ -d "$xpam_empty_cache_dir" ]]; then
-      find "$xpam_empty_cache_dir" -depth -type d -empty -delete 2>/dev/null || true
-      rmdir "$xpam_empty_cache_dir" 2>/dev/null || true
-    fi
-  done
-  shopt -u nullglob
-}
-
-final_production_cleanup(){
-  need_root
-  ensure_sudo_hostname_resolution
-  load_config
-  validate_inputs
-  say "Final production cleanup / polish"
-
-  local original_workdir item target deferred_cleanup_script
-  local -a deferred_workdirs
-  original_workdir="$(pwd -P 2>/dev/null || true)"
-  deferred_workdirs=()
-
-  install_runtime_kit || true
-  write_install_launcher || true
-  write_health_launcher || true
-  write_weekly_launcher || true
-  write_links_launcher || true
-  write_vless_launcher || true
-  write_tg_launcher || true
-  write_repair_launcher || true
-  write_netdiag_launcher || true
-  write_health_weekly || true
-
-  post_install_cleanup || true
-
-  # Final cleanup may remove the extracted XPAM Script directory.  A child shell
-  # cannot move the user's parent SSH shell out of that directory.  Therefore we
-  # move this script process to /root for safe health checks, and if any running
-  # process still has cwd inside /root/xpam-script-v*, we schedule that
-  # extracted directory for delayed removal after the user leaves it.
-  cd /root 2>/dev/null || cd / 2>/dev/null || true
-
-  has_process_cwd_inside_target(){
-    local check_target="$1" cwd cur
-    for cwd in /proc/[0-9]*/cwd; do
-      cur="$(readlink -f "$cwd" 2>/dev/null || true)"
-      [[ -n "$cur" ]] || continue
-      if [[ "$cur" == "$check_target" || "$cur" == "$check_target"/* ]]; then
-        return 0
-      fi
-    done
-    return 1
-  }
-
-  say "Removing XPAM Script upload/test leftovers"
-  shopt -s nullglob
-  for item in \
-    /root/xpam-bootstrap.sh \
-    /root/xpam-install \
-    /root/xpam-release-build \
-    /root/xpam-script-*.tar.gz \
-    /root/xpam-script-*.tgz \
-    /root/xpam-script-*.zip \
-    /root/xpam-script-*.sha256 \
-    /root/xpam-script*.sha256 \
-    /root/xpam-script*.tar.gz.sha256 \
-    /root/xpam-script*.tgz.sha256 \
-    /root/xpam-script-v*-*.log \
-    /root/xpam-script-*.log \
-    /root/xpam-script-test-* \
-    /root/xpam-script-v*; do
-    [[ -e "$item" ]] || continue
-    target="$(readlink -f "$item" 2>/dev/null || true)"
-    if [[ -d "$target" && ( "$target" == /root/xpam-script-v* || "$target" == /root/xpam-install || "$target" == /root/xpam-release-build ) ]]; then
-      # Do not remove extracted XPAM Script/bootstrap/build directories synchronously.
-      # The user's parent SSH shell may still be standing inside one of them,
-      # and a child script cannot move that parent shell. Always schedule
-      # delayed removal: if nobody is inside, it disappears within a few seconds;
-      # if somebody is inside, it disappears after they leave.
-      deferred_workdirs+=("$target")
-      continue
-    fi
-    rm -rf -- "$item" 2>/dev/null || true
-  done
-  shopt -u nullglob
-  rm -f /root/.lesshst 2>/dev/null || true
-
-  say "Removing temporary installation/debug files"
-  find /tmp -maxdepth 1 \( \
-    -name 'xpam-script-*' -o \
-    -name '3x-ui-install.*.sh' -o \
-    -name '*.out' -o \
-    -name '*.err' \
-  \) -exec rm -rf {} + 2>/dev/null || true
-
-
-  say "Removing unused default nginx webroot"
-  rm -rf /var/www/html 2>/dev/null || true
-
-  for target in "${deferred_workdirs[@]:-}"; do
-    [[ -n "$target" && -d "$target" ]] || continue
-    deferred_cleanup_script="/tmp/xpam-script-deferred-cleanup-${SERVER_PREFIX}-$$-$(basename "$target").sh"
-    cat >"$deferred_cleanup_script" <<'EOS'
-#!/usr/bin/env bash
-set -u
-target="${1:-}"
-[[ -n "$target" ]] || exit 0
-case "$target" in
-  /root/xpam-script-v*|/root/xpam-install|/root/xpam-release-build) ;;
-  *) exit 0 ;;
-esac
-[[ -d "$target" ]] || exit 0
-has_process_cwd_inside_target(){
-  local cwd cur
-  for cwd in /proc/[0-9]*/cwd; do
-    cur="$(readlink -f "$cwd" 2>/dev/null || true)"
-    [[ -n "$cur" ]] || continue
-    if [[ "$cur" == "$target" || "$cur" == "$target"/* ]]; then
-      return 0
-    fi
-  done
-  return 1
-}
-for _ in $(seq 1 1800); do
-  if ! has_process_cwd_inside_target; then
-    rm -rf -- "$target" 2>/dev/null || true
-    rm -f -- "$0" 2>/dev/null || true
-    exit 0
-  fi
-  sleep 1
-done
-exit 0
-EOS
-    chmod 700 "$deferred_cleanup_script" 2>/dev/null || true
-    nohup bash "$deferred_cleanup_script" "$target" >/dev/null 2>&1 &
-  done
-
-  say "Cleaning old logs and backups by retention policy"
-  mkdir -p /var/log/xpam-script /var/log/xpam-script/netdiag
-  chmod 700 /var/log/xpam-script /var/log/xpam-script/netdiag 2>/dev/null || true
-  prune_keep_latest /var/log/xpam-script "${SERVER_PREFIX}-health-*.log" "${XPAM_HEALTH_LOG_KEEP:-4}" || true
-  prune_keep_latest /var/log/xpam-script/netdiag "${SERVER_PREFIX}-*.txt" 2 || true
-  rm -rf /root/manual-backups/health-logs /root/manual-backups/networking-diagnostics 2>/dev/null || true
-  prune_keep_latest /root/manual-backups/xui-warp-normalize 'x-ui.db.*' "${XPAM_BACKUP_KEEP:-2}" || true
-  prune_keep_latest /root/manual-backups/xui-subscription-disable 'x-ui.db.*' "${XPAM_BACKUP_KEEP:-2}" || true
-  prune_keep_latest /root/manual-backups 'mtproto-config.py.*' "${XPAM_BACKUP_KEEP:-2}" || true
-  find /root/manual-backups -type d -empty -delete 2>/dev/null || true
-  find /root/manual-backups -mindepth 1 -maxdepth 2 -type f \( -name '*.bak-*' -o -name '*.tmp' -o -name '*.out' -o -name '*.err' \) -delete 2>/dev/null || true
-  find /usr/local/sbin /etc/nginx /etc/haproxy /etc/systemd/system -xdev -type f \
-    \( -name '*.bak-*' -o -name '*.bak-before-*' -o -name '*.bak-xpam-script-*' \) \
-    -delete 2>/dev/null || true
-
-  say "Cleaning apt caches and trimming journals"
-  apt-get clean || true
-  rm -rf /var/cache/apt/archives/*.deb /var/cache/apt/archives/partial/* 2>/dev/null || true
-  journalctl --vacuum-size=24M >/dev/null 2>&1 || true
-
-  cleanup_root_test_leftovers final || true
-
-  say "Final cleanup footprint"
-  du -sh /root /tmp /var/cache/apt /var/log /opt /usr/local/sbin 2>/dev/null || true
-
-  cd /root 2>/dev/null || cd / 2>/dev/null || true
-  if [[ -x "/usr/local/sbin/${SERVER_PREFIX}-health" ]]; then
-    "/usr/local/sbin/${SERVER_PREFIX}-health" || fail "Health failed after final cleanup"
-  fi
-  if ((${#deferred_workdirs[@]} > 0)); then
-    echo
-    ok "Финальная очистка завершена. Сервер здоров."
-    echo
-    echo "Выполните сейчас:"
-    echo "  cd /root"
-    echo
-    echo "Временная папка установки будет удалена автоматически через несколько секунд после выхода из неё."
-    echo "Перезагрузка не требуется."
-  else
-    ok "Final production cleanup complete. Server is clean and manageable."
-  fi
-
-  # Production cleanup should leave /root free of install logs as well.
-  # If this script is currently being logged through tee, removing the path is
-  # safe: the open descriptor can finish, but the root filesystem stays clean.
-  rm -f /root/xpam-script-v*-*.log /root/xpam-script-*.log 2>/dev/null || true
 }
 
 stage_prepare(){
@@ -4203,6 +3132,7 @@ stage_finalize(){
   ensure_swap_policy
   preinstall_system_update
   install_base_packages
+  reboot_gate_before_finalize || exit 0
   fix_managed_hosts
   setup_dns_policy
   check_dns_preflight
@@ -4247,8 +3177,6 @@ stage_finalize(){
   exit 0
 }
 stage_check_only(){ need_root; load_config; validate_inputs; verify_ssh_preflight; [[ -x "/usr/local/sbin/${SERVER_PREFIX}-health" ]] && "/usr/local/sbin/${SERVER_PREFIX}-health" || verify_xui_manual_setup; }
-
-stage_notify(){ need_root; setup_notify_env; }
 
 warp_print_3xui_manual_steps(){
   echo "============================================================"
@@ -4609,576 +3537,6 @@ stage_links_direct(){
   esac
 }
 
-site_webroot_lines(){
-  # Prints: ROLE<TAB>DOMAIN<TAB>PATH<TAB>DESCRIPTION
-  [[ -n "${PRIMARY_DOMAIN:-}" ]] && printf 'PANEL_VLESS\t%s\t/var/www/%s\t%s\n' "$PRIMARY_DOMAIN" "$PRIMARY_DOMAIN" "Сайт-декорация для VLESS / 3x-ui домена"
-  if [[ "${PROFILE:-}" == "root_mtproto" && -n "${ROOT_DOMAIN:-}" ]]; then
-    printf 'ROOT\t%s\t/var/www/%s\t%s\n' "$ROOT_DOMAIN" "$ROOT_DOMAIN" "Основной сайт"
-  fi
-  if uses_mtproto && [[ -n "${SYNC_DOMAIN:-}" ]]; then
-    printf 'MTPROTO_RELAY\t%s\t/var/www/%s\t%s\n' "$SYNC_DOMAIN" "$SYNC_DOMAIN" "Сайт-декорация для MTProto / Relay домена"
-  fi
-}
-
-site_print_webroots(){
-  local role domain path desc
-  echo
-  echo "Папки сайтов, которые можно менять:"
-  while IFS=$'\t' read -r role domain path desc; do
-    [[ -n "$domain" ]] || continue
-    echo "  - ${desc}:"
-    echo "      ${path}/"
-  done < <(site_webroot_lines)
-  if [[ "${PROFILE:-}" == "root_mtproto" && -n "${WWW_DOMAIN:-}" && -n "${ROOT_DOMAIN:-}" ]]; then
-    echo
-    echo "Важно: ${WWW_DOMAIN} — это redirect на ${ROOT_DOMAIN}. Отдельный сайт для ${WWW_DOMAIN} загружать не нужно."
-  fi
-}
-
-stage_site_instructions(){
-  need_root
-  load_config
-  validate_inputs
-  echo "============================================================"
-  echo "Управление сайтами"
-  echo "============================================================"
-  site_print_webroots
-  cat <<EOF_SITE_HELP
-
-Коротко: можно менять внешний вид сайтов, но нельзя занимать служебные адреса XPAM Script.
-
-Что можно менять в папках сайта:
-  - index.html, login.html, docs.html, 404.html;
-  - favicon.svg, favicon.ico, robots.txt;
-  - папки assets/, css/, js/, img/, fonts/ и обычные статичные файлы.
-
-Важно:
-  - удаляйте содержимое /var/www/<domain>/, а не саму папку /var/www/<domain>/;
-  - не публикуйте VLESS/MTProto ссылки, пароли, токены, WARP keys или private keys;
-  - не меняйте nginx, HAProxy, systemd, 3x-ui, Xray, сертификаты и secure-notes ради замены сайта.
-
-Служебные адреса, которые нельзя ломать:
-  - /.well-known/acme-challenge/ — выпуск и продление SSL-сертификатов;
-  - /${PANEL_PATH}/ — путь панели 3x-ui на panel/VLESS домене;
-EOF_SITE_HELP
-  if uses_mtproto; then
-    cat <<EOF_SITE_MTPROTO
-  - /health — проверка доступности sync/MTProto backend;
-  - /status — технический статус sync backend;
-  - /v1 и /v1/ — API-like служебные адреса, должны отвечать 401 без token;
-EOF_SITE_MTPROTO
-    if [[ -n "${TELEGRAM_RELAY_PATH:-}" ]]; then
-      echo "  - /${TELEGRAM_RELAY_PATH}/ — путь HTTPS Telegram Relay, если Relay включён;"
-    fi
-  fi
-  cat <<'EOF_SITE_HELP_2'
-
-/login, /docs и favicon можно заменять своим дизайном, если они остаются обычными статичными страницами и не конфликтуют со служебными route.
-
-Роли стандартных сайтов:
-  - panel/VLESS домен: нейтральная маскировка под private storage interface;
-  - MTProto/sync домен: нейтральная маскировка под sync/API endpoint;
-  - root/main домен: универсальная минималистичная заглушка без личной информации.
-
-После загрузки файлов вернитесь сюда и выберите:
-  2) Я загрузил новый сайт — проверить и применить
-
-XPAM Script выставит права, проверит nginx, служебные маршруты и состояние сервера.
-EOF_SITE_HELP_2
-}
-site_backup_webroots(){
-  local label="${1:-site-replace}" ts backup_dir role domain path desc
-  ts="$(date +%Y%m%d-%H%M%S)"
-  backup_dir="/root/manual-backups/${label}-${ts}"
-  mkdir -p "$backup_dir/var-www"
-  chmod 700 "$backup_dir"
-  while IFS=$'\t' read -r role domain path desc; do
-    [[ -n "$domain" && -d "$path" ]] || continue
-    cp -a "$path" "$backup_dir/var-www/$domain"
-  done < <(site_webroot_lines)
-  prune_keep_latest /root/manual-backups "${label}-*" 4
-  echo "$backup_dir"
-}
-
-site_fix_permissions(){
-  local role domain path desc
-  while IFS=$'\t' read -r role domain path desc; do
-    [[ -n "$domain" ]] || continue
-    [[ -d "$path" ]] || fail "Папка сайта не найдена: $path"
-    chown -R www-data:www-data "$path" 2>/dev/null || true
-    find "$path" -type d -exec chmod 755 {} \; 2>/dev/null || true
-    find "$path" -type f -exec chmod 644 {} \; 2>/dev/null || true
-  done < <(site_webroot_lines)
-}
-
-site_verify_index_files(){
-  local role domain path desc missing=0
-  while IFS=$'\t' read -r role domain path desc; do
-    [[ -n "$domain" ]] || continue
-    if [[ ! -f "$path/index.html" ]]; then
-      warn "В папке $path нет index.html"
-      missing=1
-    fi
-  done < <(site_webroot_lines)
-  [[ "$missing" -eq 0 ]] || fail "Добавьте index.html в каждую показанную папку сайта и повторите проверку"
-}
-
-site_http_code(){
-  local url="$1"
-  curl -k -sS -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 25 "$url" 2>/dev/null || true
-}
-
-site_expect_code(){
-  local label="$1" url="$2" expected="$3" code
-  code="$(site_http_code "$url")"
-  if [[ "$code" == "$expected" ]]; then
-    ok "$label HTTP $code"
-  else
-    fail "$label: expected HTTP $expected, got ${code:-none} for $url"
-  fi
-}
-
-site_verify_routes(){
-  local role domain path desc panel_clean relay_clean
-  while IFS=$'\t' read -r role domain path desc; do
-    [[ -n "$domain" ]] || continue
-    site_expect_code "$domain/" "https://${domain}/" 200
-  done < <(site_webroot_lines)
-
-  if [[ "${PROFILE:-}" == "root_mtproto" && -n "${WWW_DOMAIN:-}" && -n "${ROOT_DOMAIN:-}" ]]; then
-    local code
-    code="$(site_http_code "https://${WWW_DOMAIN}/")"
-    [[ "$code" == "301" || "$code" == "302" || "$code" == "308" ]] || fail "${WWW_DOMAIN} redirect: expected 301/302/308, got ${code:-none}"
-    ok "${WWW_DOMAIN} redirects to ${ROOT_DOMAIN} HTTP $code"
-  fi
-
-  panel_clean="${PANEL_PATH#/}"
-  panel_clean="${panel_clean%/}"
-  site_expect_code "3x-ui panel path is protected" "https://${PRIMARY_DOMAIN}/${panel_clean}/" 401
-
-  if uses_mtproto && [[ -n "${SYNC_DOMAIN:-}" ]]; then
-    site_expect_code "MTProto/Relay /health service route" "https://${SYNC_DOMAIN}/health" 200
-    site_expect_code "MTProto/Relay /v1 service route" "https://${SYNC_DOMAIN}/v1" 401
-    if [[ -f /root/secure-notes/notify-relay.env && -n "${TELEGRAM_RELAY_PATH:-}" ]]; then
-      relay_clean="${TELEGRAM_RELAY_PATH#/}"
-      relay_clean="${relay_clean%/}"
-      site_expect_code "HTTPS Telegram Relay path without token" "https://${SYNC_DOMAIN}/${relay_clean}/" 401
-    fi
-  fi
-}
-
-stage_site_check_uploaded(){
-  need_root
-  load_config
-  validate_inputs
-  echo "============================================================"
-  echo "Проверка загруженных сайтов"
-  echo "============================================================"
-  local backup_dir
-  backup_dir="$(site_backup_webroots site-replace-check)"
-  ok "Backup текущих сайтов создан: $backup_dir"
-  site_verify_index_files
-  site_fix_permissions
-  nginx -t
-  systemctl reload nginx || systemctl restart nginx
-  site_verify_routes
-  if [[ -x "/usr/local/sbin/${SERVER_PREFIX}-health" ]]; then
-    run_health_quiet "site-check-uploaded"
-  fi
-  ok "Сайт загружен и проверен. nginx работает, служебные маршруты XPAM Script не повреждены, сервер здоров."
-}
-
-site_copy_stock_template(){
-  local src="$1" dst="$2" label="$3"
-  [[ -d "$src" ]] || fail "Стандартный шаблон сайта не найден: $src"
-  mkdir -p "$dst"
-  find "$dst" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
-  if command -v rsync >/dev/null 2>&1; then
-    rsync -a --delete "$src"/ "$dst"/
-  else
-    cp -a "$src"/. "$dst"/
-  fi
-  ok "Стандартный сайт восстановлен для ${label}: ${dst}"
-}
-
-stage_site_reset_stock(){
-  need_root
-  load_config
-  validate_inputs
-  echo "============================================================"
-  echo "Возврат стандартных сайтов XPAM Script"
-  echo "============================================================"
-  warn "Этот пункт заменит содержимое папок сайтов стандартными страницами XPAM Script."
-  local ans backup_dir
-  read -r -p "Введите RESET-SITES для продолжения: " ans || true
-  [[ "$ans" == "RESET-SITES" ]] || fail "Возврат стандартных сайтов отменён"
-  backup_dir="$(site_backup_webroots site-reset)"
-  ok "Backup текущих сайтов создан: $backup_dir"
-
-  site_copy_stock_template "$KIT_DIR/sites/panel-vless-mask-site" "/var/www/${PRIMARY_DOMAIN}" "$PRIMARY_DOMAIN"
-  if uses_mtproto; then
-    if [[ "$PROFILE" == "root_mtproto" ]]; then
-      site_copy_stock_template "$KIT_DIR/sites/mtproto-relay-mask-site" "/var/www/${SYNC_DOMAIN}" "$SYNC_DOMAIN"
-    else
-      site_copy_stock_template "$KIT_DIR/sites/mtproto-mask-site" "/var/www/${SYNC_DOMAIN}" "$SYNC_DOMAIN"
-    fi
-  fi
-  if [[ "$PROFILE" == "root_mtproto" ]]; then
-    site_copy_stock_template "$KIT_DIR/sites/root-mask-site" "/var/www/${ROOT_DOMAIN}" "$ROOT_DOMAIN"
-  fi
-
-  site_fix_permissions
-  write_nginx_final
-  nginx -t
-  systemctl reload nginx || systemctl restart nginx
-  site_verify_routes
-  if [[ -x "/usr/local/sbin/${SERVER_PREFIX}-health" ]]; then
-    run_health_quiet "site-reset-stock"
-  fi
-  ok "Стандартные сайты XPAM Script восстановлены. Backup предыдущих файлов: $backup_dir"
-}
-
-stage_site_menu(){
-  need_root
-  [[ -f "$CONFIG_FILE" ]] || fail "Сначала выполните установку сервера через пункт 1."
-  load_config
-  validate_inputs
-  echo "Управление сайтами (опционально)"
-  echo "1) Замена предустановленных сайтов: инструкция и папки"
-  echo "2) Я загрузил новый сайт — проверить и применить"
-  echo "3) Вернуть стандартные сайты XPAM Script"
-  echo "4) Назад"
-  local choice
-  read -r -p "Выберите пункт [1-4]: " choice || true
-  case "$choice" in
-    1) stage_site_instructions ;;
-    2) stage_site_check_uploaded ;;
-    3) stage_site_reset_stock ;;
-    4) return 0 ;;
-    *) fail "Неизвестный пункт меню" ;;
-  esac
-}
-
-mtproto_require(){
-  uses_mtproto || fail "MTProto не включён в текущем профиле сервера."
-  [[ -f /opt/mtprotoproxy/config.py ]] || fail "MTProto config не найден: /opt/mtprotoproxy/config.py"
-}
-
-mtproto_valid_user_name(){
-  [[ "${1:-}" =~ ^[A-Za-z0-9_-]{1,32}$ ]]
-}
-
-mtproto_backup(){
-  local ts backup_dir
-  ts="$(date +%Y%m%d-%H%M%S)"
-  backup_dir="/root/manual-backups/mtproto-users-${ts}"
-  mkdir -p "$backup_dir"
-  chmod 700 "$backup_dir"
-  cp -a /opt/mtprotoproxy/config.py "$backup_dir/config.py"
-  cp -a /root/secure-notes/*mtproto* "$backup_dir/" 2>/dev/null || true
-  prune_keep_latest /root/manual-backups 'mtproto-users-*' 4
-  echo "$backup_dir"
-}
-
-mtproto_python_update(){
-  local action="$1" user="${2:-}"
-  XPAM_MTPROTO_ACTION="$action" XPAM_MTPROTO_USER="$user" XPAM_SYNC_DOMAIN="$SYNC_DOMAIN" XPAM_SERVER_PREFIX="$SERVER_PREFIX" python3 <<'PY_MTPROTO_USERS'
-import importlib.util, os, pathlib, re, secrets, sys
-from collections import OrderedDict
-
-path=pathlib.Path('/opt/mtprotoproxy/config.py')
-action=os.environ['XPAM_MTPROTO_ACTION']
-user=os.environ.get('XPAM_MTPROTO_USER','')
-domain=os.environ['XPAM_SYNC_DOMAIN']
-prefix=os.environ['XPAM_SERVER_PREFIX']
-notes=pathlib.Path('/root/secure-notes')
-users_note=notes / f'{prefix}-mtproto-users.txt'
-legacy_note=notes / f'{prefix}-mtproto.txt'
-
-spec=importlib.util.spec_from_file_location('mtproto_config', str(path))
-cfg=importlib.util.module_from_spec(spec)
-spec.loader.exec_module(cfg)
-users=OrderedDict((str(k), str(v)) for k,v in getattr(cfg,'USERS',{}).items())
-limits=dict(getattr(cfg,'USER_MAX_TCP_CONNS',{}))
-exp=dict(getattr(cfg,'USER_EXPIRATIONS',{}))
-quota=dict(getattr(cfg,'USER_DATA_QUOTA',{}))
-
-def fail(msg):
-    print('ERROR:', msg, file=sys.stderr)
-    sys.exit(1)
-
-def validate_users():
-    if not users:
-        fail('USERS is empty; at least one MTProto user is required')
-    for name, sec in users.items():
-        if not re.fullmatch(r'[A-Za-z0-9_-]{1,32}', name):
-            fail(f'bad MTProto user name: {name}')
-        if not re.fullmatch(r'[0-9a-fA-F]{32}', sec):
-            fail(f'bad MTProto secret format for user {name}')
-
-def py_dict(d):
-    items=[]
-    for k,v in d.items():
-        items.append(f'{k!r}: {v!r}')
-    return '{ ' + ', '.join(items) + ' }'
-
-def replace_or_append(text, name, value):
-    line=f'{name} = {value}'
-    pattern=re.compile(rf'^{name}\s*=.*$', re.M)
-    if pattern.search(text):
-        return pattern.sub(line, text)
-    return text.rstrip()+f'\n{line}\n'
-
-def link_for(sec):
-    return f'tg://proxy?server={domain}&port=443&secret=ee{sec}{domain.encode().hex()}'
-
-def write_notes():
-    notes.mkdir(mode=0o700, parents=True, exist_ok=True)
-    body=['MTProto users for XPAM Script','==================================================','']
-    for name, sec in users.items():
-        body.append(f'User: {name}')
-        body.append(f'Link: {link_for(sec)}')
-        body.append('')
-    users_note.write_text('\n'.join(body), encoding='utf-8')
-    users_note.chmod(0o600)
-    first_name = prefix if prefix in users else next(iter(users))
-    legacy_note.write_text('MTProto proxy for XPAM Script\n==================================================\nLink: '+link_for(users[first_name])+'\n', encoding='utf-8')
-    legacy_note.chmod(0o600)
-
-if action == 'list':
-    validate_users()
-    for name, sec in users.items():
-        print(f'{name}\t{sec[:4]}...[REDACTED]...{sec[-4:]}')
-    sys.exit(0)
-
-if action == 'show-link':
-    validate_users()
-    if user not in users:
-        fail(f'MTProto user not found: {user}')
-    print(link_for(users[user]))
-    sys.exit(0)
-
-if action == 'add':
-    if not re.fullmatch(r'[A-Za-z0-9_-]{1,32}', user):
-        fail('bad user name; use letters, digits, underscore or dash, max 32 chars')
-    if user in users:
-        fail(f'MTProto user already exists: {user}')
-    users[user]=secrets.token_hex(16)
-elif action == 'delete':
-    validate_users()
-    if user not in users:
-        fail(f'MTProto user not found: {user}')
-    if len(users) <= 1:
-        fail('cannot delete the last MTProto user')
-    users.pop(user, None)
-    limits.pop(user, None); exp.pop(user, None); quota.pop(user, None)
-elif action == 'regen':
-    validate_users()
-    if user not in users:
-        fail(f'MTProto user not found: {user}')
-    users[user]=secrets.token_hex(16)
-elif action == 'rewrite-notes':
-    validate_users()
-else:
-    fail(f"unknown action: {action}")
-
-validate_users()
-text=path.read_text(encoding='utf-8')
-text=replace_or_append(text, 'USERS', py_dict(users))
-text=replace_or_append(text, 'USER_MAX_TCP_CONNS', py_dict(limits))
-text=replace_or_append(text, 'USER_EXPIRATIONS', py_dict(exp))
-text=replace_or_append(text, 'USER_DATA_QUOTA', py_dict(quota))
-path.write_text(text, encoding='utf-8')
-path.chmod(0o600)
-# Import again after write to validate syntax/runtime.
-spec=importlib.util.spec_from_file_location('mtproto_config_new', str(path))
-new_cfg=importlib.util.module_from_spec(spec)
-spec.loader.exec_module(new_cfg)
-write_notes()
-if action in {'add','regen'}:
-    print(link_for(users[user]))
-else:
-    print('OK')
-PY_MTPROTO_USERS
-}
-
-mtproto_restart_check(){
-  systemctl restart mtprotoproxy
-  systemctl is-active --quiet mtprotoproxy || fail "mtprotoproxy is not active after restart"
-  ok "mtprotoproxy active"
-  if [[ -x "/usr/local/sbin/${SERVER_PREFIX}-health" ]]; then
-    run_health_quiet "mtproto-users"
-  fi
-}
-
-mtproto_list_users(){
-  need_root; load_config; validate_inputs; mtproto_require
-  echo "MTProto пользователи:"
-  echo
-  local printed=0
-  mtproto_python_update list | while IFS=$'\t' read -r name masked; do
-    [[ -n "$name" ]] || continue
-    if [[ "$printed" == "1" ]]; then
-      echo
-    fi
-    printed=1
-    echo "username: $name"
-    echo "key: $masked"
-  done
-}
-
-mtproto_add_user(){
-  need_root; load_config; validate_inputs; mtproto_require
-  local user backup_dir link
-  read -r -p "Введите имя нового MTProto пользователя [a-z A-Z 0-9 _ -]: " user || true
-  mtproto_valid_user_name "$user" || fail "Имя пользователя должно содержать только буквы, цифры, _ или -, максимум 32 символа"
-  backup_dir="$(mtproto_backup)"
-  ok "Backup MTProto config создан: $backup_dir"
-  link="$(mtproto_python_update add "$user")"
-  mtproto_restart_check
-  echo
-  warn "Это приватная ссылка подключения. Не отправляйте её в публичные чаты, тикеты, скриншоты и логи."
-  echo "username: $user"
-  echo "link: $link"
-}
-
-mtproto_show_user_link(){
-  need_root; load_config; validate_inputs; mtproto_require
-  mtproto_list_users
-  local user link
-  read -r -p "Введите имя MTProto пользователя: " user || true
-  mtproto_valid_user_name "$user" || fail "Некорректное имя пользователя"
-  link="$(mtproto_python_update show-link "$user")"
-  echo
-  warn "Это приватная ссылка подключения. Не отправляйте её в публичные чаты, тикеты, скриншоты и логи."
-  echo "username: $user"
-  echo "link: $link"
-}
-
-mtproto_delete_user(){
-  need_root; load_config; validate_inputs; mtproto_require
-  mtproto_list_users
-  local user confirm backup_dir
-  read -r -p "Введите имя MTProto пользователя для удаления: " user || true
-  mtproto_valid_user_name "$user" || fail "Некорректное имя пользователя"
-  read -r -p "Для подтверждения введите delete-${user}: " confirm || true
-  [[ "$confirm" == "delete-${user}" ]] || fail "Удаление отменено"
-  backup_dir="$(mtproto_backup)"
-  ok "Backup MTProto config создан: $backup_dir"
-  mtproto_python_update delete "$user" >/dev/null
-  mtproto_restart_check
-  ok "MTProto пользователь удалён: $user"
-}
-
-mtproto_regenerate_user_key(){
-  need_root; load_config; validate_inputs; mtproto_require
-  mtproto_list_users
-  local user confirm backup_dir link
-  read -r -p "Введите имя MTProto пользователя для замены ключа: " user || true
-  mtproto_valid_user_name "$user" || fail "Некорректное имя пользователя"
-  warn "Старый MTProto link этого пользователя перестанет работать."
-  read -r -p "Для подтверждения введите regen-${user}: " confirm || true
-  [[ "$confirm" == "regen-${user}" ]] || fail "Замена ключа отменена"
-  backup_dir="$(mtproto_backup)"
-  ok "Backup MTProto config создан: $backup_dir"
-  link="$(mtproto_python_update regen "$user")"
-  mtproto_restart_check
-  echo
-  warn "Это приватная ссылка подключения. Не отправляйте её в публичные чаты, тикеты, скриншоты и логи."
-  echo "username: $user"
-  echo "new link: $link"
-}
-
-print_tg_summary(){
-  local mt_note mt_users_note
-  mt_note="/root/secure-notes/${SERVER_PREFIX}-mtproto.txt"
-  mt_users_note="/root/secure-notes/${SERVER_PREFIX}-mtproto-users.txt"
-  echo
-  echo "============================================================"
-  echo "MTProto-подключение"
-  echo "============================================================"
-  echo
-  echo "Эта команда по умолчанию НЕ печатает MTProto-ссылки, чтобы случайно не раскрыть доступ."
-  echo
-  echo "Файлы с MTProto-данными:"
-  [[ -f "$mt_note" ]] && echo "  Основная ссылка:       $mt_note"
-  [[ -f "$mt_users_note" ]] && echo "  Пользователи:          $mt_users_note"
-  echo
-  echo "Показать MTProto-ссылки на экран:"
-  echo "  sudo ${SERVER_PREFIX}-tg --show"
-  echo
-  echo "Управлять MTProto-пользователями:"
-  echo "  sudo ${SERVER_PREFIX}-tg --manage"
-  echo
-  echo "Проверить сервер:"
-  echo "  sudo ${SERVER_PREFIX}-health"
-  echo "============================================================"
-}
-
-mtproto_show_all_links(){
-  need_root; load_config; validate_inputs; mtproto_require
-  local mt_users_note mt_note
-  mt_users_note="/root/secure-notes/${SERVER_PREFIX}-mtproto-users.txt"
-  mt_note="/root/secure-notes/${SERVER_PREFIX}-mtproto.txt"
-  warn "Ниже будут показаны приватные MTProto-ссылки. Не отправляйте их в публичные чаты, тикеты, скриншоты и логи."
-  if [[ -s "$mt_users_note" ]]; then
-    cat "$mt_users_note"
-  elif [[ -s "$mt_note" ]]; then
-    cat "$mt_note"
-  else
-    fail "MTProto note file не найден. Выполните health или repair."
-  fi
-}
-
-stage_tg_direct(){
-  need_root
-  load_config
-  validate_inputs
-  mtproto_require
-  case "${1:-}" in
-    --show)
-      mtproto_show_all_links
-      ;;
-    --manage)
-      stage_mtproto_users_menu
-      ;;
-    --list)
-      mtproto_list_users
-      ;;
-    ""|--help|-h)
-      print_tg_summary
-      ;;
-    *)
-      fail "Неизвестный параметр. Используйте: sudo ${SERVER_PREFIX}-tg, sudo ${SERVER_PREFIX}-tg --show или sudo ${SERVER_PREFIX}-tg --manage"
-      ;;
-  esac
-}
-
-stage_mtproto_users_menu(){
-  need_root
-  load_config
-  validate_inputs
-  mtproto_require
-  echo "MTProto пользователи"
-  echo "1) Показать список пользователей"
-  echo "2) Добавить пользователя"
-  echo "3) Показать ссылку пользователя"
-  echo "4) Удалить пользователя"
-  echo "5) Перегенерировать ключ пользователя"
-  echo "6) Выйти"
-  local choice
-  read -r -p "Выберите пункт [1-6]: " choice || true
-  case "$choice" in
-    1) mtproto_list_users ;;
-    2) mtproto_add_user ;;
-    3) mtproto_show_user_link ;;
-    4) mtproto_delete_user ;;
-    5) mtproto_regenerate_user_key ;;
-    6) return 0 ;;
-    *) fail "Неизвестный пункт меню" ;;
-  esac
-}
-
 stage_show_details(){
   need_root
   load_config
@@ -5259,6 +3617,8 @@ stage_repair(){
   echo "не удаляет пользователей и не переписывает /etc/network/interfaces."
   echo
   say "Repair XPAM service policy"
+  install_runtime_kit || true
+  write_install_launcher || true
   verify_ssh_preflight || true
   setup_dns_policy || true
   apply_network_tuning_policy || true
@@ -5267,11 +3627,14 @@ stage_repair(){
   write_certbot_hook || true
   write_health_weekly || true
   xui_assert_sqlite_backend
+  xui_ensure_api_token || true
   xui_enforce_direct_ipv4_bind || true
   apply_service_hygiene || true
   nginx -t >/dev/null 2>&1 && systemctl reload nginx || systemctl restart nginx || true
   systemctl try-restart x-ui || true
   if uses_mtproto; then
+    mtproto_harden_config || true
+    mtproto_python_update rewrite-notes >/dev/null 2>&1 || true
     systemctl try-restart mtprotoproxy || true
     systemctl try-reload-or-restart haproxy || true
   fi
@@ -5389,3 +3752,22 @@ main_menu(){
   esac
   exit 0
 }
+
+# Source feature modules after defining base core helpers. Modules must only define
+# functions at source time; install/menu execution starts from install.sh after this file
+# has been fully sourced. xpam-xui.sh is intentionally sourced last because it acts as
+# the 3x-ui compatibility layer and may override volatile upstream integration points.
+for _xpam_lib in \
+  "$KIT_DIR/scripts/lib/xpam-launchers.sh" \
+  "$KIT_DIR/scripts/lib/xpam-maintenance.sh" \
+  "$KIT_DIR/scripts/lib/xpam-notify.sh" \
+  "$KIT_DIR/scripts/lib/xpam-mtproto.sh" \
+  "$KIT_DIR/scripts/lib/xpam-sites.sh" \
+  "$KIT_DIR/scripts/lib/xpam-xui.sh"
+do
+  if [[ -f "$_xpam_lib" ]]; then
+    # shellcheck source=/dev/null
+    source "$_xpam_lib"
+  fi
+done
+unset _xpam_lib
