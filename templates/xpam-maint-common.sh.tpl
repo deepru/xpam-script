@@ -335,12 +335,32 @@ xpam_disk_inode_check(){
 }
 xpam_kernel_reboot_check(){
     echo; echo "===== KERNEL / REBOOT CHECK ====="
-    local running newest
+    local running newest marker marker_boot current_boot
     running="$(uname -r)"
     newest="$(ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's#^/boot/vmlinuz-##' | sort -V | tail -1 || true)"
     echo "Running kernel: $running"; echo "Newest installed kernel: ${newest:-unknown}"
-    if [ -f /var/run/reboot-required ]; then echo "WARNING: /var/run/reboot-required exists"; cat /var/run/reboot-required.pkgs 2>/dev/null || true; return 1; fi
-    if [ -n "${newest:-}" ] && [ "$running" != "$newest" ]; then echo "WARNING: reboot recommended to load newest installed kernel"; return 1; fi
+    if [ -f /var/run/reboot-required ]; then
+        echo "WARNING: /var/run/reboot-required exists"
+        cat /var/run/reboot-required.pkgs 2>/dev/null || true
+        return 1
+    fi
+    if [ -n "${newest:-}" ] && [ "$running" != "$newest" ]; then
+        echo "WARNING: reboot recommended to load newest installed kernel"
+        return 1
+    fi
+    marker="/var/lib/xpam-script/reboot-sensitive-upgrades"
+    if [ -s "$marker" ]; then
+        marker_boot="$(awk -F= '$1=="boot_id"{print $2; exit}' "$marker" 2>/dev/null || true)"
+        current_boot="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
+        if [ -n "$marker_boot" ] && [ -n "$current_boot" ] && [ "$marker_boot" != "$current_boot" ]; then
+            rm -f "$marker" 2>/dev/null || true
+            echo "OK: stale sensitive package upgrade marker cleared after reboot"
+        else
+            echo "WARNING: sensitive packages changed during this boot; reboot recommended"
+            awk 'BEGIN{show=0} /^packages:/{show=1; next} show{print "  " $0}' "$marker" 2>/dev/null || true
+            return 1
+        fi
+    fi
     echo "OK: running kernel matches newest installed kernel"
 }
 
@@ -638,6 +658,107 @@ print('OK: UFW expected policy looks correct')
 EOF_PY_UFW
 }
 
+xpam_haproxy_mtproto_journal_check(){
+    local cfg="$1" fail=0 since log tmp_log
+    [ -f "$cfg" ] || { echo "FAIL: XPAM config missing for HAProxy journal check: $cfg"; return 1; }
+    # shellcheck disable=SC1090
+    . "$cfg"
+    [ "${PROFILE:-}" = "vless_direct" ] && { echo "OK: HAProxy/MTProto backend journal check skipped for direct VLESS profile"; return 0; }
+
+    since="$(systemctl show -p ActiveEnterTimestamp --value haproxy.service 2>/dev/null || true)"
+    [ -n "$since" ] || since="now"
+
+    tmp_log="$(mktemp)" || { echo "FAIL: cannot create temporary journal file"; return 1; }
+    journalctl -u haproxy -u mtprotoproxy --since "$since" --no-pager 2>/dev/null \
+        | grep -Eiv "Current worker .*exited with code 143|Exiting Master process|All workers exited|Deactivated successfully|Stopping haproxy.service|Stopped haproxy.service|Started haproxy.service|Starting haproxy.service|Loading success|New worker|haproxy version is|path to executable is|Reloading haproxy.service|Reloaded haproxy.service" \
+        >"$tmp_log" || true
+
+    if grep -Eiq "Bad secret|Changing it to [0-9a-fA-F]{32}|\\bALERT\\b|\\bFATAL\\b|cannot bind|configuration file is invalid|Traceback|Unhandled|panic" "$tmp_log"; then
+        echo "FAIL: fatal HAProxy/MTProto journal events found in current HAProxy activation journal"
+        grep -Ei "Bad secret|Changing it to [0-9a-fA-F]{32}|\\bALERT\\b|\\bFATAL\\b|cannot bind|configuration file is invalid|Traceback|Unhandled|panic" "$tmp_log" | tail -20
+        rm -f "$tmp_log"
+        return 1
+    fi
+
+    python3 - "$tmp_log" "${XRAY_LOCAL_PORT:-}" "${MTPROTO_PORT:-}" <<'PY_HAPROXY_RECOVERY'
+import re, socket, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+xray_port = sys.argv[2]
+mtproto_port = sys.argv[3]
+lines = path.read_text(errors='ignore').splitlines() if path.exists() else []
+
+def reachable(port_s):
+    try:
+        port = int(port_s)
+    except Exception:
+        return False
+    try:
+        with socket.create_connection(('127.0.0.1', port), timeout=2):
+            return True
+    except OSError:
+        return False
+
+backend = {
+    'be_xray': {'name': 'be_xray/xray', 'port': xray_port, 'down': [], 'up': []},
+    'be_mtproto': {'name': 'be_mtproto/mtproto', 'port': mtproto_port, 'down': [], 'up': []},
+}
+
+def is_down_event(key, line):
+    ll = line.lower()
+    if key not in line:
+        return False
+    return (
+        ' is down' in ll or
+        'no server available' in ll or
+        '<nosrv>' in ll or
+        'layer4 connection problem' in ll or
+        'connection refused' in ll or
+        'has no server' in ll
+    )
+
+def is_up_event(key, line):
+    ll = line.lower()
+    return key in line and ' is up' in ll
+
+for idx, line in enumerate(lines):
+    for key in backend:
+        if is_down_event(key, line):
+            backend[key]['down'].append((idx, line))
+        if is_up_event(key, line):
+            backend[key]['up'].append((idx, line))
+
+fail = False
+any_event = False
+for key, data in backend.items():
+    if not data['down']:
+        continue
+    any_event = True
+    last_down_idx, last_down_line = data['down'][-1]
+    recovered_by_journal = any(idx > last_down_idx for idx, _ in data['up'])
+    current_ok = reachable(data['port'])
+    if recovered_by_journal and current_ok:
+        print(f"INFO: HAProxy {data['name']} had transient DOWN/no-server events after current HAProxy activation")
+        print(f"OK: HAProxy {data['name']} recovered in journal and local port 127.0.0.1:{data['port']} is reachable")
+    elif current_ok:
+        print(f"INFO: HAProxy {data['name']} had historical DOWN/no-server events after current HAProxy activation")
+        print(f"OK: HAProxy {data['name']} local port 127.0.0.1:{data['port']} is currently reachable")
+    else:
+        print(f"FAIL: HAProxy {data['name']} has unrecovered backend failure and local port 127.0.0.1:{data['port']} is not reachable")
+        print("Recent matching HAProxy event:")
+        print(last_down_line)
+        fail = True
+if not any_event:
+    print("OK: no HAProxy/MTProto backend failure events in current HAProxy activation journal")
+else:
+    print("OK: HAProxy/MTProto backend journal classification completed")
+sys.exit(1 if fail else 0)
+PY_HAPROXY_RECOVERY
+    fail=$?
+    rm -f "$tmp_log"
+    return "$fail"
+}
+
 xpam_startup_order_check(){
     local cfg="$1" fail=0
     # shellcheck disable=SC1090
@@ -654,15 +775,224 @@ xpam_startup_order_check(){
     /usr/local/sbin/wait-for-local-port.sh 127.0.0.1 "$SYNC_BACKEND_PORT" 3 sync-backend >/dev/null 2>&1 && echo "OK: local ${SYNC_BACKEND_PORT} reachable" || { echo "FAIL: local ${SYNC_BACKEND_PORT} not reachable"; fail=1; }
     /usr/local/sbin/wait-for-local-port.sh 127.0.0.1 "$XRAY_LOCAL_PORT" 3 xray-local >/dev/null 2>&1 && echo "OK: local ${XRAY_LOCAL_PORT} reachable" || { echo "FAIL: local ${XRAY_LOCAL_PORT} not reachable"; fail=1; }
     /usr/local/sbin/wait-for-local-port.sh 127.0.0.1 "$MTPROTO_PORT" 3 mtproto-local >/dev/null 2>&1 && echo "OK: local ${MTPROTO_PORT} reachable" || { echo "FAIL: local ${MTPROTO_PORT} not reachable"; fail=1; }
-    _haproxy_since="$(systemctl show -p ActiveEnterTimestamp --value haproxy.service 2>/dev/null || true)"
-    if [ -z "$_haproxy_since" ]; then _haproxy_since="now"; fi
-    if journalctl -u haproxy -u mtprotoproxy --since "$_haproxy_since" --no-pager 2>/dev/null \
-        | grep -Eiv "Current worker .*exited with code 143|Exiting Master process|All workers exited|Deactivated successfully|Stopping haproxy.service|Stopped haproxy.service|Started haproxy.service|Starting haproxy.service|Loading success|New worker|haproxy version is|path to executable is" \
-        | grep -Eiq "no server available|backend be_mtproto has no server|backend be_xray has no server|Layer4 connection problem|Connection refused|Bad secret|Changing it to [0-9a-fA-F]{32}|failed|error"; then echo "FAIL: HAProxy/MTProto startup errors found in current HAProxy activation journal"; fail=1; else echo "OK: no HAProxy/MTProto startup errors in current HAProxy activation journal"; fi
+    if ! xpam_haproxy_mtproto_journal_check "$cfg"; then fail=1; fi
     [ "$fail" -eq 0 ] && echo "OK: startup order looks correct"
     return "$fail"
 }
 
+
+
+xpam_mtproto_config_invariant_check(){
+    local cfg="$1" fail=0
+    echo; echo "===== MTPROTO CONFIG INVARIANT CHECK ====="
+    [ -f "$cfg" ] || { echo "FAIL: XPAM config missing: $cfg"; return 1; }
+    # shellcheck disable=SC1090
+    . "$cfg"
+    [ "${PROFILE:-}" = "vless_direct" ] && { echo "OK: MTProto is not enabled in this profile; invariant check skipped"; return 0; }
+    python3 - "$cfg" <<'PY_MTPROTO_INVARIANTS'
+import importlib.util, pathlib, re, sys
+from pathlib import Path
+cfg={}
+for line in Path(sys.argv[1]).read_text(errors='ignore').splitlines():
+    if not line or line.startswith('#') or '=' not in line:
+        continue
+    k,v=line.split('=',1)
+    cfg[k]=v.strip().strip("'").strip('"')
+path=pathlib.Path('/opt/mtprotoproxy/config.py')
+errs=[]
+def ok(msg): print('OK: '+msg)
+def bad(msg): print('FAIL: '+msg); errs.append(msg)
+if not path.exists():
+    bad('MTProto config missing: /opt/mtprotoproxy/config.py')
+    raise SystemExit(1)
+try:
+    spec=importlib.util.spec_from_file_location('mtproto_config_health', str(path))
+    mod=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+except Exception as exc:
+    bad(f'cannot import MTProto config.py: {exc}')
+    raise SystemExit(1)
+
+def check(name, got, exp):
+    if got == exp:
+        ok(f'MTProto {name} = {exp!r}')
+    else:
+        bad(f'MTProto {name} expected {exp!r}, got {got!r}')
+try:
+    check('PORT', int(getattr(mod,'PORT',None)), int(cfg['MTPROTO_PORT']))
+except Exception:
+    bad('MTProto PORT is missing or not integer')
+check('TLS_DOMAIN', getattr(mod,'TLS_DOMAIN',None), cfg.get('SYNC_DOMAIN',''))
+modes=getattr(mod,'MODES',{})
+if isinstance(modes, dict) and modes.get('classic') is False and modes.get('secure') is False and modes.get('tls') is True:
+    ok('MTProto MODES classic=False secure=False tls=True')
+else:
+    bad(f'MTProto MODES expected classic=False secure=False tls=True, got {modes!r}')
+check('LISTEN_ADDR_IPV4', getattr(mod,'LISTEN_ADDR_IPV4',None), '127.0.0.1')
+if getattr(mod,'LISTEN_ADDR_IPV6',None) in (None, ''):
+    ok('MTProto LISTEN_ADDR_IPV6 is None/empty')
+else:
+    bad(f'MTProto LISTEN_ADDR_IPV6 expected None/empty, got {getattr(mod,"LISTEN_ADDR_IPV6",None)!r}')
+if getattr(mod,'MASK',None) is True:
+    ok('MTProto MASK=True')
+else:
+    bad(f'MTProto MASK expected True, got {getattr(mod,"MASK",None)!r}')
+check('MASK_HOST', getattr(mod,'MASK_HOST',None), '127.0.0.1')
+try:
+    check('MASK_PORT', int(getattr(mod,'MASK_PORT',None)), int(cfg['SYNC_BACKEND_PORT']))
+except Exception:
+    bad('MTProto MASK_PORT is missing or not integer')
+if getattr(mod,'PREFER_IPV6',None) is False:
+    ok('MTProto PREFER_IPV6=False')
+else:
+    bad(f'MTProto PREFER_IPV6 expected False, got {getattr(mod,"PREFER_IPV6",None)!r}')
+users=getattr(mod,'USERS',{})
+if isinstance(users, dict) and users:
+    bad_users=[]
+    for name, sec in users.items():
+        if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,32}', name):
+            bad_users.append(name)
+        if not isinstance(sec, str) or not re.fullmatch(r'[0-9a-fA-F]{32}', sec):
+            bad_users.append(name)
+    if bad_users:
+        bad('MTProto USERS contains invalid user name or secret format')
+    else:
+        ok(f'MTProto USERS count = {len(users)}')
+else:
+    bad('MTProto USERS is empty or not a dict')
+if errs:
+    raise SystemExit(1)
+print('OK: MTProto config invariants look correct')
+PY_MTPROTO_INVARIANTS
+    fail=$?
+    return "$fail"
+}
+
+xpam_mtproto_public_fallback_check(){
+    local cfg="$1" server_ipv4 code fail=0
+    echo; echo "===== MTPROTO PUBLIC FALLBACK CHECK ====="
+    [ -f "$cfg" ] || { echo "FAIL: XPAM config missing: $cfg"; return 1; }
+    # shellcheck disable=SC1090
+    . "$cfg"
+    [ "${PROFILE:-}" = "vless_direct" ] && { echo "OK: MTProto is not enabled in this profile; public fallback check skipped"; return 0; }
+    server_ipv4="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}')"
+    if [ -z "$server_ipv4" ]; then
+        echo "FAIL: could not detect server IPv4 for curl --resolve test"
+        return 1
+    fi
+    code="$(curl -4ksS --connect-timeout 5 --max-time 15 -o /dev/null -w '%{http_code}' --resolve "${SYNC_DOMAIN}:443:${server_ipv4}" "https://${SYNC_DOMAIN}/health" 2>/dev/null || true)"
+    if [ "$code" = "200" ]; then
+        echo "OK: MTProto public fallback --resolve ${SYNC_DOMAIN}:443:${server_ipv4} /health HTTP 200"
+    else
+        echo "FAIL: MTProto public fallback --resolve expected HTTP 200, got ${code:-000}"
+        fail=1
+    fi
+    return "$fail"
+}
+
+xpam_mtproto_local_tls_backend_check(){
+    local cfg="$1" out cert san fail=0
+    echo; echo "===== MTPROTO LOCAL TLS BACKEND CHECK ====="
+    [ -f "$cfg" ] || { echo "FAIL: XPAM config missing: $cfg"; return 1; }
+    # shellcheck disable=SC1090
+    . "$cfg"
+    [ "${PROFILE:-}" = "vless_direct" ] && { echo "OK: MTProto is not enabled in this profile; local TLS backend check skipped"; return 0; }
+    out="$(mktemp /tmp/xpam-mtproto-local-tls.XXXXXX)"
+    if timeout 12s openssl s_client -tls1_3 -connect "127.0.0.1:${SYNC_BACKEND_PORT}" -servername "$SYNC_DOMAIN" -showcerts </dev/null >"$out" 2>&1; then
+        echo "OK: MTProto local TLS backend handshake succeeded: 127.0.0.1:${SYNC_BACKEND_PORT} SNI ${SYNC_DOMAIN}"
+    else
+        echo "FAIL: MTProto local TLS backend TLS 1.3 handshake failed"
+        sed -n '1,40p' "$out" | sed 's/^/  /' || true
+        rm -f "$out"
+        return 1
+    fi
+    if grep -Eq 'TLSv1\.3|Protocol[ :]+TLSv1\.3' "$out"; then
+        echo "OK: MTProto local TLS backend uses TLSv1.3"
+    else
+        echo "FAIL: MTProto local TLS backend did not report TLSv1.3"
+        fail=1
+    fi
+    cert="$(awk '/BEGIN CERTIFICATE/{flag=1} flag{print} /END CERTIFICATE/{exit}' "$out")"
+    if [ -n "$cert" ]; then
+        san="$(printf '%s\n' "$cert" | openssl x509 -noout -ext subjectAltName 2>/dev/null || true)"
+        if printf '%s\n' "$san" | grep -Fq "DNS:${SYNC_DOMAIN}"; then
+            echo "OK: MTProto local TLS backend certificate SAN includes ${SYNC_DOMAIN}"
+        else
+            echo "FAIL: MTProto local TLS backend certificate SAN does not include ${SYNC_DOMAIN}"
+            fail=1
+        fi
+    else
+        echo "FAIL: MTProto local TLS backend certificate was not captured"
+        fail=1
+    fi
+    rm -f "$out"
+    return "$fail"
+}
+
+xpam_xui_api_token_check(){
+    local cfg="$1" fail=0 file mode owner
+    echo; echo "===== 3X-UI API TOKEN CHECK ====="
+    [ -f "$cfg" ] || { echo "FAIL: XPAM config missing: $cfg"; return 1; }
+    # shellcheck disable=SC1090
+    . "$cfg"
+    file="/etc/xpam-script/x-ui-api-token"
+    if [ ! -f "$file" ]; then
+        echo "FAIL: 3x-ui API token storage missing: $file"
+        return 1
+    fi
+    mode="$(stat -c '%a' "$file" 2>/dev/null || echo unknown)"
+    owner="$(stat -c '%U:%G' "$file" 2>/dev/null || echo unknown)"
+    if [ "$owner" = "root:root" ]; then echo "OK: 3x-ui API token owner root:root"; else echo "FAIL: 3x-ui API token owner expected root:root, got $owner"; fail=1; fi
+    if [ "$mode" = "600" ]; then echo "OK: 3x-ui API token permissions 600"; else echo "FAIL: 3x-ui API token permissions expected 600, got $mode"; fail=1; fi
+    python3 - "$cfg" "$file" <<'PY_XPAM_XUI_HEALTH_TOKEN'
+import json, ssl, sys, urllib.request
+from pathlib import Path
+cfg_path=Path(sys.argv[1])
+token_path=Path(sys.argv[2])
+cfg={}
+for line in cfg_path.read_text(errors='ignore').splitlines():
+    if not line or line.startswith('#') or '=' not in line:
+        continue
+    k,v=line.split('=',1)
+    cfg[k]=v.strip().strip('"').strip("'")
+try:
+    token=token_path.read_text(errors='ignore').splitlines()[0].strip()
+except Exception:
+    print('FAIL: 3x-ui API token storage is not readable')
+    sys.exit(1)
+if not token:
+    print('FAIL: 3x-ui API token storage is empty')
+    sys.exit(1)
+port=cfg.get('XUI_PANEL_PORT','57827')
+path=cfg.get('PANEL_PATH','').strip('/')
+url=f'https://127.0.0.1:{port}/{path}/panel/api/inbounds/list'
+ctx=ssl._create_unverified_context()
+req=urllib.request.Request(url, headers={
+    'Authorization':'Bearer '+token,
+    'Accept':'application/json',
+    'User-Agent':'XPAM-Script/health'
+})
+try:
+    with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+        body=resp.read(1024*1024).decode('utf-8','replace')
+except Exception as exc:
+    print('FAIL: 3x-ui API token Bearer check failed')
+    sys.exit(1)
+try:
+    data=json.loads(body)
+except Exception:
+    print('FAIL: 3x-ui API token Bearer check returned non-JSON response')
+    sys.exit(1)
+if data.get('success') is True:
+    print('OK: 3x-ui API token Bearer check passed')
+    sys.exit(0)
+print('FAIL: 3x-ui API token Bearer check did not return success=true')
+sys.exit(1)
+PY_XPAM_XUI_HEALTH_TOKEN
+    if [ $? -ne 0 ]; then fail=1; fi
+    [ "$fail" -eq 0 ] && echo "OK: 3x-ui API token storage usable"
+    return "$fail"
+}
 xpam_xui_xray_config_check(){
     local cfg="$1"
     echo; echo "===== 3X-UI / XRAY CONFIG CHECK ====="

@@ -14,8 +14,14 @@ if [[ "${1:-}" != "--deep" ]]; then
   echo "===== XPAM HEALTH: {{SERVER_PREFIX_UP}} ====="
   date
   echo
+
+  warn_tmp="$(mktemp 2>/dev/null || true)"
+  if [[ -n "$warn_tmp" ]]; then
+    grep -E '^WARN: ' "$LOG" 2>/dev/null       | grep -Ev 'HAProxy .*historical DOWN/no-server|HAProxy .*transient DOWN/no-server|provider networking.service issue'       >"$warn_tmp" || true
+  fi
+
   if [[ $rc -eq 0 ]]; then
-    if grep -q 'OK WITH WARNINGS' "$LOG" 2>/dev/null || grep -q 'provider networking.service issue' "$LOG" 2>/dev/null; then
+    if [[ -n "$warn_tmp" && -s "$warn_tmp" ]]; then
       echo "Статус: OK WITH WARNINGS"
     else
       echo "Статус: OK"
@@ -24,15 +30,44 @@ if [[ "${1:-}" != "--deep" ]]; then
     echo "Статус: FAIL"
   fi
   echo
-  grep -E '^(OK|WARN|FAIL): (failed systemd units|failed systemd unit|rc-local.service|services summary|networking.service|DNS-проверка|TLS|UFW|port exposure|3x-ui backend|3x-ui/Xray|WARP|disk|swap|running kernel|сервер|service hygiene|config snapshot|network tuning policy)' "$LOG" 2>/dev/null | tail -40 || true
-  if [[ $rc -ne 0 ]]; then
-    echo
+
+  qok(){
+    local label="$1" pattern="$2"
+    if grep -Eq "$pattern" "$LOG" 2>/dev/null; then
+      echo "OK: $label"
+    fi
+  }
+
+  if [[ $rc -eq 0 ]]; then
+    qok "services" '^OK: services summary$'
+    qok "firewall" '^OK: UFW expected policy looks correct$'
+    qok "3x-ui / Xray" '^OK: 3x-ui / Xray config looks correct$'
+    if grep -Eq '^OK: MTProto config invariants look correct$|^OK: MTProto is not enabled in this profile; invariant check skipped$' "$LOG" 2>/dev/null; then
+      echo "OK: MTProto"
+    fi
+    qok "TLS certificates" '^OK: TLS certificate consistency looks correct$'
+    qok "public ports" '^OK: port exposure policy looks correct$'
+    qok "DNS" '^OK: DNS-проверка пройдена$'
+    qok "kernel/reboot" '^OK: running kernel matches newest installed kernel$'
+    if grep -Eq '^OK: service hygiene looks correct$' "$LOG" 2>/dev/null && grep -Eq '^OK: config snapshot freshness looks good$' "$LOG" 2>/dev/null; then
+      echo "OK: maintenance policy"
+    fi
+    qok "network tuning" '^OK: network tuning policy looks correct$'
+
+    if [[ -n "$warn_tmp" && -s "$warn_tmp" ]]; then
+      echo
+      echo "Предупреждения:"
+      head -n 8 "$warn_tmp"
+    fi
+  else
     echo "Причины FAIL:"
     grep -E '^(FAIL|ERROR): ' "$LOG" 2>/dev/null | head -n 12 || true
     echo
     echo "Последние строки подробного лога:"
     tail -n 50 "$LOG" 2>/dev/null || true
   fi
+
+  [[ -n "$warn_tmp" ]] && rm -f "$warn_tmp" 2>/dev/null || true
   echo
   echo "Подробный лог: $LOG"
   echo "Для полной диагностики выполните: sudo {{SERVER_PREFIX}}-health --deep"
@@ -84,7 +119,13 @@ check_http "{{PRIMARY_DOMAIN}} panel path" 401 "https://{{PRIMARY_DOMAIN}}/{{PAN
 sshd -T -C user=root,host=localhost,addr=127.0.0.1 2>/dev/null | grep -q '^passwordauthentication no$' && echo "OK: SSH password auth disabled" || warn_fail "SSH password auth not disabled"
 if journalctl -u mtprotoproxy.service --no-pager -n 100 2>/dev/null | grep -Eiq 'tg://proxy|secret='; then warn_fail "possible MTProto secret in recent journal"; else echo "OK: no MTProto secret in recent journal"; fi
 if ! xpam_startup_order_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-startup-order-fail" "[$(xpam_server_label $XPAM_PREFIX)] HAProxy/MTProto startup order check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi
+if [[ "${PROFILE:-}" != "vless_direct" ]]; then
+  if ! xpam_mtproto_config_invariant_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-mtproto-invariants-fail" "[$(xpam_server_label $XPAM_PREFIX)] MTProto config invariant check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi
+  if ! xpam_mtproto_public_fallback_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-mtproto-public-fallback-fail" "[$(xpam_server_label $XPAM_PREFIX)] MTProto public fallback check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi
+  if ! xpam_mtproto_local_tls_backend_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-mtproto-local-tls-fail" "[$(xpam_server_label $XPAM_PREFIX)] MTProto local TLS backend check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi
+fi
 if ! xpam_xui_xray_config_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-xui-xray-config-fail" "[$(xpam_server_label $XPAM_PREFIX)] 3x-ui/Xray config check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi
+if ! xpam_xui_api_token_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-xui-api-token-fail" "[$(xpam_server_label $XPAM_PREFIX)] 3x-ui API token check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi
 if ! xpam_tls_cert_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-tls-cert-fail" "[$(xpam_server_label $XPAM_PREFIX)] TLS certificate check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi
 if ! xpam_port_exposure_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-port-exposure-fail" "[$(xpam_server_label $XPAM_PREFIX)] port exposure check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi
 if ! xpam_service_hygiene_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-service-hygiene-fail" "[$(xpam_server_label $XPAM_PREFIX)] service hygiene check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi

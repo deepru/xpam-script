@@ -8,6 +8,12 @@ sudo <prefix>-health
 
 It validates the server from the operator’s point of view.
 
+The normal health output is intentionally compact. Full diagnostics are available through:
+
+```bash
+sudo <prefix>-health --deep
+```
+
 ---
 
 ## Main checks
@@ -19,27 +25,30 @@ The health script checks:
 - x-ui service;
 - fail2ban;
 - certbot timer;
-- UFW;
+- UFW/firewall policy;
 - cron;
 - SSH config syntax;
 - SSH service/socket;
 - HAProxy and MTProto, when used;
-- HTTP routes;
+- HAProxy/MTProto startup ordering;
+- public HTTP/HTTPS routes;
 - Basic Auth panel path response;
 - MTProto secret leakage in recent journal;
-- systemd startup ordering;
-- 3x-ui database settings;
+- 3x-ui database settings and schema compatibility;
 - Xray generated config;
+- 3x-ui API token storage and Bearer access;
 - TLS certificate consistency;
 - public and loopback port exposure;
+- optional WARP state;
+- Telegram Relay, when configured;
 - service hygiene;
 - config snapshot freshness;
 - disk and inode usage;
 - swap policy;
 - kernel/reboot requirement;
-- DNS policy;
+- DNS/provider behavior;
 - network tuning;
-- Telegram Relay, when configured.
+- service file descriptor limits.
 
 ---
 

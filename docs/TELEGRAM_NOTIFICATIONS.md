@@ -12,7 +12,7 @@ They are not intended as chatty success reports.
 
 ---
 
-## Mode 1: Direct
+## Mode 1: Direct notifications
 
 The VPS sends messages directly to Telegram Bot API.
 
@@ -46,13 +46,13 @@ Requires:
 
 ---
 
-## Mode 3: Relay server
+## Mode 3: HTTPS Relay server
 
 This server receives HTTPS notification payloads from other XPAM Script servers and forwards them to Telegram.
 
 Use this mode when:
 
-- you operate multiple servers;
+- you operate multiple XPAM servers;
 - one server can access Telegram API directly;
 - other servers should not store Telegram bot token.
 
@@ -60,17 +60,30 @@ The Relay server:
 
 - uses the existing HTTPS/443 surface;
 - does not open a separate public port;
-- uses nginx and a local Unix socket worker;
-- stores the relay token securely.
+- stores the relay token securely;
+- is checked by health/deep-health.
+
+Relay-server mode is shown only for profiles that can safely host it through the HAProxy/MTProto HTTPS surface. Direct VLESS profile servers can still use direct notifications or Relay-client mode, but they do not offer Relay-server mode in the menu.
 
 ---
 
-## Mode 4: Verify existing settings
+## Verify existing settings
 
 This mode checks saved Telegram settings without reconfiguring them.
 
 ---
 
-## Mode 5: Skip
+## Skip
 
 Telegram notifications can be skipped. Health and maintenance still work locally.
+
+---
+
+## Secrets
+
+Do not publish:
+
+- bot token;
+- Relay token;
+- Relay URL if it contains a secret path;
+- screenshots that show Telegram configuration values.

@@ -95,7 +95,7 @@ At install time, XPAM Script writes:
 /usr/local/sbin/<prefix>-links
 /usr/local/sbin/<prefix>-vless
 /usr/local/sbin/<prefix>-tg
-/usr/local/sbin/<prefix>-weekly-maintenance.sh
+/usr/local/sbin/<prefix>-weekly-maintenance
 ```
 
 The weekly command exists as a system maintenance entry point. It is not promoted as a normal user-facing command.

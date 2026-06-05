@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.3.0 - Core modularization, 3x-ui compatibility layer, MTProto hardening, WARP reset and release QA
+
+- Refactored the XPAM Script runtime into a cleaner modular structure. Large parts of the previously monolithic logic were split into dedicated helper layers for core runtime operations, 3x-ui integration, health checks, repair, WARP handling, Telegram notifications and profile-specific behavior.
+- Added a dedicated 3x-ui compatibility layer foundation so XPAM Script can keep its own server contract stable while 3x-ui remains an upstream component managed by the operator.
+- Reworked the 3x-ui API-token flow for newer 3x-ui releases where the token is available as plaintext only at creation time. XPAM now stores the usable API token in a root-only file with `0600` permissions and validates Bearer access in health checks.
+- Improved 3x-ui/Xray validation in deep health checks, including backend SQLite access, schema compatibility, panel settings, inbound configuration, generated Xray config, TLS certificate paths, external proxy settings, fallback configuration and optional WARP state.
+- Improved repair/runtime refresh behavior so `<prefix>-repair` refreshes the installed modular runtime, launchers and helper commands under `/opt/xpam-script`, `/usr/local/sbin` and `/usr/local/bin` instead of leaving older menu code behind.
+- Fixed and refreshed helper launchers so profile-prefixed commands such as `<prefix>-install`, `<prefix>-health`, `<prefix>-repair`, `<prefix>-netdiag`, `<prefix>-links`, `<prefix>-vless`, `<prefix>-tg` and `<prefix>-weekly-maintenance` are installed consistently.
+- Added stricter reboot-gate checks after package updates. XPAM now checks reboot requirement markers, package-level reboot signals, running-vs-installed kernel mismatch and sensitive package upgrade markers before finalizing installation.
+- Hardened MTProto deployment for HAProxy-backed profiles: MTProto is kept on loopback, TLS-only mode is enforced, the local mask backend is verified, IPv4-first behavior is explicit and deep health validates MTProto invariants without printing secrets.
+- Improved HAProxy/MTProto startup ordering. HAProxy now waits for the local Xray and MTProto backends, while MTProto waits for the local nginx sync backend. Historical or recovered backend events are reported as informational diagnostics when the current backend state is healthy.
+- Made quick health output compact and user-friendly. Full diagnostics remain available through `<prefix>-health --deep` and detailed log files.
+- Improved deep health coverage for service state, firewall policy, public port exposure, DNS/provider behavior, certificate consistency, config snapshot freshness, service hygiene, kernel/reboot state, swap policy, network tuning and file descriptor limits.
+- Added WARP normalize flow for XPAM-managed WARP state created through the 3x-ui panel. XPAM now checks the WARP configuration and brings the managed WARP state to a compatible baseline for the active profile.
+- Added WARP disable/reset flow for XPAM-managed WARP state. XPAM can disable the managed WARP configuration and restore VLESS sniffing/routing behavior to the correct baseline for the active profile.
+- Clarified WARP behavior across profiles: direct VLESS keeps Route-only sniffing as its normal baseline, while HAProxy/MTProto profiles return sniffing to OFF after WARP reset.
+- Improved Telegram notification UX. Direct notifications and Relay-client mode remain available where applicable; Relay-server mode is shown only for profiles that can host it safely through the existing HAProxy/MTProto HTTPS surface.
+- Added HTTPS Telegram Relay health checks for the relay service, Unix socket, token handling and method handling, without opening an additional public port.
+- Improved final production cleanup and weekly maintenance behavior, including guarded apt operations, config snapshots, retention cleanup, journal cleanup, certbot renewal checks and post-maintenance quick health validation.
+- Improved service hygiene, DNS/provider compatibility, port exposure validation and network tuning checks across Ubuntu 24.04 and Debian 12.
+- Preserved the existing public IPv4-first policy: XPAM-managed public TCP exposure remains limited to `22/80/443`, backend services stay on loopback and public IPv6 listeners on XPAM-managed public ports are not part of the supported contract.
+- Verified the final release line across the release matrix: Ubuntu 24.04/Profile 1 and Debian 12/Profile 3 final validation passed for the final archive. Debian 12/Profile 2 was also validated on the same code line before final packaging. These checks cover the direct VLESS path, the separate-subdomain HAProxy/MTProto path and the full HAProxy/MTProto/root-site path. The final archive SHA256 is `7efeb82fcc856c2ffb6155cbd94265d668944eb2e1c1ce87d98f06ad41e0987f`.
+
+
 ## v1.2.0 - 3x-ui compatibility, SQLite contract and diagnostics release
 
 - Added an explicit 3x-ui SQLite-only compatibility contract. XPAM Script supports 3x-ui through `/etc/x-ui/x-ui.db`; PostgreSQL backend is detected and rejected safely in install, health and repair flows.

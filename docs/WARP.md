@@ -2,84 +2,66 @@
 
 WARP support in XPAM Script is optional.
 
-The implementation is based on the 3x-ui/Xray WireGuard outbound model, not `warp-cli`.
+XPAM Script uses the 3x-ui/Xray WireGuard outbound model. It does not install `warp-cli` and does not turn the VPS into a system-wide WARP/VPN server.
 
 ---
 
-## Why not `warp-cli`
+## How WARP is used
 
-XPAM Script avoids system-wide `warp-cli` because a full-system WARP route can unexpectedly change:
+WARP is used as an optional outbound inside Xray. It can be used through Xray routing rules while the rest of the server keeps the normal XPAM service layout.
 
-- SSH reachability;
-- package manager behavior;
-- DNS behavior;
-- certificate issuance paths;
-- service-to-service connectivity.
+The expected workflow is:
 
-Instead, WARP is treated as an Xray outbound that can be used selectively through Xray routing.
-
----
-
-## Required operator action
-
-Before using the WARP menu, the operator should create a WARP/WireGuard outbound in 3x-ui.
-
-Then XPAM Script can normalize and adjust it.
+1. create a WARP/WireGuard outbound in the 3x-ui panel;
+2. run the XPAM WARP menu;
+3. let XPAM check and normalize the XPAM-managed WARP state;
+4. run health after the Xray restart.
 
 ---
 
-## What XPAM Script changes
+## WARP normalize
 
-The script detects a WARP-like Xray outbound config and normalizes:
+After the operator creates WARP in 3x-ui, XPAM can check the managed WARP configuration and bring it to a compatible baseline for the active profile.
 
-- outbound tag;
-- MTU;
-- workers;
-- IPv4 behavior;
-- kernel TUN behavior;
-- peer allowed IPs;
-- persistent keepalive;
-- default YouTube-oriented routing rule when missing;
-- VLESS sniffing Route only when needed for domain routing.
+Before changing the 3x-ui database, XPAM creates a backup.
 
-The default goal is a controlled IPv4 WARP outbound through Xray, not a full-server VPN.
-
-XPAM Script does not generate Cloudflare WARP reserved bytes. If the 3x-ui WARP generator creates `reserved=[]`, XPAM Script preserves that state and shows a warning in deep health.
+XPAM does not change the server default route and does not use WARP as a system-wide VPN. WARP remains an Xray outbound.
 
 ---
 
-## Reserved bytes
+## WARP disable / reset
 
-Cloudflare WARP profiles normally include 3 reserved bytes/clientid. A profile without them may still work, but a profile with valid reserved bytes is preferable.
+XPAM can disable the XPAM-managed WARP state from the WARP menu.
 
-XPAM Script:
+The reset flow is intended for the common case where the operator enabled WARP and later wants to return the server to the normal profile baseline without manually editing 3x-ui internals.
 
-- keeps reserved bytes if they are already present;
-- does not copy reserved bytes from another server;
-- does not invent `0,0,0` values;
-- reports `OK` when reserved bytes are present and valid;
-- reports `WARN` when a Cloudflare WARP outbound lacks valid reserved bytes.
+After reset, XPAM restores VLESS sniffing/routing behavior to the active profile baseline:
 
-If a future 3x-ui version starts generating valid reserved bytes again, XPAM Script will automatically report `OK` without requiring a separate XPAM update.
+- direct VLESS profile: Route-only sniffing is the normal baseline;
+- HAProxy/MTProto profiles: sniffing returns to OFF.
 
----
-
-## Routing
-
-XPAM Script adds or restores a default YouTube-oriented routing rule.
-
-Operators may manually add their own domains or IP ranges in 3x-ui/Xray routing. This does not inherently break XPAM Script. Health checks only verify that routing rules to `outboundTag=warp` exist when WARP is configured; route contents are user-managed.
+User-created WireGuard/WARP outbounds outside the XPAM-managed WARP state are not removed by this flow.
 
 ---
 
 ## Health behavior
 
-If WARP is not configured, health treats missing `wg0` as acceptable. WARP is optional.
+WARP is optional. If WARP is not configured, health treats the missing WARP interface as acceptable.
 
-If WARP is configured, health checks the safe technical shape of the outbound and confirms that the system default route and system DNS are not accidentally moved through WARP.
+When WARP is configured, deep health checks that the managed WARP state is compatible with the XPAM profile and that the system-level server routing was not accidentally moved through WARP.
 
-If the SSH session is connected through the same VLESS/Xray path, restarting 3x-ui/Xray during WARP normalization can disconnect the SSH session. This does not mean the server is broken; reconnect and run:
+If the SSH session is connected through the same VLESS/Xray path, restarting 3x-ui/Xray during WARP normalize or reset can disconnect the SSH session. This does not mean the server is broken. Reconnect and run:
 
 ```bash
 sudo <prefix>-health
 ```
+
+---
+
+## What not to do
+
+Do not manually copy WARP keys or low-level WARP values between unrelated servers.
+
+Do not edit generated Xray runtime files as the primary way to configure WARP. Use the 3x-ui panel and the XPAM WARP menu.
+
+If WARP is no longer needed, use the XPAM WARP disable/reset menu instead of removing only one piece of the configuration by hand.
