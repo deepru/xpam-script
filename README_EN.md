@@ -78,7 +78,7 @@ After installation, you get:
 - repair command;
 - weekly maintenance;
 - WARP via 3x-ui/Xray as an optional outbound;
-- DoubleHop Mode for VLESS and/or Telegram routing through an Exit server;
+- DoubleHop Mode for VLESS and/or Telegram routing through the second XPAM server;
 - safe user-initiated XPAM updates through the menu.
 
 ## Supported systems
@@ -119,7 +119,7 @@ Do not publish `--show-secrets` output in chats, issues, screenshots, or public 
 
 ## DoubleHop Mode
 
-DoubleHop Mode configures an Entry server so selected traffic exits through another Exit server.
+DoubleHop Mode lets you use two XPAM servers: the main server keeps accepting the existing VLESS/Telegram links, while selected traffic exits through the second XPAM server.
 
 Supported modes:
 
@@ -129,9 +129,12 @@ Telegram only
 VLESS + Telegram
 ```
 
-XPAM configures DoubleHop only on the Entry server. The Exit server remains manual: create or select a VLESS client on the Exit server, copy its VLESS link, and paste it into XPAM on the Entry server.
+How it works:
 
-Existing Entry-side VLESS and Telegram links do not change when DoubleHop is enabled, changed, or disabled.
+- install XPAM on both servers normally;
+- on the second server, run `sudo <prefix>-links --show-secrets` and copy its VLESS link;
+- on the main server, open `sudo <prefix>-xpam` → `DoubleHop Mode` and paste the second server VLESS link;
+- the current VLESS and Telegram links of the main server do not change when DoubleHop is enabled, changed, or disabled.
 
 ## Safe update
 

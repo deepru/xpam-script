@@ -78,7 +78,7 @@ sudo srv-xpam
 - repair-команду для восстановления XPAM runtime/обвязки;
 - weekly maintenance;
 - WARP через 3x-ui/Xray как optional outbound;
-- DoubleHop Mode для маршрутизации VLESS и/или Telegram через Exit-сервер;
+- DoubleHop Mode для маршрутизации VLESS и/или Telegram через второй XPAM-сервер;
 - безопасное user-initiated обновление XPAM через меню.
 
 ## Поддерживаемые системы
@@ -127,7 +127,7 @@ VLESS links и Telegram link формируются из текущей конф
 
 ## DoubleHop Mode
 
-DoubleHop Mode позволяет настроить Entry-сервер так, чтобы выбранный трафик выходил через другой Exit-сервер.
+DoubleHop Mode позволяет использовать два XPAM-сервера: основной сервер принимает текущие VLESS/Telegram links, а выбранный трафик выпускает через второй XPAM-сервер.
 
 Поддерживаемые режимы:
 
@@ -137,9 +137,12 @@ Telegram only
 VLESS + Telegram
 ```
 
-XPAM настраивает DoubleHop только на Entry-сервере. Exit-сервер остаётся ручным: пользователь создаёт или выбирает VLESS-клиента на Exit-сервере и вставляет его VLESS-ссылку в XPAM на Entry-сервере.
+Как это работает:
 
-Текущие Entry-side VLESS и Telegram links не меняются при включении, изменении режима или выключении DoubleHop.
+- установите XPAM на обоих серверах обычным способом;
+- на втором сервере откройте `sudo <prefix>-links --show-secrets` и возьмите VLESS-ссылку;
+- на основном сервере откройте `sudo <prefix>-xpam` → `DoubleHop Mode` и вставьте VLESS-ссылку второго сервера;
+- текущие VLESS и Telegram links основного сервера не меняются при включении, изменении режима или выключении DoubleHop.
 
 ## Безопасное обновление
 
