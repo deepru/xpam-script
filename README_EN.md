@@ -1,61 +1,138 @@
 # XPAM Script
 
-**XPAM Script** is a Bash automation project for preparing a clean VPS as a managed HTTPS/TLS proxy stack with **VLESS**, **Telegram proxy / MTG**, 3x-ui/Xray, nginx, HAProxy, Certbot, firewall, fail2ban, health checks, maintenance scripts, optional WARP outbound, **DoubleHop Mode**, and safe self-update.
+**XPAM Script** is a Bash automation tool for deploying a private HTTPS/TLS VPS setup on a clean server.
 
-The project is designed for the “clean VPS to ready-to-use managed server” workflow. It configures the system components around 3x-ui/Xray and provides a simple prefix-based CLI.
+It configures **VLESS**, **Telegram proxy / MTG**, 3x-ui/Xray, nginx, HAProxy, Certbot, firewall, fail2ban, health checks, maintenance scripts, WARP via Xray, **DoubleHop Mode**, and safe XPAM self-update.
 
-> XPAM Script changes SSH settings, firewall rules, nginx, HAProxy, 3x-ui/Xray, Certbot, fail2ban, systemd units, health/maintenance scripts and network-related settings. Use it on a clean VPS, not on a server that already hosts important services.
+> XPAM Script changes SSH, firewall, nginx, HAProxy, 3x-ui/Xray, Certbot, fail2ban, systemd units, health/maintenance scripts, DNS checks, `/etc/hosts`, and VPS network settings. Use it on a clean VPS, not on a server that already hosts important services.
 
-## v1.3.5 highlights
+## Quick start
 
-- main management command: `sudo <prefix>-xpam`;
-- VLESS through 3x-ui/Xray;
-- Telegram proxy / MTG through 3x-ui;
-- connection data through `sudo <prefix>-links`;
-- DoubleHop Mode: VLESS only, Telegram only, or VLESS + Telegram;
-- optional WARP outbound through Xray;
-- backend-aware health, repair and weekly maintenance;
-- small-VPS optimizations;
-- safe self-update with SHA256 verification, staging preflight, backup and rollback.
+Prepare:
+
+- a clean **Ubuntu 24.04 LTS** or **Debian 12** VPS;
+- root SSH access;
+- domains for VLESS, Telegram proxy / MTG, and the panel;
+- DNS A records pointing to your server IPv4.
+
+### Install through GitHub bootstrap
+
+```bash
+cd /root
+curl -fsSL https://raw.githubusercontent.com/deepru/xpam-script/main/bootstrap.sh -o xpam-bootstrap.sh
+sudo XPAM_REPO="deepru/xpam-script" bash xpam-bootstrap.sh
+```
+
+The bootstrap downloads the published archive from **GitHub Releases**, verifies SHA256, extracts XPAM Script, and starts the installer.
+
+Run menu item `0` first to configure SSH safety and create the prefix command, then run item `1` to install the server.
+
+```text
+0) SSH security / create prefix command
+1) Install / continue server setup
+```
+
+After step 0, the main management command is:
+
+```bash
+sudo <prefix>-xpam
+```
+
+For example, if prefix = `srv`:
+
+```bash
+sudo srv-xpam
+```
+
+## Documentation
+
+Before installation, read the full user guide:
+
+- [Full user guide, PDF](docs/USER_GUIDE_RU.pdf)
+- [Full user guide, DOCX](docs/USER_GUIDE_RU.docx)
+- [Release notes v1.3.5](RELEASE_NOTES_v1.3.5_RU.md)
+- [GitHub Releases](https://github.com/deepru/xpam-script/releases)
+- [CHANGELOG.md](CHANGELOG.md)
+- [TESTING.md](TESTING.md)
+- [SECURITY.md](SECURITY.md)
+- [THIRD_PARTY.md](THIRD_PARTY.md)
+
+## What XPAM Script provides
+
+After installation, you get:
+
+- SSH key based access;
+- HTTPS/TLS entry surface on `443/tcp`;
+- nginx + HAProxy + Certbot;
+- 3x-ui/Xray with SQLite backend;
+- VLESS on a dedicated domain;
+- Telegram proxy / MTG on a dedicated domain;
+- masking/fallback sites;
+- health and deep-health diagnostics;
+- repair command;
+- weekly maintenance;
+- WARP via 3x-ui/Xray as an optional outbound;
+- DoubleHop Mode for VLESS and/or Telegram routing through an Exit server;
+- safe user-initiated XPAM updates through the menu.
 
 ## Supported systems
 
-XPAM Script v1.3.5 is intended for clean VPS installations on:
+Officially tested:
 
-- Ubuntu 24.04 LTS;
-- Debian 12.
+- Ubuntu 24.04 LTS
+- Debian 12
 
-Tested on Ubuntu 24.04 LTS and Debian 12: installation, server management, VLESS, Telegram proxy / MTG, DoubleHop Mode, diagnostics, repair and safe update.
+A clean VPS with root access and IPv4 is recommended.
 
 ## Main commands
 
 ```bash
-sudo <prefix>-xpam                 # main XPAM menu
-sudo <prefix>-links                # safe summary without secrets
-sudo <prefix>-links --show-secrets # full connection data
-sudo <prefix>-health               # quick health check
-sudo <prefix>-health --deep        # extended health check
-sudo <prefix>-vless                # VLESS information and actions
-sudo <prefix>-repair               # repair XPAM runtime glue
-sudo <prefix>-netdiag              # network diagnostics
+sudo <prefix>-xpam
+sudo <prefix>-health
+sudo <prefix>-health --deep
+sudo <prefix>-links
+sudo <prefix>-links --show-secrets
+sudo <prefix>-vless
+sudo <prefix>-repair
+sudo <prefix>-netdiag
 ```
 
-`<prefix>` is selected during setup. For example, if the prefix is `my`, the main command is `sudo my-xpam`.
+`sudo <prefix>-xpam` opens the main XPAM management menu.
 
-`sudo <prefix>-links --show-secrets` builds the current VLESS and Telegram links from the active 3x-ui configuration. If you add/remove VLESS clients or rotate the Telegram proxy / MTG secret in 3x-ui, run the command again and use the updated links from its output.
+## VLESS and Telegram links
+
+Current connection data is shown with:
+
+```bash
+sudo <prefix>-links --show-secrets
+```
+
+VLESS links and the Telegram link are generated from the current **3x-ui** configuration. If you add/change a VLESS client or manually rotate the Telegram proxy / MTG secret in 3x-ui, run the links command again and use the updated output.
+
+Do not publish `--show-secrets` output in chats, issues, screenshots, or public logs.
 
 ## DoubleHop Mode
 
-DoubleHop Mode is configured on the Entry server only. The Exit server is prepared separately by the user, and XPAM uses a user-provided Exit VLESS link. Existing Entry-side VLESS and Telegram links remain unchanged when DoubleHop is enabled, changed or disabled.
+DoubleHop Mode configures an Entry server so selected traffic exits through another Exit server.
 
-## Secrets
+Supported modes:
 
-Do not publish VLESS links, Telegram links, Exit VLESS links, UUIDs, tokens, private keys, `/etc/xpam-script/config.env`, or output from `sudo <prefix>-links --show-secrets`.
+```text
+VLESS only
+Telegram only
+VLESS + Telegram
+```
 
-## Documentation
+XPAM configures DoubleHop only on the Entry server. The Exit server remains manual: create or select a VLESS client on the Exit server, copy its VLESS link, and paste it into XPAM on the Entry server.
 
-The primary documentation is in Russian:
+Existing Entry-side VLESS and Telegram links do not change when DoubleHop is enabled, changed, or disabled.
 
-- [`README_RU.md`](README_RU.md)
-- [`docs/`](docs/)
-- [`RELEASE_NOTES_v1.3.5_RU.md`](RELEASE_NOTES_v1.3.5_RU.md)
+## Safe update
+
+XPAM supports user-initiated updates through the menu. The updater checks release metadata and SHA256, creates backup/snapshot, runs preflight, applies the new version, runs post-update health/deep-health, and rolls back on failure.
+
+## License and third-party components
+
+XPAM Script is distributed under the MIT License.
+
+3x-ui, Xray-core, nginx, HAProxy, Certbot, UFW, fail2ban, systemd, and other components keep their own licenses. See [THIRD_PARTY.md](THIRD_PARTY.md).
