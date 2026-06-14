@@ -35,11 +35,74 @@ fi
 ARCHIVE_URL="${XPAM_ARCHIVE_URL:-${BASE_URL}/${XPAM_ASSET}}"
 SHA256_URL="${XPAM_SHA256_URL:-${BASE_URL}/${XPAM_ASSET}.sha256}"
 
+
+xpam_bootstrap_apt_auto_guard() {
+    # Fresh cloud images often start apt-daily / unattended-upgrades during
+    # first boot.  Do not race them and do not let them start again while XPAM
+    # is installing.  If dpkg is already configuring packages, wait for it to
+    # finish instead of killing it.
+    local locks holder_seen waited max_wait units_after_wait
+    locks="/var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock"
+    max_wait="${XPAM_APT_LOCK_MAX_WAIT:-1800}"
+
+    if command -v systemctl >/dev/null 2>&1; then
+        for unit in apt-daily.timer apt-daily-upgrade.timer; do
+            systemctl disable --now "$unit" >/dev/null 2>&1 || true
+            systemctl mask "$unit" >/dev/null 2>&1 || true
+        done
+        # Mask services now so they cannot be triggered again; if one is
+        # currently running with dpkg locks, wait below before stopping it.
+        for unit in apt-daily.service apt-daily-upgrade.service unattended-upgrades.service; do
+            systemctl disable "$unit" >/dev/null 2>&1 || true
+            systemctl mask "$unit" >/dev/null 2>&1 || true
+        done
+        systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+
+    if command -v fuser >/dev/null 2>&1; then
+        waited=0
+        while fuser $locks >/dev/null 2>&1; do
+            if [ "$waited" -eq 0 ]; then
+                echo "==> Waiting for existing apt/dpkg operation to finish"
+                fuser -v $locks 2>/dev/null || true
+            fi
+            if [ "$waited" -ge "$max_wait" ]; then
+                echo "ERROR: apt/dpkg locks are still held after ${max_wait}s" >&2
+                fuser -v $locks 2>/dev/null || true
+                exit 1
+            fi
+            sleep 5
+            waited=$((waited + 5))
+            if [ $((waited % 30)) -eq 0 ]; then
+                echo "==> Still waiting for apt/dpkg locks... ${waited}s"
+                fuser -v $locks 2>/dev/null || true
+            fi
+        done
+    fi
+
+    if command -v systemctl >/dev/null 2>&1; then
+        for unit in apt-daily.service apt-daily-upgrade.service unattended-upgrades.service; do
+            systemctl stop "$unit" >/dev/null 2>&1 || true
+            systemctl disable "$unit" >/dev/null 2>&1 || true
+            systemctl mask "$unit" >/dev/null 2>&1 || true
+        done
+        systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+
+    if command -v dpkg >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive dpkg --configure -a || true
+    fi
+    if command -v apt-get >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -o DPkg::Lock::Timeout=180 -f install -y || true
+    fi
+}
+
 need_cmd() {
     command -v "$1" >/dev/null 2>&1
 }
 
 if need_cmd apt-get; then
+    xpam_bootstrap_apt_auto_guard
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
     apt-get install -y ca-certificates curl tar gzip findutils coreutils

@@ -9,6 +9,7 @@ PREFIX_BOOTSTRAP_FILE="${CONFIG_DIR}/prefix.env"
 LOG="/var/log/xpam-script/xpam-script-${KIT_VERSION}-$(date +%F-%H%M%S).log"
 RUNTIME_KIT_DIR="/opt/xpam-script"
 PREPARE_DONE_FILE="${CONFIG_DIR}/stage-prepare.done"
+PREPARE_BOOT_ID_FILE="${CONFIG_DIR}/stage-prepare.boot-id"
 XPAM_STATE_DIR="/var/lib/xpam-script"
 REBOOT_SENSITIVE_MARKER="${XPAM_STATE_DIR}/reboot-sensitive-upgrades"
 
@@ -40,8 +41,69 @@ run_with_heartbeat(){
   return "$rc"
 }
 
+
+XPAM_APT_AUTO_GUARD_DONE=0
+xpam_early_apt_auto_guard(){
+  # Fresh cloud images may start apt-daily / unattended-upgrades during first
+  # boot.  XPAM must not race them.  Mask future auto-starts, wait for any
+  # already-running dpkg/apt operation to finish, then stop/mask auto units.
+  # Do not kill dpkg while it may be configuring kernel/initramfs packages.
+  [[ "${XPAM_APT_AUTO_GUARD_DONE:-0}" == "1" ]] && return 0
+  XPAM_APT_AUTO_GUARD_DONE=1
+
+  local locks waited max_wait unit
+  locks=(/var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock)
+  max_wait="${XPAM_APT_LOCK_MAX_WAIT:-1800}"
+
+  if command -v systemctl >/dev/null 2>&1; then
+    for unit in apt-daily.timer apt-daily-upgrade.timer; do
+      systemctl disable --now "$unit" >/dev/null 2>&1 || true
+      systemctl mask "$unit" >/dev/null 2>&1 || true
+    done
+    # Prevent new starts immediately.  Active processes holding dpkg locks are
+    # waited out below before services are stopped.
+    for unit in apt-daily.service apt-daily-upgrade.service unattended-upgrades.service; do
+      systemctl disable "$unit" >/dev/null 2>&1 || true
+      systemctl mask "$unit" >/dev/null 2>&1 || true
+    done
+    systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
+
+  if command -v fuser >/dev/null 2>&1; then
+    waited=0
+    while fuser "${locks[@]}" >/dev/null 2>&1; do
+      if (( waited == 0 )); then
+        warn "apt/dpkg уже занят системным процессом; жду завершения, не прерывайте установку"
+        fuser -v "${locks[@]}" 2>/dev/null || true
+      fi
+      if (( waited >= max_wait )); then
+        fuser -v "${locks[@]}" 2>/dev/null || true
+        fail "apt/dpkg locks are still held after ${max_wait}s; wait for system package operation to finish and start XPAM again"
+      fi
+      sleep 5
+      waited=$((waited + 5))
+      if (( waited % 30 == 0 )); then
+        ok "ожидание apt/dpkg lock продолжается... ${waited}s"
+        fuser -v "${locks[@]}" 2>/dev/null || true
+      fi
+    done
+  fi
+
+  if command -v systemctl >/dev/null 2>&1; then
+    for unit in apt-daily.service apt-daily-upgrade.service unattended-upgrades.service; do
+      systemctl stop "$unit" >/dev/null 2>&1 || true
+      systemctl disable "$unit" >/dev/null 2>&1 || true
+      systemctl mask "$unit" >/dev/null 2>&1 || true
+    done
+    systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
+
+  ok "APT auto jobs disabled/masked for installation"
+}
+
 apt_dpkg_recovery(){
   local context="${1:-apt}" attempt audit_file apt_log
+  xpam_early_apt_auto_guard
   export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
 
   say "APT/DPKG recovery check: $context"
@@ -2136,6 +2198,37 @@ EOF
 }
 
 
+
+xpam_prepare_current_boot_id(){
+  cat /proc/sys/kernel/random/boot_id 2>/dev/null || true
+}
+
+xpam_mark_prepare_boot(){
+  mkdir -p "$CONFIG_DIR"
+  chmod 700 "$CONFIG_DIR" 2>/dev/null || true
+  xpam_prepare_current_boot_id > "$PREPARE_BOOT_ID_FILE" 2>/dev/null || true
+  chmod 600 "$PREPARE_BOOT_ID_FILE" 2>/dev/null || true
+}
+
+xpam_require_reboot_after_prepare(){
+  local prep_boot current_boot
+  [[ -s "$PREPARE_BOOT_ID_FILE" ]] || return 0
+  prep_boot="$(cat "$PREPARE_BOOT_ID_FILE" 2>/dev/null || true)"
+  current_boot="$(xpam_prepare_current_boot_id)"
+  if [[ -n "$prep_boot" && -n "$current_boot" && "$prep_boot" == "$current_boot" ]]; then
+    warn "Первый этап уже завершён в текущей загрузке. Перед финальной настройкой нужна обязательная перезагрузка."
+    echo "Выполните сейчас:"
+    echo "  sudo reboot"
+    echo
+    echo "После перезагрузки войдите по SSH-ключу и выполните:"
+    echo "  sudo ${SERVER_PREFIX}-xpam"
+    return 1
+  fi
+  rm -f "$PREPARE_BOOT_ID_FILE" 2>/dev/null || true
+  ok "Обязательная перезагрузка после первого этапа подтверждена"
+  return 0
+}
+
 reboot_status_notice(){
   say "Reboot status"
   clear_stale_reboot_sensitive_marker
@@ -2912,35 +3005,25 @@ stage_prepare(){
   else
     warn "3x-ui automation disabled; use the manual checklist before continuing setup."
   fi
-  post_install_cleanup
-  cleanup_root_test_leftovers stage1 || true
   mkdir -p "$CONFIG_DIR"
   date -Is > "$PREPARE_DONE_FILE"
-  reboot_status_notice
+  xpam_mark_prepare_boot
+  reboot_status_notice || true
   echo
   echo "============================================================"
-  if reboot_recommended_before_finalize; then
-    warn "Первый этап завершён. Перед финальной настройкой требуется перезагрузка."
-    echo "Выполните сейчас:"
-    echo "  sudo reboot"
+  warn "Первый этап завершён. Перед финальной настройкой требуется обязательная перезагрузка."
+  echo "Выполните сейчас:"
+  echo "  sudo reboot"
+  echo
+  echo "После перезагрузки войдите по SSH-ключу и выполните:"
+  echo "  sudo ${SERVER_PREFIX}-xpam"
+  if [[ "${XUI_AUTO_SETUP:-yes}" != "yes" ]]; then
     echo
-    echo "После перезагрузки войдите по SSH-ключу и выполните:"
-    echo "  sudo ${SERVER_PREFIX}-xpam"
-    echo "============================================================"
-    echo
-    exit 0
-  elif [[ "${XUI_AUTO_SETUP:-yes}" == "yes" ]]; then
-    ok "Перезагрузка не требуется. Продолжаю финальную настройку автоматически."
-    echo "============================================================"
-    echo
-    stage_finalize
-    exit 0
-  else
-    ok "Первый этап завершён. Настройте 3x-ui вручную, затем выполните: sudo ${SERVER_PREFIX}-xpam"
-    echo "============================================================"
-    echo
-    exit 0
+    echo "Если автоматическая настройка 3x-ui была отключена, завершите ручную настройку по checklist после перезагрузки."
   fi
+  echo "============================================================"
+  echo
+  exit 0
 }
 note_value(){
   local file="$1" key="$2"
@@ -3424,6 +3507,7 @@ stage_finalize(){
   load_config
   validate_inputs
   verify_ssh_preflight
+  xpam_require_reboot_after_prepare || exit 0
   small_vm_resource_preflight
   ensure_swap_policy
   preinstall_system_update
