@@ -498,6 +498,7 @@ xpam_update_apply(){
     # shellcheck source=/dev/null
     source "$RUNTIME_KIT_DIR/scripts/xpam-core.sh"
     load_config
+    fix_managed_hosts || true
     install_runtime_kit
     write_install_launcher
     write_health_weekly

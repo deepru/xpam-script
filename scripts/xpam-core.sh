@@ -1425,8 +1425,41 @@ ensure_sudo_hostname_resolution(){
 
 managed_domains(){ unique_domains $(web_domains) ${SYNC_DOMAIN:-}; }
 
+harden_cloud_init_hosts_template(){
+  # Some VPS images provide cloud-init user-data with manage_etc_hosts=true
+  # and fqdn=<public XPAM domain>.  On Debian/Ubuntu, cloud-init then rewrites
+  # /etc/hosts on every boot as:
+  #   127.0.1.1 <fqdn> <hostname>
+  # That shadows the real public DNS locally and breaks XPAM DNS health checks.
+  # This hardening is intentionally generic: no user IP/domain is hardcoded.
+  # It changes only the exact cloud-init template line that maps {{fqdn}} to
+  # localhost, preserving the short hostname mapping for sudo/provider tools.
+  local tmpl backup_dir ts changed_any
+  changed_any=0
+  backup_dir="/root/manual-backups/cloud-init-hosts"
+
+  for tmpl in /etc/cloud/templates/hosts.debian.tmpl /etc/cloud/templates/hosts.ubuntu.tmpl; do
+    [[ -f "$tmpl" ]] || continue
+    if grep -Eq '^[[:space:]]*127\.0\.(0|1)\.1[[:space:]]+\{\{fqdn\}\}[[:space:]]+\{\{hostname\}\}([[:space:]]*#.*)?$' "$tmpl" 2>/dev/null; then
+      mkdir -p "$backup_dir" 2>/dev/null || true
+      ts="$(date +%Y%m%d-%H%M%S)"
+      cp -a "$tmpl" "$backup_dir/$(basename "$tmpl").before-xpam-${ts}" 2>/dev/null || true
+      sed -i -E 's/^([[:space:]]*127\.0\.(0|1)\.1[[:space:]]+)\{\{fqdn\}\}[[:space:]]+\{\{hostname\}\}([[:space:]]*(#.*)?)$/\1{{hostname}}\3/' "$tmpl" || true
+      if ! grep -Eq '^[[:space:]]*127\.0\.(0|1)\.1[[:space:]]+\{\{fqdn\}\}[[:space:]]+\{\{hostname\}\}([[:space:]]*#.*)?$' "$tmpl" 2>/dev/null; then
+        ok "cloud-init hosts template hardened: $tmpl"
+        changed_any=1
+      else
+        warn "could not harden cloud-init hosts template: $tmpl"
+      fi
+    fi
+  done
+
+  (( changed_any == 0 )) && return 0
+}
+
 fix_managed_hosts(){
   say "Ensuring managed domains do not resolve to localhost in /etc/hosts"
+  harden_cloud_init_hosts_template || true
   local ip4 domains hn short
   ip4="$(server_public_ipv4)"
   domains="$(managed_domains)"
@@ -3990,6 +4023,7 @@ stage_repair(){
   install_runtime_kit || true
   write_install_launcher || true
   verify_ssh_preflight || true
+  fix_managed_hosts || true
   setup_dns_policy || true
   apply_network_tuning_policy || true
   apply_service_nofile_limits || true
