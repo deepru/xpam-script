@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-XPAM_VERSION="${XPAM_VERSION:-v1.3.0}"
+XPAM_VERSION="${XPAM_VERSION:-v1.3.5}"
 XPAM_ASSET="${XPAM_ASSET:-xpam-script-${XPAM_VERSION}-ubuntu24-debian12.tar.gz}"
 XPAM_INSTALL_DIR="${XPAM_INSTALL_DIR:-/root/xpam-install}"
 
