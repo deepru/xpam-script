@@ -1580,6 +1580,13 @@ EOF_SWAP_SYSCTL
 
   if swapon --show --noheadings 2>/dev/null | awk 'NF {found=1} END {exit found ? 0 : 1}'; then
     ok "swap is already active; no new swapfile needed"
+    if [[ -e /swapfile ]] && [[ "$(blkid -p -o value -s TYPE /swapfile 2>/dev/null || true)" == "swap" ]]; then
+      chmod 600 /swapfile || true
+      cp -a /etc/fstab "/etc/fstab.bak-before-swap-normalize-$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+      sed -i '/^[[:space:]]*\/swapfile[[:space:]]/d' /etc/fstab
+      echo '/swapfile none swap sw 0 0' >> /etc/fstab
+      ok "swapfile fstab entry normalized"
+    fi
     return 0
   fi
 
@@ -1615,10 +1622,10 @@ EOF_SWAP_SYSCTL
     swapon /swapfile || fail "swapon /swapfile failed"
   fi
 
-  if ! grep -Eq '^[^#][[:space:]]*/swapfile[[:space:]]+none[[:space:]]+swap[[:space:]]+' /etc/fstab 2>/dev/null; then
-    cp -a /etc/fstab "/etc/fstab.bak-before-swap-$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
-    echo '/swapfile none swap sw 0 0' >> /etc/fstab
-  fi
+  cp -a /etc/fstab "/etc/fstab.bak-before-swap-normalize-$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+  sed -i '/^[[:space:]]*\/swapfile[[:space:]]/d' /etc/fstab
+  echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  ok "swapfile fstab entry normalized"
 
   swapon --show | grep -q '/swapfile' && ok "swapfile active: /swapfile (${size_mb}M)" || fail "swapfile was created but is not active"
 }
