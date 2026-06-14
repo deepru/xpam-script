@@ -1891,6 +1891,30 @@ ensure_dns_safe_rescue_if_needed(){
   fail "DNS не работает даже после безопасного fallback /etc/resolv.conf"
 }
 
+apply_resolved_public_surface_hardening(){
+  # systemd-resolved may expose LLMNR/mDNS on 5355/tcp+udp on some minimal
+  # Debian/provider images. XPAM public surface policy allows only 22/80/443,
+  # so disable these discovery protocols before the formal port health check.
+  if ! command -v systemctl >/dev/null 2>&1; then
+    return 0
+  fi
+
+  mkdir -p /etc/systemd/resolved.conf.d
+  cat > /etc/systemd/resolved.conf.d/90-xpam-script-hardening.conf <<'EOF_RESOLVED_HARDENING'
+[Resolve]
+LLMNR=no
+MulticastDNS=no
+EOF_RESOLVED_HARDENING
+  chmod 644 /etc/systemd/resolved.conf.d/90-xpam-script-hardening.conf 2>/dev/null || true
+
+  if systemctl list-unit-files systemd-resolved.service >/dev/null 2>&1; then
+    systemctl restart systemd-resolved >/dev/null 2>&1 || warn "systemd-resolved restart failed after LLMNR/mDNS hardening; continuing to DNS health check"
+    sleep 1
+  fi
+
+  ok "systemd-resolved LLMNR/mDNS public discovery disabled"
+}
+
 setup_dns_policy(){
   local mode="${XPAM_DNS_POLICY_MODE:-safe}"
   # XPAM no longer replaces working provider DNS in the default installer path.
@@ -1898,6 +1922,7 @@ setup_dns_policy(){
   # No /etc/network/interfaces, route, gateway, NetworkManager or link-DNS changes are made here.
   say "Проверка DNS сервера (XPAM Auto: DNS не меняем, только проверяем)"
   write_dns_policy_script
+  apply_resolved_public_surface_hardening
 
   if [[ "$mode" != "safe" ]]; then
     warn "DNS replacement/strict mode отключён в XPAM Auto. Используется безопасная проверка DNS без замены провайдерских настроек."
