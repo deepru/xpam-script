@@ -46,10 +46,16 @@ sudo srv-xpam
 
 ## Инструкция и документация
 
-Перед установкой рекомендуется открыть полную инструкцию:
+Перед установкой рекомендуется открыть полную инструкцию пользователя.
 
-- [Полная инструкция пользователя, PDF](docs/USER_GUIDE_RU.pdf)
-- [Полная инструкция пользователя, DOCX](docs/USER_GUIDE_RU.docx)
+**Основной вариант инструкции:** [USER_GUIDE_RU.docx](docs/USER_GUIDE_RU.docx)
+
+**PDF-версия для скачивания:** [USER_GUIDE_RU.pdf](https://github.com/deepru/xpam-script/raw/main/docs/USER_GUIDE_RU.pdf)
+
+> Если встроенный PDF-preview в браузере искажает кириллицу, используйте DOCX-версию или скачайте PDF и откройте его в Chrome, Adobe Reader, SumatraPDF или другом локальном PDF viewer.
+
+Дополнительные материалы:
+
 - [Release notes v1.3.5](RELEASE_NOTES_v1.3.5_RU.md)
 - [GitHub Releases](https://github.com/deepru/xpam-script/releases)
 - [CHANGELOG.md](CHANGELOG.md)
