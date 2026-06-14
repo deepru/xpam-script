@@ -1,55 +1,38 @@
-# Websites and fallback surface
+# Sites and masking
 
-XPAM Script installs simple static websites for public HTTP/HTTPS behavior.
+XPAM Script uses nginx and HAProxy to support HTTPS/TLS routing and local masking/fallback sites.
 
-These websites are not just decoration. They provide normal web responses for domains that are also used by TLS/SNI-based services.
+## Purpose
 
----
+Masking/fallback sites provide ordinary-looking HTTPS responses for domains used by the XPAM stack. They are not intended to host important production websites.
 
-## Default web roots
+## Site management
 
-Depending on the selected profile, web roots may include:
-
-```text
-/var/www/<primary-domain>      VLESS / panel masking site
-/var/www/<root-domain>         root website
-/var/www/<sync-domain>         MTProto / relay masking site
-```
-
-The `www` domain in the root profile is normally a redirect and does not need a separate website directory.
-
----
-
-## What can be changed
-
-Operators may replace static website files:
-
-- `index.html`;
-- CSS;
-- JS;
-- images;
-- static pages.
-
-Use the website management menu to see the exact paths and verify uploaded files.
-
----
-
-## What should not be changed casually
-
-Do not occupy or remove reserved paths used by XPAM Script, nginx, HAProxy, or 3x-ui.
-
-Do not break:
-
-- ACME challenge locations;
-- protected 3x-ui base path;
-- Telegram Relay path, if configured;
-- nginx fallback behavior;
-- HAProxy SNI assumptions.
-
-After uploading custom websites, run:
+Site management is available from:
 
 ```bash
-sudo <prefix>-install
+sudo <prefix>-xpam
 ```
 
-Then choose website management and verify.
+Open `Управление сайтами`.
+
+## Domains
+
+Use placeholder examples in documentation:
+
+```text
+example.com
+vless.example.com
+tg.example.com
+```
+
+Do not publish real domains, IP addresses or connection links in public reports.
+
+## Health
+
+After changing sites or DNS, run:
+
+```bash
+sudo <prefix>-health
+sudo <prefix>-health --deep
+```

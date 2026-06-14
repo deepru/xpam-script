@@ -42,7 +42,7 @@ if [[ "${1:-}" != "--deep" ]]; then
     qok "services" '^OK: services summary$'
     qok "firewall" '^OK: UFW expected policy looks correct$'
     qok "3x-ui / Xray" '^OK: 3x-ui / Xray config looks correct$'
-    if grep -Eq '^OK: MTProto config invariants look correct$|^OK: MTProto is not enabled in this profile; invariant check skipped$' "$LOG" 2>/dev/null; then
+    if grep -Eq '^OK: MTProto config invariants look correct$|^OK: 3xui-mtg MTProto runtime invariants look correct$|^OK: MTProto is not enabled in this profile; invariant check skipped$' "$LOG" 2>/dev/null; then
       echo "OK: MTProto"
     fi
     qok "TLS certificates" '^OK: TLS certificate consistency looks correct$'

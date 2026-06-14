@@ -1,58 +1,46 @@
-# Profiles
+# Runtime modes
 
-XPAM Script has three supported installation profiles.
+XPAM Script v1.3.5 uses a simplified public model. Installation prepares the server with the current VLESS and Telegram proxy / MTG architecture, and optional features are managed later from the XPAM menu.
 
----
+## Standard installed state
 
-## Profile 1: VLESS only, direct TLS
+A normal v1.3.5 installation provides:
 
-Use this profile when the server needs only VLESS and the protected 3x-ui panel.
+- VLESS through 3x-ui/Xray;
+- Telegram proxy / MTG through 3x-ui;
+- nginx masking/fallback sites;
+- HAProxy public HTTPS/TLS routing;
+- Certbot TLS automation;
+- firewall and basic SSH protection;
+- health/deep-health;
+- repair and weekly maintenance;
+- safe self-update.
 
-Expected shape:
+## Optional runtime features
 
-```text
-client -> VPS:443 -> Xray/VLESS -> nginx fallback site
+Optional features are enabled from:
+
+```bash
+sudo <prefix>-xpam
 ```
 
-This profile does not install HAProxy or MTProto.
+Important runtime features:
 
-Direct VLESS keeps Route-only sniffing as its normal baseline for domain routing. If WARP is enabled and later reset, this profile returns to the same direct-VLESS baseline.
+- WARP through 3x-ui/Xray;
+- DoubleHop Mode;
+- site management;
+- safe self-update.
 
-Telegram direct notifications and Relay-client mode are available. HTTPS Relay-server mode is not shown for this profile.
+## DoubleHop Mode
 
----
+DoubleHop Mode is a runtime mode, not a separate installation profile.
 
-## Profile 2: VLESS + MTProto, separate subdomains
+Supported modes:
 
-Use this profile when VLESS and MTProto should be available on separate subdomains.
+- VLESS only;
+- Telegram only;
+- VLESS + Telegram.
 
-Expected shape:
+XPAM configures only the Entry server. The Exit server is prepared separately by the user and is represented in XPAM by an Exit VLESS link.
 
-```text
-client -> VPS:443 -> HAProxy
-                  -> Xray/VLESS backend
-                  -> MTProto backend
-```
-
-This profile supports HTTPS Telegram Relay-server mode through the existing HTTPS/443 surface.
-
-After WARP reset, VLESS sniffing returns to OFF for this HAProxy/MTProto baseline.
-
----
-
-## Profile 3: Main/root website + VLESS + MTProto
-
-Use this profile when the server also needs a root masking website and `www` redirect in addition to VLESS and MTProto.
-
-Expected shape:
-
-```text
-root domain       -> nginx site
-www domain        -> redirect to root domain
-VLESS domain      -> HAProxy -> Xray/VLESS backend
-MTProto domain    -> HAProxy -> MTProto backend
-```
-
-This is the fullest public profile. It also supports HTTPS Telegram Relay-server mode through the existing HTTPS/443 surface.
-
-After WARP reset, VLESS sniffing returns to OFF for this HAProxy/MTProto baseline.
+Existing Entry-side VLESS and Telegram links must remain unchanged when DoubleHop is enabled, changed or disabled.

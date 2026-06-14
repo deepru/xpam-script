@@ -1,57 +1,49 @@
 # Maintenance
 
-XPAM Script installs a weekly maintenance flow and profile-prefixed helper commands.
-
-The normal operator entry points are:
-
-```bash
-sudo <prefix>-health
-sudo <prefix>-health --deep
-sudo <prefix>-repair
-sudo <prefix>-netdiag
-```
-
-Weekly maintenance is configured automatically and is not the primary interactive user workflow.
-
----
-
-## Weekly maintenance
-
-Weekly maintenance performs guarded package operations, certificate renewal checks, config snapshots, retention cleanup and a post-maintenance quick health check.
-
-It is designed to keep the server tidy without changing user secrets, VLESS UUIDs, MTProto secrets or selected domains.
-
----
+XPAM Script v1.3.5 installs maintenance helpers for repair, diagnostics, weekly checks and safe updates.
 
 ## Repair
 
-Repair restores the XPAM runtime and service policy around the installed server.
-
-It can refresh:
-
-- `/opt/xpam-script` runtime files;
-- profile-prefixed launchers;
-- health/deep-health helpers;
-- weekly maintenance helpers;
-- service limits;
-- startup ordering;
-- fail2ban policy;
-- certbot hook;
-- selected service hygiene settings.
-
-Repair does not replace the user’s domains, VLESS UUID, MTProto secret or Telegram secrets.
-
----
-
-## Final production cleanup
-
-Final production cleanup is available from the menu:
-
-```text
-7) Дополнительно
-4) Финальная production-очистка
+```bash
+sudo <prefix>-repair
 ```
 
-If the operator skipped final production cleanup during installation or wants to run it again, the same menu item can be used later.
+Repair restores XPAM runtime glue and generated helper commands. It should not change VLESS or Telegram links.
 
-The cleanup keeps the files required to manage the server, including runtime files, secure notes, config backups, manual backups, systemd services and working site/configuration files.
+VLESS and Telegram links shown by `sudo <prefix>-links --show-secrets` are expected to come from the current 3x-ui configuration, not from stale text copies.
+
+## Weekly maintenance
+
+Weekly maintenance is configured automatically. It keeps the XPAM-managed server state consistent and should not recreate removed legacy command surfaces or change user connection links. It must not revert a valid Telegram proxy / MTG secret that was changed in 3x-ui.
+
+## Network diagnostics
+
+```bash
+sudo <prefix>-netdiag
+```
+
+Use network diagnostics when DNS, TLS, routing or connectivity checks fail.
+
+## Safe self-update
+
+Safe self-update is available from:
+
+```bash
+sudo <prefix>-xpam
+```
+
+Open `Дополнительно` → `Проверить обновления XPAM`.
+
+The updater must:
+
+- verify SHA256 before applying an update;
+- run staging preflight;
+- create a backup;
+- run post-update health/deep-health;
+- roll back if the updated state is not healthy;
+- preserve VLESS and Telegram links;
+- preserve current 3x-ui-sourced VLESS/Telegram link behavior.
+
+## Small-VPS policy
+
+v1.3.5 includes small-VM safeguards such as journald/logrotate policies, resource checks and backup retention.

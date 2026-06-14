@@ -1,48 +1,66 @@
-# Configuration model
+# Configuration
 
-The main persistent configuration file is:
+XPAM Script stores runtime configuration under `/etc/xpam-script/` and installs the runtime kit under `/opt/xpam-script/`.
 
-```text
-/etc/xpam-script/config.env
+Most users should manage XPAM through the prefix command:
+
+```bash
+sudo <prefix>-xpam
 ```
 
-It is created during installation and loaded by runtime launchers.
+## Main commands
 
----
+```bash
+sudo <prefix>-xpam                 # main XPAM menu
+sudo <prefix>-links                # safe connection summary
+sudo <prefix>-links --show-secrets # full connection data
+sudo <prefix>-health               # quick health check
+sudo <prefix>-health --deep        # extended health check
+sudo <prefix>-repair               # repair XPAM runtime glue
+sudo <prefix>-netdiag              # network diagnostics
+```
 
-## Important variables
+## Domains
 
-| Variable | Meaning |
-|---|---|
-| `SERVER_PREFIX` | command prefix chosen during step `0` |
-| `PROFILE` | selected deployment profile |
-| `ROOT_DOMAIN` | root website domain, if used |
-| `WWW_DOMAIN` | `www` alias, if used |
-| `PRIMARY_DOMAIN` | VLESS/panel domain |
-| `SYNC_DOMAIN` | MTProto/sync/relay domain |
-| `WEB_CERT_NAME` | Certbot certificate name |
-| `CERT_EMAIL` | email used for Let’s Encrypt |
-| `PANEL_PATH` | protected web base path for 3x-ui |
-| `XUI_PANEL_PORT` | loopback 3x-ui web port |
-| `XRAY_PUBLIC_PORT` | public TLS port, usually `443` |
-| `XRAY_LOCAL_PORT` | loopback Xray/VLESS port in HAProxy mode |
-| `SITE_BACKEND_PORT` | loopback nginx fallback site port |
-| `SYNC_BACKEND_PORT` | loopback nginx sync TLS backend port |
-| `MTPROTO_PORT` | loopback MTProto backend port |
-| `ALLOW_IPV6_443` | internal compatibility flag; supported installer path keeps it `no` |
-| `BASIC_USER` | Basic Auth user for protected panel path |
+Use separate DNS names for the roles you configure during installation. Examples:
 
----
+```text
+vless.example.com
+tg.example.com
+panel.example.com
+```
+
+Do not publish live domains in public issues unless they are intentionally public.
+
+## Links
+
+XPAM centralizes user connection data in:
+
+```bash
+sudo <prefix>-links --show-secrets
+```
+
+The full output shows current VLESS and Telegram links from the active 3x-ui configuration. After adding/removing VLESS clients or rotating the Telegram proxy / MTG secret in 3x-ui, run the command again and use the updated links.
+
+The safe summary is:
+
+```bash
+sudo <prefix>-links
+```
+
+## DoubleHop Mode
+
+DoubleHop Mode is configured from the main XPAM menu. The Exit VLESS link should be treated as a secret.
+
+XPAM only configures the Entry server. It does not create, repair or remove clients on the Exit server.
 
 ## Manual edits
 
-Manual edits are possible but not recommended unless the operator understands the topology.
+Avoid manual edits to generated nginx, HAProxy, 3x-ui, systemd or XPAM files unless you know how to restore the server.
 
-After manual edits:
+After changes, run:
 
 ```bash
-sudo <prefix>-install
 sudo <prefix>-health
+sudo <prefix>-health --deep
 ```
-
-Do not manually edit secrets inside logs, screenshots, or public issues.

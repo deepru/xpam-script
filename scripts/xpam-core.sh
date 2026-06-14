@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-KIT_VERSION="v1.3.0"
+KIT_VERSION="v1.3.5"
 KIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG_DIR="/etc/xpam-script"
 CONFIG_FILE="${CONFIG_DIR}/config.env"
@@ -92,7 +92,7 @@ apt_get_safe(){
   local log
   apt_dpkg_recovery "$context"
   log="$(mktemp /tmp/xpam-script-apt.XXXXXX)"
-  if run_with_heartbeat "APT operation: $context" env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -o DPkg::Lock::Timeout=180 "$@" > >(tee "$log") 2>&1; then
+  if run_with_heartbeat "APT operation: $context" env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -o DPkg::Lock::Timeout=180 -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 "$@" > >(tee "$log") 2>&1; then
     rm -f "$log"
     return 0
   fi
@@ -100,7 +100,7 @@ apt_get_safe(){
     warn "APT reported interrupted dpkg or lock during $context; trying recovery and one retry"
     rm -f "$log"
     apt_dpkg_recovery "$context retry"
-    run_with_heartbeat "APT retry: $context" env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -o DPkg::Lock::Timeout=180 "$@"
+    run_with_heartbeat "APT retry: $context" env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -o DPkg::Lock::Timeout=180 -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 "$@"
     return $?
   fi
   rm -f "$log"
@@ -219,7 +219,7 @@ ensure_xui_ready_for_finalize(){
 }
 
 PROFILE=""; SERVER_PREFIX=""; ROOT_DOMAIN=""; WWW_DOMAIN=""; PRIMARY_DOMAIN=""; SYNC_DOMAIN=""; WEB_CERT_NAME=""; CERT_EMAIL=""
-PANEL_PATH="api/internal/storage"; XUI_PANEL_PORT="57827"; XUI_AUTO_SETUP="yes"; XUI_ADMIN_USER="vlessuser"; XUI_ADMIN_PASS="${XUI_ADMIN_PASS:-}"; XUI_INSTALLED_TAG=""; XRAY_PUBLIC_PORT="443"; XRAY_LOCAL_PORT="1443"; SSH_PUBLIC_PORT="22"; HTTP_PUBLIC_PORT="80"; SITE_BACKEND_PORT="8080"; SYNC_BACKEND_PORT="9443"; MTPROTO_PORT="47827"; ALLOW_IPV6_443="no"; BASIC_USER="admin"
+PANEL_PATH="api/internal/storage"; XUI_PANEL_PORT="57827"; XUI_AUTO_SETUP="yes"; XUI_ADMIN_USER="vlessuser"; XUI_ADMIN_PASS="${XUI_ADMIN_PASS:-}"; XUI_INSTALLED_TAG=""; XRAY_PUBLIC_PORT="443"; XRAY_LOCAL_PORT="1443"; SSH_PUBLIC_PORT="22"; HTTP_PUBLIC_PORT="80"; SITE_BACKEND_PORT="8080"; SYNC_BACKEND_PORT="9443"; MTPROTO_PORT="47827"; MTPROTO_BACKEND="${MTPROTO_BACKEND:-alexbers}"; ALLOW_IPV6_443="no"; BASIC_USER="admin"
 MTPROTO_REPO_URL="https://github.com/alexbers/mtprotoproxy.git"; MTPROTO_REPO_BRANCH="stable"
 TELEGRAM_RELAY_PATH="api/internal/notify-relay"; TELEGRAM_RELAY_SOCKET="/run/xpam-script-telegram-relay.sock"
 
@@ -314,6 +314,56 @@ normalize_https_relay_url(){
 unique_domains(){ printf '%s\n' "$@" | awk 'NF && !seen[$0]++' | xargs; }
 uses_mtproto(){ [[ "$PROFILE" == "subdomains_mtproto" || "$PROFILE" == "root_mtproto" ]]; }
 uses_haproxy(){ uses_mtproto; }
+# Backend selector/abstraction. Stage 4 supports alexbers legacy/rollback and
+# the controlled 3xui-mtg runtime path. Teleproxy remains reserved/future.
+mtproto_backend_allowed_values(){ printf 'alexbers 3xui-mtg teleproxy\n'; }
+mtproto_backend_effective(){
+  if ! uses_mtproto; then
+    printf 'none\n'
+    return 0
+  fi
+  local backend="${MTPROTO_BACKEND:-}"
+  [[ -n "$backend" ]] || backend="alexbers"
+  printf '%s\n' "$backend"
+}
+mtproto_backend_validate_value(){
+  local backend="${1:-}"
+  case "$backend" in
+    ""|alexbers|3xui-mtg|teleproxy) return 0 ;;
+    *) fail "MTPROTO_BACKEND must be one of: $(mtproto_backend_allowed_values); got: $backend" ;;
+  esac
+}
+mtproto_backend_runtime_supported(){
+  local backend
+  backend="$(mtproto_backend_effective)"
+  [[ "$backend" == "none" || "$backend" == "alexbers" || "$backend" == "3xui-mtg" ]]
+}
+mtproto_backend_is_alexbers(){ [[ "$(mtproto_backend_effective)" == "alexbers" ]]; }
+mtproto_backend_is_3xui_mtg(){ [[ "$(mtproto_backend_effective)" == "3xui-mtg" ]]; }
+mtproto_backend_is_teleproxy(){ [[ "$(mtproto_backend_effective)" == "teleproxy" ]]; }
+mtproto_backend_reserved_message(){
+  local backend="${1:-$(mtproto_backend_effective)}"
+  printf 'MTPROTO_BACKEND=%s is recognized/reserved but not implemented in this runtime patch yet. Current runtime support is alexbers legacy/rollback and 3xui-mtg.' "$backend"
+}
+mtproto_backend_require_runtime_supported(){
+  local backend
+  backend="$(mtproto_backend_effective)"
+  case "$backend" in
+    none|alexbers|3xui-mtg) return 0 ;;
+    teleproxy) fail "$(mtproto_backend_reserved_message "$backend")" ;;
+    *) fail "Unsupported MTPROTO_BACKEND: $backend" ;;
+  esac
+}
+# Backward-compatible name for the Stage 1 gate; keep it while later stages
+# switch call sites to the generic backend runtime gate.
+mtproto_backend_require_stage1_runtime_supported(){ mtproto_backend_require_runtime_supported; }
+mtproto_backend_normalize_for_config(){
+  if uses_mtproto; then
+    MTPROTO_BACKEND="$(mtproto_backend_effective)"
+  else
+    MTPROTO_BACKEND="${MTPROTO_BACKEND:-alexbers}"
+  fi
+}
 web_cert_name(){ [[ -n "$WEB_CERT_NAME" ]] && echo "$WEB_CERT_NAME" || echo "$PRIMARY_DOMAIN"; }
 expected_xray_port(){ uses_haproxy && echo "$XRAY_LOCAL_PORT" || echo "$XRAY_PUBLIC_PORT"; }
 expected_xray_listen_host(){
@@ -372,6 +422,8 @@ validate_inputs(){
   [[ "$TELEGRAM_RELAY_PATH" != *..* ]] || fail "TELEGRAM_RELAY_PATH must not contain .."
 
   if uses_mtproto; then
+    mtproto_backend_validate_value "${MTPROTO_BACKEND:-}"
+    mtproto_backend_require_runtime_supported
     validate_domain SYNC_DOMAIN "$SYNC_DOMAIN"
     validate_port MTPROTO_PORT "$MTPROTO_PORT"
     validate_port SYNC_BACKEND_PORT "$SYNC_BACKEND_PORT"
@@ -546,7 +598,7 @@ maybe_import_existing_config(){
     chmod 700 "$CONFIG_DIR"
     {
       echo "# Managed by xpam-script ${KIT_VERSION}"
-      for v in PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT ALLOW_IPV6_443 BASIC_USER MTPROTO_REPO_URL MTPROTO_REPO_BRANCH TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY; do
+      for v in PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER MTPROTO_REPO_URL MTPROTO_REPO_BRANCH TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY; do
         printf '%s=%q\n' "$v" "${!v:-}"
       done
     } > "$CONFIG_FILE"
@@ -627,10 +679,11 @@ ensure_prefix_bootstrap(){
 save_config(){
   mkdir -p "$CONFIG_DIR"
   chmod 700 "$CONFIG_DIR"
+  mtproto_backend_normalize_for_config
   validate_server_prefix
   {
     echo "# Managed by xpam-script ${KIT_VERSION}"
-    for v in PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT ALLOW_IPV6_443 BASIC_USER MTPROTO_REPO_URL MTPROTO_REPO_BRANCH TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY; do
+    for v in PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER MTPROTO_REPO_URL MTPROTO_REPO_BRANCH TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY; do
       printf '%s=%q\n' "$v" "${!v}"
     done
   } > "$CONFIG_FILE"
@@ -673,8 +726,13 @@ open(dst,'w').write(s)
 PY
 }
 export_vars(){
-  export PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT ALLOW_IPV6_443 BASIC_USER MTPROTO_REPO_URL MTPROTO_REPO_BRANCH TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY
+  export PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER MTPROTO_REPO_URL MTPROTO_REPO_BRANCH TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY
   export WEB_SERVER_NAMES="$(web_domains)" CERTONLY_SERVER_NAMES="$(web_domains)${SYNC_DOMAIN:+ $SYNC_DOMAIN}" SERVICE_SITE_DIR="$(service_site_dir)" ROOT_SITE_DIR="$(root_site_dir)" SERVER_PREFIX_UP="$(printf '%s' "$SERVER_PREFIX" | tr '[:lower:]' '[:upper:]')"
+  if uses_mtproto && mtproto_backend_is_3xui_mtg; then
+    export HAPROXY_BACKEND_ORDER_UNITS="network-online.target nginx.service x-ui.service"
+  else
+    export HAPROXY_BACKEND_ORDER_UNITS="network-online.target nginx.service x-ui.service mtprotoproxy.service"
+  fi
   if [[ "$PROFILE" == "root_mtproto" ]]; then
     ROOT_SITE_BLOCK="$(cat <<EOF_ROOT_SITE_BLOCK
 server {
@@ -727,12 +785,32 @@ EOF_ROOT_SITE_BLOCK
   fi
   if [[ "$ALLOW_IPV6_443" == "yes" ]]; then export HAPROXY_IPV6_BIND="    bind [::]:${XRAY_PUBLIC_PORT} v6only"; else export HAPROXY_IPV6_BIND=""; fi
   if uses_mtproto; then
-    export MTPROTO_HEALTH_BLOCK=$'check_active haproxy
+    if mtproto_backend_is_3xui_mtg; then
+      export MTPROTO_HEALTH_BLOCK=$'check_active haproxy
+haproxy -c -f /etc/haproxy/haproxy.cfg >/dev/null 2>&1 && echo "OK: haproxy config" || warn_fail "haproxy config failed"
+check_http "'"$SYNC_DOMAIN"$'/health" 200 "https://'"$SYNC_DOMAIN"$'/health"
+check_http "'"$SYNC_DOMAIN"$'/v1" 401 "https://'"$SYNC_DOMAIN"$'/v1"'
+      export MTPROTO_WEEKLY_BLOCK=$'haproxy -c -f /etc/haproxy/haproxy.cfg || warn_fail "haproxy config check failed"
+/usr/local/sbin/wait-for-local-port.sh 127.0.0.1 "$SYNC_BACKEND_PORT" 45 nginx-sync-backend || warn_fail "nginx sync backend port not reachable before HAProxy restart"
+/usr/local/sbin/wait-for-local-port.sh 127.0.0.1 "$XRAY_LOCAL_PORT" 45 xray-vless || warn_fail "xray local VLESS port not reachable before HAProxy restart"
+/usr/local/sbin/wait-for-local-port.sh 127.0.0.1 "$MTPROTO_PORT" 60 3xui-mtg-backend || warn_fail "3xui-mtg backend port not reachable before HAProxy restart"
+systemctl restart haproxy || warn_fail "haproxy restart failed"
+if systemctl is-active --quiet haproxy; then
+  sleep 5
+  if [ -n "${SYNC_DOMAIN:-}" ]; then
+    code="$(curl -4sk --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" "https://${SYNC_DOMAIN}/health" 2>/dev/null || true)"
+    [ "$code" = "200" ] || warn_fail "${SYNC_DOMAIN}/health expected 200 after HAProxy restart got ${code:-000}"
+    code="$(curl -4sk --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" "https://${SYNC_DOMAIN}/v1" 2>/dev/null || true)"
+    [ "$code" = "401" ] || warn_fail "${SYNC_DOMAIN}/v1 expected 401 after HAProxy restart got ${code:-000}"
+  fi
+fi'
+    else
+      export MTPROTO_HEALTH_BLOCK=$'check_active haproxy
 check_active mtprotoproxy
 haproxy -c -f /etc/haproxy/haproxy.cfg >/dev/null 2>&1 && echo "OK: haproxy config" || warn_fail "haproxy config failed"
 check_http "'"$SYNC_DOMAIN"$'/health" 200 "https://'"$SYNC_DOMAIN"$'/health"
 check_http "'"$SYNC_DOMAIN"$'/v1" 401 "https://'"$SYNC_DOMAIN"$'/v1"'
-    export MTPROTO_WEEKLY_BLOCK=$'haproxy -c -f /etc/haproxy/haproxy.cfg || warn_fail "haproxy config check failed"
+      export MTPROTO_WEEKLY_BLOCK=$'haproxy -c -f /etc/haproxy/haproxy.cfg || warn_fail "haproxy config check failed"
 /usr/local/sbin/wait-for-local-port.sh 127.0.0.1 "$SYNC_BACKEND_PORT" 45 nginx-sync-backend || warn_fail "nginx sync backend port not reachable before HAProxy restart"
 /usr/local/sbin/wait-for-local-port.sh 127.0.0.1 "$XRAY_LOCAL_PORT" 45 xray-vless || warn_fail "xray local VLESS port not reachable before HAProxy restart"
 if ! systemctl restart mtprotoproxy; then
@@ -750,6 +828,7 @@ if systemctl is-active --quiet haproxy; then
     [ "$code" = "401" ] || warn_fail "${SYNC_DOMAIN}/v1 expected 401 after HAProxy restart got ${code:-000}"
   fi
 fi'
+    fi
   else
     export MTPROTO_HEALTH_BLOCK=""
     export MTPROTO_WEEKLY_BLOCK=""
@@ -910,14 +989,14 @@ SSHCONF
   install_runtime_kit || true
   write_install_launcher || true
 
-  echo "Команда меню создана: sudo ${SERVER_PREFIX}-install"
+  echo "Команда меню создана: sudo ${SERVER_PREFIX}-xpam"
   echo
   echo "Не закрывайте рабочую SSH-сессию до завершения установки."
   echo
   if confirm "Продолжить установку XPAM сейчас?" yes; then
     stage_install_continue
   else
-    echo "Позже выполните: sudo ${SERVER_PREFIX}-install"
+    echo "Позже выполните: sudo ${SERVER_PREFIX}-xpam"
   fi
 }
 sensitive_package_patterns(){
@@ -1012,14 +1091,65 @@ track_sensitive_package_changes(){
   return "$rc"
 }
 
+preinstall_marker_file(){ echo "/var/lib/xpam-script/preinstall-apt-ok"; }
+
+preinstall_marker_valid(){
+  local marker boot_id now marker_ts marker_boot_id marker_os_id marker_os_version current_os_id current_os_version
+  marker="$(preinstall_marker_file)"
+  [[ -s "$marker" ]] || return 1
+  boot_id="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
+  [[ -n "$boot_id" ]] || return 1
+  # Do not trust a cached apt marker if dpkg currently reports unfinished work.
+  if dpkg --audit 2>/dev/null | grep -q .; then return 1; fi
+  now="$(date +%s)"
+  marker_ts="$(awk -F= '$1=="XPAM_PREINSTALL_APT_TS" {print $2}' "$marker" 2>/dev/null | tail -n1)"
+  marker_boot_id="$(awk -F= '$1=="XPAM_PREINSTALL_APT_BOOT_ID" {print $2}' "$marker" 2>/dev/null | tail -n1)"
+  marker_os_id="$(awk -F= '$1=="XPAM_PREINSTALL_APT_OS_ID" {print $2}' "$marker" 2>/dev/null | tail -n1)"
+  marker_os_version="$(awk -F= '$1=="XPAM_PREINSTALL_APT_OS_VERSION_ID" {print $2}' "$marker" 2>/dev/null | tail -n1)"
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  current_os_id="${ID:-}"
+  current_os_version="${VERSION_ID:-}"
+  [[ "$marker_boot_id" == "$boot_id" ]] || return 1
+  [[ "$marker_os_id" == "$current_os_id" ]] || return 1
+  [[ "$marker_os_version" == "$current_os_version" ]] || return 1
+  [[ "$marker_ts" =~ ^[0-9]+$ ]] || return 1
+  (( now - marker_ts <= 21600 )) || return 1
+  return 0
+}
+
+preinstall_marker_write(){
+  local marker dir boot_id os_id os_version
+  marker="$(preinstall_marker_file)"
+  dir="$(dirname "$marker")"
+  boot_id="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  os_id="${ID:-}"
+  os_version="${VERSION_ID:-}"
+  mkdir -p "$dir"
+  cat > "$marker" <<EOF_APT_MARKER
+XPAM_PREINSTALL_APT_TS=$(date +%s)
+XPAM_PREINSTALL_APT_BOOT_ID=$boot_id
+XPAM_PREINSTALL_APT_OS_ID=$os_id
+XPAM_PREINSTALL_APT_OS_VERSION_ID=$os_version
+EOF_APT_MARKER
+  chmod 600 "$marker" 2>/dev/null || true
+}
+
 preinstall_system_update(){
   say "Updating repositories and upgrading existing packages before installation"
   apt_dpkg_recovery "preinstall"
+  if preinstall_marker_valid; then
+    ok "Pre-install apt full-upgrade already passed in this boot; skipping repeated full-upgrade"
+    return 0
+  fi
   write_common_library
   # shellcheck source=/usr/local/sbin/xpam-maint-common.sh
   . /usr/local/sbin/xpam-maint-common.sh
   xpam_release_upgrade_guard || warn "release-upgrade guard returned non-zero"
   track_sensitive_package_changes "preinstall full-upgrade" xpam_guarded_full_upgrade "preinstall" || fail "Pre-install apt full-upgrade failed"
+  preinstall_marker_write || true
 }
 install_base_packages_inner(){
   apt_get_safe "apt update before base packages" update &&
@@ -1037,7 +1167,11 @@ install_mtproto_haproxy_packages(){
     say "Installing HAProxy/MTProto dependencies"
     apt_dpkg_recovery "HAProxy/MTProto package install"
     apt_get_safe "apt update before HAProxy/MTProto packages" update
-    apt_get_safe "HAProxy/MTProto package install" install -y haproxy git python3-cryptography
+    if mtproto_backend_is_alexbers; then
+      apt_get_safe "HAProxy/alexbers MTProto package install" install -y haproxy git python3-cryptography
+    else
+      apt_get_safe "HAProxy package install for 3xui-mtg" install -y haproxy
+    fi
   fi
 }
 
@@ -1396,6 +1530,37 @@ write_wait_for_port(){ render_template "$KIT_DIR/templates/wait-for-local-port.s
 write_common_library(){ render_template "$KIT_DIR/templates/xpam-maint-common.sh.tpl" /usr/local/sbin/xpam-maint-common.sh; chmod +x /usr/local/sbin/xpam-maint-common.sh; bash -n /usr/local/sbin/xpam-maint-common.sh; }
 write_dns_policy_script(){ render_template "$KIT_DIR/templates/check-dns-policy.sh.tpl" /usr/local/sbin/check-dns-policy.sh; chmod +x /usr/local/sbin/check-dns-policy.sh; bash -n /usr/local/sbin/check-dns-policy.sh; }
 write_network_tuning_policy_script(){ render_template "$KIT_DIR/templates/check-network-tuning-policy.sh.tpl" /usr/local/sbin/check-network-tuning-policy; chmod +x /usr/local/sbin/check-network-tuning-policy; bash -n /usr/local/sbin/check-network-tuning-policy; }
+small_vm_resource_preflight(){
+  local mem_kb mem_mb free_mb cpu_count active_swap_mb planned_swap_mb
+  say "Проверка ресурсов маленькой VM"
+  mem_kb="$(awk '/MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+  mem_mb=$(( (mem_kb + 1023) / 1024 ))
+  free_mb="$(df -Pm / | awk 'NR==2 {print $4+0}')"
+  cpu_count="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
+  active_swap_mb="$(swapon --show --bytes --noheadings 2>/dev/null | awk '{sum += $3} END {printf "%.0f", sum/1024/1024}' || echo 0)"
+
+  if (( mem_mb <= 1024 || cpu_count <= 1 )); then
+    warn "Обнаружена маленькая VM: RAM=${mem_mb} MB, CPU=${cpu_count}. XPAM включит щадящие проверки и retention-политику."
+  else
+    ok "Ресурсы VM: RAM=${mem_mb} MB, CPU=${cpu_count}"
+  fi
+
+  if (( active_swap_mb == 0 && mem_mb <= 1024 )); then
+    planned_swap_mb=1024
+    warn "Активный swap не найден. XPAM попробует создать /swapfile ${planned_swap_mb}M для безопасной установки."
+  elif (( active_swap_mb > 0 )); then
+    ok "Активный swap найден: ${active_swap_mb} MB"
+  fi
+
+  if (( free_mb < 1024 )); then
+    warn "Очень мало свободного места на /: ${free_mb} MB. Установка может быть нестабильной; рекомендуется освободить место или увеличить диск."
+  elif (( free_mb < 2048 )); then
+    warn "Свободного места на / меньше 2 GB (${free_mb} MB). XPAM продолжит, но backup/apt операции могут требовать больше места."
+  else
+    ok "Свободное место на /: ${free_mb} MB"
+  fi
+}
+
 ensure_swap_policy(){
   say "Checking swap policy"
 
@@ -1512,7 +1677,11 @@ EOF_TUNING_SYSCTL
 apply_service_nofile_limits(){
   say "Applying service LimitNOFILE=524288 where services are installed"
   local svc
-  for svc in nginx x-ui haproxy mtprotoproxy; do
+  local -a svcs=(nginx x-ui haproxy)
+  if uses_mtproto && mtproto_backend_is_alexbers; then
+    svcs+=(mtprotoproxy)
+  fi
+  for svc in "${svcs[@]}"; do
     if systemctl cat "$svc.service" >/dev/null 2>&1; then
       mkdir -p "/etc/systemd/system/$svc.service.d"
       cat > "/etc/systemd/system/$svc.service.d/limits.conf" <<'EOF_NOFILE'
@@ -1792,7 +1961,7 @@ run_certbot_checked(){
     echo
     warn "Let's Encrypt temporarily refused a new certificate for this domain set. The server is not broken."
     [[ -n "$retry_line" ]] && warn "Retry time reported by Let's Encrypt: $retry_line"
-    warn "Wait until the retry time, then run: sudo ${SERVER_PREFIX}-install and choose menu item 1."
+    warn "Wait until the retry time, then run: sudo ${SERVER_PREFIX}-xpam and choose menu item 1."
     warn "For repeated tests, use fresh DNS names that point to this server."
   fi
   rm -f "$log"
@@ -1987,7 +2156,7 @@ reboot_gate_before_finalize(){
     echo "  sudo reboot"
     echo
     echo "После перезагрузки войдите по SSH-ключу и выполните:"
-    echo "  sudo ${SERVER_PREFIX}-install"
+    echo "  sudo ${SERVER_PREFIX}-xpam"
     return 1
   fi
   return 0
@@ -2605,7 +2774,7 @@ verify_xui_manual_setup(){
 write_nginx_final(){ export_vars; cleanup_legacy_nginx_files; if uses_mtproto; then ensure_telegram_relay_nginx_snippet; render_template "$KIT_DIR/templates/nginx-mtproto.conf.tpl" /etc/nginx/sites-available/xpam-script-final.conf; else render_template "$KIT_DIR/templates/nginx-direct.conf.tpl" /etc/nginx/sites-available/xpam-script-final.conf; fi; rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/xpam-script-certonly.conf; ln -sf /etc/nginx/sites-available/xpam-script-final.conf /etc/nginx/sites-enabled/xpam-script-final.conf; ensure_htpasswd; nginx -t; systemctl reload nginx || systemctl restart nginx; }
 
 write_haproxy(){ uses_mtproto || return 0; export_vars; render_template "$KIT_DIR/templates/haproxy.cfg.tpl" /etc/haproxy/haproxy.cfg; haproxy -c -f /etc/haproxy/haproxy.cfg; mkdir -p /etc/systemd/system/haproxy.service.d; render_template "$KIT_DIR/templates/backend-order.conf.tpl" /etc/systemd/system/haproxy.service.d/backend-order.conf; systemctl daemon-reload; systemctl enable haproxy; systemctl restart haproxy; }
-write_health_weekly(){ say "Writing health and weekly scripts"; write_common_library; write_dns_policy_script; write_network_tuning_policy_script; write_telegram_https_relay_worker; migrate_legacy_system_file_names || true; export_vars; render_template "$KIT_DIR/templates/health.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-health"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-health"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-health"; write_health_launcher || true; write_links_launcher || true; write_vless_launcher || true; write_tg_launcher || true; write_repair_launcher || true; write_netdiag_launcher || true; render_template "$KIT_DIR/templates/weekly.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; write_weekly_launcher || true; local cron_min=35; [[ "$SERVER_PREFIX" == "se" ]] && cron_min=30; [[ "$SERVER_PREFIX" == "lt" ]] && cron_min=40; cat > "/etc/cron.d/${SERVER_PREFIX}-weekly-maintenance" <<EOF
+write_health_weekly(){ say "Writing health and weekly scripts"; write_common_library; bash -c '. /usr/local/sbin/xpam-maint-common.sh; xpam_apply_small_vm_policies' || true; write_dns_policy_script; write_network_tuning_policy_script; write_telegram_https_relay_worker; migrate_legacy_system_file_names || true; export_vars; render_template "$KIT_DIR/templates/health.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-health"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-health"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-health"; write_health_launcher || true; write_links_launcher || true; write_vless_launcher || true; write_tg_launcher || true; write_repair_launcher || true; write_netdiag_launcher || true; render_template "$KIT_DIR/templates/weekly.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; write_weekly_launcher || true; local cron_min=35; [[ "$SERVER_PREFIX" == "se" ]] && cron_min=30; [[ "$SERVER_PREFIX" == "lt" ]] && cron_min=40; cat > "/etc/cron.d/${SERVER_PREFIX}-weekly-maintenance" <<EOF
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ${cron_min} 4 * * 0 root /usr/bin/nice -n 19 /usr/bin/ionice -c3 /usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh >/dev/null 2>&1
@@ -2615,15 +2784,13 @@ EOF
 ask_layout(){
   echo
   echo "Choose server profile:"
-  echo "1) VLESS only, direct TLS"
-  echo "2) VLESS + MTProto, separate subdomains"
-  echo "3) Main/root website + VLESS + MTProto"
+  echo "1) Subdomains-only: VLESS domain + Telegram domain"
+  echo "2) Full-domain: root/www + VLESS domain + Telegram domain"
   local choice
-  read -r -p "Profile [1-3]: " choice
+  read -r -p "Profile [1-2]: " choice
   case "$choice" in
-    1) PROFILE=vless_direct ;;
-    2) PROFILE=subdomains_mtproto ;;
-    3) PROFILE=root_mtproto ;;
+    1) PROFILE=subdomains_mtproto ;;
+    2) PROFILE=root_mtproto ;;
     *) fail "Unknown profile" ;;
   esac
 
@@ -2641,14 +2808,15 @@ ask_layout(){
     ask WEB_CERT_NAME "Certbot cert-name for Web/VLESS cert" "$PRIMARY_DOMAIN"
   fi
   if uses_mtproto; then
-    ask SYNC_DOMAIN "MTProto domain" ""
+    MTPROTO_BACKEND="3xui-mtg"
+    ask SYNC_DOMAIN "Telegram domain" ""
   fi
   ask CERT_EMAIL "Email for Let's Encrypt; empty = no email" ""
   ask_default_label PANEL_PATH "3x-ui panel path" "$PANEL_PATH"
   ask XUI_PANEL_PORT "3x-ui local panel port" "$XUI_PANEL_PORT"
   uses_haproxy && ask XRAY_LOCAL_PORT "Local Xray/VLESS port behind HAProxy" "$XRAY_LOCAL_PORT"
   ask SITE_BACKEND_PORT "Local nginx fallback site port" "$SITE_BACKEND_PORT"
-  uses_mtproto && ask SYNC_BACKEND_PORT "Local nginx MTProto TLS backend port" "$SYNC_BACKEND_PORT" && ask MTPROTO_PORT "Local MTProto backend port" "$MTPROTO_PORT"
+  uses_mtproto && ask SYNC_BACKEND_PORT "Local nginx Telegram TLS fallback port" "$SYNC_BACKEND_PORT" && ask MTPROTO_PORT "Local Telegram backend port" "$MTPROTO_PORT"
   echo "External ports are fixed by XPAM Script: SSH 22, HTTP 80, TLS 443. They are not asked interactively."
   if confirm "Установить и настроить 3x-ui автоматически?" "${XUI_AUTO_SETUP:-yes}"; then
     XUI_AUTO_SETUP="yes"
@@ -2663,7 +2831,8 @@ ask_layout(){
   echo "  Profile: $PROFILE"
   echo "  Web/VLESS domains: $(web_domains)"
   [[ "$PROFILE" == "root_mtproto" ]] && echo "  Main/root domain: $ROOT_DOMAIN" && echo "  Auto www alias: $WWW_DOMAIN"
-  uses_mtproto && echo "  MTProto domain: $SYNC_DOMAIN"
+  uses_mtproto && echo "  Telegram domain: $SYNC_DOMAIN"
+  uses_mtproto && echo "  Telegram backend: $MTPROTO_BACKEND"
   echo "  Cert name: $(web_cert_name)"
   echo "  Public ports: SSH ${SSH_PUBLIC_PORT}, HTTP ${HTTP_PUBLIC_PORT}, TLS ${XRAY_PUBLIC_PORT}"
   echo "  3x-ui panel: 127.0.0.1:${XUI_PANEL_PORT}, public path https://${PRIMARY_DOMAIN}/${PANEL_PATH}/"
@@ -2685,6 +2854,7 @@ stage_prepare(){
     ask_layout
     save_config
   fi
+  small_vm_resource_preflight
   ensure_swap_policy
   preinstall_system_update
   install_base_packages
@@ -2723,7 +2893,7 @@ stage_prepare(){
     echo "  sudo reboot"
     echo
     echo "После перезагрузки войдите по SSH-ключу и выполните:"
-    echo "  sudo ${SERVER_PREFIX}-install"
+    echo "  sudo ${SERVER_PREFIX}-xpam"
     echo "============================================================"
     echo
     exit 0
@@ -2734,7 +2904,7 @@ stage_prepare(){
     stage_finalize
     exit 0
   else
-    ok "Первый этап завершён. Настройте 3x-ui вручную, затем выполните: sudo ${SERVER_PREFIX}-install"
+    ok "Первый этап завершён. Настройте 3x-ui вручную, затем выполните: sudo ${SERVER_PREFIX}-xpam"
     echo "============================================================"
     echo
     exit 0
@@ -2747,7 +2917,7 @@ note_value(){
 }
 
 print_vless_links_from_xui(){
-  local auto_note="$1" db="/etc/x-ui/x-ui.db" tmp rc fallback_link fallback_inbound fallback_client
+  local auto_note="$1" db="/etc/x-ui/x-ui.db" tmp rc
 
   echo "ГОТОВЫЕ VLESS ССЫЛКИ ИЗ 3x-ui:"
 
@@ -2959,50 +3129,143 @@ PY_VLESS_LINKS
     rm -f "$tmp"
   fi
 
-  fallback_link="$(note_value "$auto_note" "VLESS link")"
-  fallback_inbound="$(note_value "$auto_note" "Inbound name")"
-  fallback_client="$(note_value "$auto_note" "Client name")"
-  if [[ -n "$fallback_link" ]]; then
-    echo "  Inbound Name: ${fallback_inbound:-see 3x-ui panel}"
-    echo "  Client Name: ${fallback_client:-see 3x-ui panel}"
-    echo "  VLESS Link: ${fallback_link}"
-  else
-    echo "  VLESS клиенты не найдены. Добавьте клиента в 3x-ui или проверьте /etc/x-ui/x-ui.db."
-  fi
+  echo "  VLESS клиенты не найдены в 3x-ui DB. Добавьте клиента в 3x-ui или проверьте /etc/x-ui/x-ui.db."
+  return 1
 }
 
+current_telegram_link_from_xui(){
+  local db="/etc/x-ui/x-ui.db" tmp rc
 
-vless_links_file(){
-  echo "/root/secure-notes/${SERVER_PREFIX}-vless-links.txt"
-}
+  [[ -s "$db" ]] || return 1
 
-sync_vless_links_file(){
-  local auto_note file tmp
-  auto_note="/root/secure-notes/${SERVER_PREFIX}-3x-ui-auto.txt"
-  file="$(vless_links_file)"
-  mkdir -p /root/secure-notes
-  chmod 700 /root/secure-notes 2>/dev/null || true
-  tmp="$(mktemp /tmp/xpam-vless-links.XXXXXX)"
-  # print_vless_links_from_xui intentionally prints a human view; extract only link lines into the secure file.
-  print_vless_links_from_xui "$auto_note" 2>/dev/null \
-    | awk -F'VLESS Link: ' '/VLESS Link: / {print $2}' \
-    | sed '/^[[:space:]]*$/d' > "$tmp" || true
-  if [[ -s "$tmp" ]]; then
-    install -m 600 "$tmp" "$file"
+  tmp="$(mktemp /tmp/xpam-telegram-link.XXXXXX)" || return 1
+  rc=0
+  XPAM_XUI_DB="$db" \
+  XPAM_SYNC_DOMAIN="${SYNC_DOMAIN}" \
+  XPAM_MTPROTO_PORT="${MTPROTO_PORT}" \
+  python3 - <<'PY_TELEGRAM_LINK' >"$tmp" || rc=$?
+import json
+import os
+import sqlite3
+import sys
+
+DB = os.environ.get("XPAM_XUI_DB", "/etc/x-ui/x-ui.db")
+SYNC_DOMAIN = os.environ.get("XPAM_SYNC_DOMAIN", "")
+MTPROTO_PORT = str(os.environ.get("XPAM_MTPROTO_PORT", "") or "")
+PUBLIC_PORT = "443"
+
+
+def parse_json(value, default):
+    if value is None or value == "":
+        return default
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        parsed = json.loads(str(value))
+        if isinstance(parsed, str):
+            try:
+                return json.loads(parsed)
+            except Exception:
+                return default
+        return parsed
+    except Exception:
+        return default
+
+
+def enabled(value):
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
+
+def pick(row, *names, default=None):
+    for name in names:
+        if name in row:
+            return row[name]
+    return default
+
+try:
+    conn = sqlite3.connect(DB)
+    conn.row_factory = sqlite3.Row
+    rows = [dict(r) for r in conn.execute("SELECT * FROM inbounds ORDER BY id ASC").fetchall()]
+except Exception as exc:
+    print(f"WARN: cannot read 3x-ui SQLite: {exc}", file=sys.stderr)
+    sys.exit(2)
+
+candidates = []
+for row in rows:
+    if str(pick(row, "protocol", default="")).lower() != "mtproto":
+        continue
+    if not enabled(pick(row, "enable", "enabled", default=1)):
+        continue
+
+    settings = parse_json(pick(row, "settings", default="{}"), {})
+    if not isinstance(settings, dict):
+        settings = {}
+
+    secret = str(settings.get("secret") or "").strip()
+    server = str(settings.get("shareAddr") or settings.get("fakeTlsDomain") or SYNC_DOMAIN or "").strip()
+    fake_tls = str(settings.get("fakeTlsDomain") or "").strip()
+    share_addr = str(settings.get("shareAddr") or "").strip()
+    row_port = str(pick(row, "port", default="") or "")
+
+    if not secret or not server:
+        continue
+
+    score = 0
+    if SYNC_DOMAIN and (server == SYNC_DOMAIN or share_addr == SYNC_DOMAIN or fake_tls == SYNC_DOMAIN):
+        score += 100
+    if MTPROTO_PORT and row_port == MTPROTO_PORT:
+        score += 30
+    if str(pick(row, "listen", default="") or "").startswith("127."):
+        score += 10
+
+    candidates.append((score, int(pick(row, "id", default=0) or 0), server, secret))
+
+if not candidates:
+    sys.exit(3)
+
+candidates.sort(key=lambda item: (-item[0], item[1]))
+_, _, server, secret = candidates[0]
+print(f"tg://proxy?server={server}&port={PUBLIC_PORT}&secret={secret}")
+PY_TELEGRAM_LINK
+
+  if [[ $rc -eq 0 && -s "$tmp" ]]; then
+    cat "$tmp"
     rm -f "$tmp"
     return 0
   fi
+
   rm -f "$tmp"
   return 1
 }
 
+
+vless_links_file(){
+  # Kept for compatibility with older operator habits. Since the current
+  # runtime, VLESS links are generated from 3x-ui SQLite on demand and are
+  # not stored as source-of-truth secure-note files.
+  echo "/root/secure-notes/${SERVER_PREFIX}-vless-links.txt"
+}
+
+sync_vless_links_file(){
+  # Compatibility no-op: remove stale legacy link cache if present.
+  # 3x-ui DB is the source of truth for VLESS links.
+  local file
+  file="$(vless_links_file)"
+  [[ -e "$file" ]] && rm -f "$file" 2>/dev/null || true
+  return 0
+}
+
 print_connection_summary(){
-  local basic_note auto_note mt_note mt_users_note vless_file
+  local basic_note auto_note mt_users_note
   basic_note="/root/secure-notes/${SERVER_PREFIX}-basic-auth.txt"
   auto_note="/root/secure-notes/${SERVER_PREFIX}-3x-ui-auto.txt"
-  mt_note="/root/secure-notes/${SERVER_PREFIX}-mtproto.txt"
   mt_users_note="/root/secure-notes/${SERVER_PREFIX}-mtproto-users.txt"
-  vless_file="$(vless_links_file)"
   sync_vless_links_file >/dev/null 2>&1 || true
 
   echo
@@ -3010,7 +3273,7 @@ print_connection_summary(){
   echo "XPAM Script: данные подключения"
   echo "============================================================"
   echo
-  echo "Этот вывод безопасный: пароли, VLESS-ссылки и MTProto-секреты здесь не печатаются."
+  echo "Этот вывод безопасный: пароли, VLESS-ссылки и Telegram секреты здесь не печатаются."
   echo "Полные секреты лежат только в защищённых файлах с правами 600."
   echo
   echo "Сайты и панели:"
@@ -3018,23 +3281,19 @@ print_connection_summary(){
   [[ -n "${WWW_DOMAIN:-}" && -n "${ROOT_DOMAIN:-}" ]] && echo "  www redirect:         https://${WWW_DOMAIN}/ -> https://${ROOT_DOMAIN}/"
   echo "  3x-ui / VLESS:        https://${PRIMARY_DOMAIN}/${PANEL_PATH}/"
   if uses_mtproto; then
-    echo "  MTProto health:       https://${SYNC_DOMAIN}/health"
+    echo "  Telegram proxy:       https://${SYNC_DOMAIN}/health"
   fi
   echo
   echo "Файлы с секретами на сервере:"
   [[ -f "$basic_note" ]] && echo "  Basic Auth:           $basic_note"
   [[ -f "$auto_note" ]] && echo "  3x-ui данные:         $auto_note"
-  [[ -f "$vless_file" ]] && echo "  VLESS-ссылки:         $vless_file"
-  [[ -f "$mt_note" ]] && echo "  MTProto link:         $mt_note"
-  [[ -f "$mt_users_note" ]] && echo "  MTProto users:        $mt_users_note"
-  echo
-  echo "Показать секреты на экран только осознанно:"
-  echo "  VLESS-ссылки:         sudo ${SERVER_PREFIX}-vless --show"
-  if uses_mtproto; then
-    echo "  MTProto-ссылки:       sudo ${SERVER_PREFIX}-tg --show"
-    echo "  MTProto управление:   sudo ${SERVER_PREFIX}-tg --manage"
+  echo "  VLESS/Telegram links: формируются из актуальной базы 3x-ui"
+  if uses_mtproto && mtproto_backend_is_alexbers; then
+    [[ -f "$mt_users_note" ]] && echo "  MTProto users:        $mt_users_note"
   fi
-  echo "  Всё сразу:            sudo ${SERVER_PREFIX}-links --show-secrets"
+  echo
+  echo "Показать секреты:"
+  echo "  Все данные подключения: sudo ${SERVER_PREFIX}-links --show-secrets"
   echo
   echo "Проверка сервера:"
   echo "  Быстрая:              sudo ${SERVER_PREFIX}-health"
@@ -3043,24 +3302,23 @@ print_connection_summary(){
 }
 
 print_connection_secrets_summary(){
-  local basic_note auto_note mt_note mt_users_note basic_user basic_pass xui_user xui_pass mtproto_link
+  local basic_note auto_note mt_users_note basic_user basic_pass xui_user xui_pass mtproto_link
   basic_note="/root/secure-notes/${SERVER_PREFIX}-basic-auth.txt"
   auto_note="/root/secure-notes/${SERVER_PREFIX}-3x-ui-auto.txt"
-  mt_note="/root/secure-notes/${SERVER_PREFIX}-mtproto.txt"
   mt_users_note="/root/secure-notes/${SERVER_PREFIX}-mtproto-users.txt"
 
   basic_user="$(note_value "$basic_note" "Username")"
   basic_pass="$(note_value "$basic_note" "Password")"
   xui_user="$(note_value "$auto_note" "3x-ui username")"
   xui_pass="$(note_value "$auto_note" "3x-ui password")"
-  mtproto_link="$(note_value "$mt_note" "Link")"
+  mtproto_link="$(current_telegram_link_from_xui 2>/dev/null || true)"
 
   echo
   echo "============================================================"
   echo "Данные для подключения"
   echo
   echo "Сохраните эти данные в безопасном месте."
-  echo "Не отправляйте пароли, VLESS/MTProto ссылки и token в чаты или публичные логи."
+  echo "Не отправляйте пароли, VLESS/Telegram ссылки и token в чаты или публичные логи."
   echo "============================================================"
   echo
   echo "АДРЕС ПАНЕЛИ 3x-ui:"
@@ -3079,21 +3337,26 @@ print_connection_secrets_summary(){
   print_vless_links_from_xui "$auto_note"
   echo
   if uses_mtproto; then
-    echo "ГОТОВАЯ TELEGRAM / MTPROTO ССЫЛКА:"
-    echo "  ${mtproto_link:-see $mt_note}"
+    echo "ГОТОВАЯ TELEGRAM LINK ИЗ 3x-ui:"
+    if [[ -n "$mtproto_link" ]]; then
+      echo "  $mtproto_link"
+    else
+      echo "  Telegram link не найдена в 3x-ui DB. Проверьте Telegram proxy / MTG inbound."
+    fi
     echo
   fi
   echo "ФАЙЛЫ С ДАННЫМИ НА СЕРВЕРЕ:"
   [[ -f "$basic_note" ]] && echo "  $basic_note"
   [[ -f "$auto_note" ]] && echo "  $auto_note"
-  [[ -f "$mt_note" ]] && echo "  $mt_note"
-  [[ -f "$mt_users_note" ]] && echo "  $mt_users_note"
+  if uses_mtproto && mtproto_backend_is_alexbers; then
+    [[ -f "$mt_users_note" ]] && echo "  $mt_users_note"
+  fi
   echo
   echo "ПОЛЕЗНЫЕ КОМАНДЫ:"
-  echo "  Открыть меню XPAM Script:          sudo ${SERVER_PREFIX}-install"
+  echo "  Открыть меню XPAM Script:          sudo ${SERVER_PREFIX}-xpam"
   echo "  Показать безопасную сводку:     sudo ${SERVER_PREFIX}-links"
   echo "  Показать VLESS-ссылки:           sudo ${SERVER_PREFIX}-vless"
-  if uses_mtproto; then
+  if uses_mtproto && mtproto_backend_is_alexbers; then
     echo "  Управление MTProto пользователями: sudo ${SERVER_PREFIX}-tg"
   fi
   echo "  Проверить состояние сервера:     sudo ${SERVER_PREFIX}-health"
@@ -3108,7 +3371,7 @@ print_install_done_summary(){
   echo "============================================================"
   echo "XPAM Script: сервер готов"
   echo
-  echo "Секреты, пароли, VLESS и MTProto ссылки не печатаются в install-log."
+  echo "Секреты, пароли, VLESS и Telegram ссылки не печатаются в install-log."
   echo "Чтобы посмотреть данные подключения вручную, выполните:"
   echo "  sudo ${SERVER_PREFIX}-links"
   echo
@@ -3129,6 +3392,7 @@ stage_finalize(){
   load_config
   validate_inputs
   verify_ssh_preflight
+  small_vm_resource_preflight
   ensure_swap_policy
   preinstall_system_update
   install_base_packages
@@ -3143,7 +3407,7 @@ stage_finalize(){
   ensure_xui_ready_for_finalize
   verify_xui_manual_setup
   write_nginx_final
-  install_mtproto
+  mtproto_backend_install
   write_haproxy
   apply_service_nofile_limits
   /usr/local/sbin/check-network-tuning-policy || fail "network tuning policy check failed"
@@ -3151,7 +3415,7 @@ stage_finalize(){
   write_health_weekly
   systemctl try-restart x-ui || true
   systemctl reload nginx || systemctl restart nginx
-  uses_mtproto && { systemctl restart mtprotoproxy; systemctl restart haproxy; }
+  uses_mtproto && { mtproto_backend_restart_runtime; systemctl restart haproxy; }
   . /usr/local/sbin/xpam-maint-common.sh
   xpam_config_snapshot "$SERVER_PREFIX" 4 || true
   apply_service_hygiene
@@ -3456,10 +3720,8 @@ stage_warp_menu(){
 }
 
 print_vless_summary(){
-  local auto_note file
+  local auto_note
   auto_note="/root/secure-notes/${SERVER_PREFIX}-3x-ui-auto.txt"
-  file="$(vless_links_file)"
-  sync_vless_links_file >/dev/null 2>&1 || true
 
   echo
   echo "============================================================"
@@ -3472,14 +3734,9 @@ print_vless_summary(){
   echo "Панель 3x-ui:"
   echo "  https://${PRIMARY_DOMAIN}/${PANEL_PATH}/"
   echo
-  if [[ -f "$file" ]]; then
-    echo "VLESS-ссылка сохранена одной строкой в файле:"
-    echo "  $file"
-  else
-    echo "VLESS-ссылка пока не найдена в 3x-ui. Проверьте панель или выполните health --deep."
-  fi
+  echo "VLESS-ссылки формируются из актуальной базы 3x-ui при каждом выводе."
   echo
-  echo "Показать VLESS-ссылку на экран:"
+  echo "Показать VLESS-ссылки на экран:"
   echo "  sudo ${SERVER_PREFIX}-vless --show"
   echo
   echo "Все данные подключения:"
@@ -3493,16 +3750,13 @@ stage_vless_direct(){
   validate_inputs
   case "${1:-}" in
     --show)
-      if sync_vless_links_file; then
-        warn "Ниже будет показана приватная VLESS-ссылка. Не отправляйте её в публичные чаты, тикеты, скриншоты и логи."
-        cat "$(vless_links_file)"
-      else
-        fail "VLESS-ссылка не найдена. Проверьте 3x-ui или выполните: sudo ${SERVER_PREFIX}-health --deep"
+      warn "Ниже будут показаны приватные VLESS-ссылки из 3x-ui. Не отправляйте их в публичные чаты, тикеты, скриншоты и логи."
+      if ! print_vless_links_from_xui "/root/secure-notes/${SERVER_PREFIX}-3x-ui-auto.txt"; then
+        fail "VLESS-ссылки не найдены. Проверьте 3x-ui или выполните: sudo ${SERVER_PREFIX}-health --deep"
       fi
       ;;
     --file)
-      sync_vless_links_file >/dev/null 2>&1 || true
-      echo "$(vless_links_file)"
+      warn "VLESS-ссылки больше не хранятся как source-of-truth файл. Используйте: sudo ${SERVER_PREFIX}-vless --show"
       ;;
     ""|--help|-h)
       print_vless_summary
@@ -3519,7 +3773,7 @@ stage_links_direct(){
   validate_inputs
   case "${1:-}" in
     --show-secrets)
-      warn "Сейчас будут показаны пароли, VLESS/MTProto ссылки и другие секреты."
+      warn "Сейчас будут показаны пароли, VLESS/Telegram ссылки и другие секреты."
       warn "Не отправляйте этот вывод в чаты, тикеты, скриншоты или публичные логи."
       if confirm "Показать секреты на экран?" no; then
         print_connection_secrets_summary
@@ -3545,7 +3799,7 @@ stage_show_details(){
   echo "Данные для подключения"
   echo "1) Показать безопасную сводку без секретов"
   echo "2) Показать секреты на экран"
-  if uses_mtproto; then
+  if uses_mtproto && mtproto_backend_is_alexbers; then
     echo "3) MTProto-пользователи"
     echo "4) Выйти"
     local choice
@@ -3613,7 +3867,7 @@ stage_repair(){
   echo "Что делает repair: восстанавливает команды XPAM, health/weekly, service limits,"
   echo "startup order, fail2ban policy, certbot hook и service hygiene."
   echo
-  echo "Что repair НЕ делает: не меняет домены, VLESS UUID, MTProto secret,"
+  echo "Что repair НЕ делает: не меняет домены, VLESS UUID, Telegram secret,"
   echo "не удаляет пользователей и не переписывает /etc/network/interfaces."
   echo
   say "Repair XPAM service policy"
@@ -3633,10 +3887,8 @@ stage_repair(){
   nginx -t >/dev/null 2>&1 && systemctl reload nginx || systemctl restart nginx || true
   systemctl try-restart x-ui || true
   if uses_mtproto; then
-    mtproto_harden_config || true
-    mtproto_python_update rewrite-notes >/dev/null 2>&1 || true
-    systemctl try-restart mtprotoproxy || true
-    systemctl try-reload-or-restart haproxy || true
+    mtproto_backend_repair_after_update || true
+    write_haproxy || systemctl try-reload-or-restart haproxy || true
   fi
   run_health_quiet "repair" || fail "Repair завершён, но health-check всё ещё показывает проблемы"
   ok "Repair завершён"
@@ -3702,9 +3954,10 @@ stage_advanced_menu(){
   echo "3) Repair: восстановить XPAM service policy"
   echo "4) Финальная production-очистка"
   echo "5) Показать текущую конфигурацию"
-  echo "6) Выйти"
+  echo "6) Проверить обновления XPAM"
+  echo "7) Выйти"
   local choice
-  read -r -p "Выберите пункт [0-6]: " choice
+  read -r -p "Выберите пункт [0-7]: " choice
   case "$choice" in
     0) stage_ssh_hardening ;;
     1) need_root; load_config; "/usr/local/sbin/${SERVER_PREFIX}-health" --deep ;;
@@ -3712,7 +3965,8 @@ stage_advanced_menu(){
     3) stage_repair ;;
     4) final_production_cleanup ;;
     5) show_config ;;
-    6) return 0 ;;
+    6) xpam_update_menu ;;
+    7) return 0 ;;
     *) fail "Неизвестный пункт меню" ;;
   esac
 }
@@ -3727,15 +3981,16 @@ main_menu(){
   echo "3) Проверить состояние сервера"
   echo "4) Telegram-уведомления"
   echo "5) WARP через 3x-ui/Xray"
-  echo "6) Управление сайтами"
-  echo "7) Дополнительно"
-  echo "8) Выход"
+  echo "6) DoubleHop Mode"
+  echo "7) Управление сайтами"
+  echo "8) Дополнительно"
+  echo "9) Выход"
   echo
   if [[ ! -s /etc/xpam-script/prefix.env ]]; then
     echo "Первый запуск? Сначала выберите пункт 0."
   fi
   local choice
-  read -r -p "Выберите пункт [0-8]: " choice
+  read -r -p "Выберите пункт [0-9]: " choice
   case "$choice" in
     0) stage_ssh_hardening ;;
     1) stage_install_continue ;;
@@ -3743,9 +3998,10 @@ main_menu(){
     3) stage_check_only ;;
     4) stage_notify ;;
     5) stage_warp_menu ;;
-    6) stage_site_menu ;;
-    7) stage_advanced_menu ;;
-    8) exit 0 ;;
+    6) stage_doublehop_menu ;;
+    7) stage_site_menu ;;
+    8) stage_advanced_menu ;;
+    9) exit 0 ;;
     a|A) stage_prepare ;;
     b|B) stage_finalize ;;
     *) fail "Неизвестный пункт меню" ;;
@@ -3761,7 +4017,9 @@ for _xpam_lib in \
   "$KIT_DIR/scripts/lib/xpam-launchers.sh" \
   "$KIT_DIR/scripts/lib/xpam-maintenance.sh" \
   "$KIT_DIR/scripts/lib/xpam-notify.sh" \
+  "$KIT_DIR/scripts/lib/xpam-update.sh" \
   "$KIT_DIR/scripts/lib/xpam-mtproto.sh" \
+  "$KIT_DIR/scripts/lib/xpam-doublehop.sh" \
   "$KIT_DIR/scripts/lib/xpam-sites.sh" \
   "$KIT_DIR/scripts/lib/xpam-xui.sh"
 do

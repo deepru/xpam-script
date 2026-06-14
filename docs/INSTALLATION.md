@@ -1,73 +1,62 @@
 # Installation
 
-XPAM Script expects a fresh Ubuntu 24.04 LTS or Debian 12 VPS.
+XPAM Script v1.3.5 is intended for clean VPS installations on Ubuntu 24.04 LTS and Debian 12.
 
-## Required preparation
+## Requirements
 
-Before running XPAM Script, prepare:
+- Clean VPS;
+- root access;
+- IPv4 address;
+- DNS A records prepared for your XPAM domains;
+- SSH key access strongly recommended.
 
-1. root access to the VPS;
-2. confirmed SSH key login;
-3. a domain name;
-4. access to DNS zone management;
-5. DNS `A` records pointing the required domains to the VPS IPv4 address;
-6. no AAAA records for XPAM-managed public domains unless you intentionally understand the IPv6 consequences.
-
-Do not start step `0` until SSH key login works in a separate SSH session.
-
-## GitHub bootstrap installation
-
-XPAM Script is installed through the GitHub bootstrap command:
-
-```bash
-cd /root
-curl -fsSL https://raw.githubusercontent.com/deepru/xpam-script/main/bootstrap.sh -o xpam-bootstrap.sh
-sudo XPAM_REPO="deepru/xpam-script" bash xpam-bootstrap.sh
-```
-
-The bootstrap installer downloads the published release archive, downloads the matching SHA256 file, verifies the archive, extracts it and starts `install.sh`.
-
-## Step 0
-
-Step `0` configures SSH security and creates the command prefix.
-
-The prefix determines the final command names:
+Use placeholders in examples:
 
 ```text
-sudo <prefix>-install
-sudo <prefix>-health
+<server-ip>
+vless.example.com
+tg.example.com
+panel.example.com
+```
+
+## Install from GitHub Releases
+
+Use the current release archive and SHA256 file from GitHub Releases. The install flow should download the release archive, verify SHA256, extract it and start installation.
+
+Follow the exact command block published in the GitHub release page for the current version.
+
+## First run
+
+After the initial bootstrap creates the prefix command, use:
+
+```bash
+sudo <prefix>-xpam
+```
+
+Typical first-run order:
+
+```text
+0) SSH-безопасность / создать prefix-команду
+1) Установить / продолжить настройку сервера
+```
+
+After installation, the same command remains the main management interface.
+
+## Connection data
+
+Safe summary:
+
+```bash
 sudo <prefix>-links
-sudo <prefix>-vless
-sudo <prefix>-tg
-sudo <prefix>-netdiag
-sudo <prefix>-repair
 ```
 
-After step `0`, continue through:
+Full connection data:
 
 ```bash
-sudo <prefix>-install
+sudo <prefix>-links --show-secrets
 ```
 
-## Step 1
-
-Step `1` installs and configures the server. It may require a reboot. If a reboot is requested:
-
-```bash
-sudo reboot
-```
-
-After reconnecting to the VPS:
-
-```bash
-sudo <prefix>-install
-```
-
-Then choose step `1` again to continue.
-
-## 3x-ui backend contract
-
-XPAM Script supports 3x-ui only with SQLite backend at `/etc/x-ui/x-ui.db`. PostgreSQL backend is not supported. Do not migrate an XPAM-managed 3x-ui installation to PostgreSQL.
+The full output contains sensitive data. VLESS and Telegram links in this output are generated from the current 3x-ui configuration.
 
 ## Post-install validation
 
@@ -78,4 +67,16 @@ sudo <prefix>-health
 sudo <prefix>-health --deep
 ```
 
-The health check should end with a healthy status. For ordinary usage, weekly maintenance is configured automatically and does not need to be run manually.
+The server should pass both checks before you rely on it.
+
+## Updating
+
+Use XPAM safe self-update from the menu:
+
+```bash
+sudo <prefix>-xpam
+```
+
+Then open `Дополнительно` → `Проверить обновления XPAM`.
+
+The updater verifies SHA256, performs preflight checks, creates a backup and rolls back if the updated server does not pass post-update checks.

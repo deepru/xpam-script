@@ -1,61 +1,48 @@
 # Third-party components
 
-XPAM Script is a Bash automation, hardening, and configuration wrapper. It installs, configures, and verifies several third-party components, but it does not claim ownership of them.
+XPAM Script is a Bash automation and configuration wrapper. It installs, configures and verifies several third-party components, but it does not claim ownership of them.
 
-This document describes the major third-party components used by XPAM Script.
+Each third-party component keeps its own license, authorship and upstream support model.
 
-> This file is informational and is not legal advice. Always verify upstream license terms before redistribution, modification, or commercial use.
+## Components
 
----
+| Component | Role |
+|---|---|
+| 3x-ui | Web panel and management layer for Xray-based proxy configuration |
+| Xray-core | VLESS and routing engine |
+| nginx | Local web server and masking/fallback sites |
+| HAProxy | Public HTTPS/TLS routing layer |
+| Certbot / Let's Encrypt | TLS certificate issuance and renewal |
+| UFW | Firewall policy |
+| fail2ban | Basic SSH protection |
+| systemd | Service management |
+| Cloudflare WARP / WireGuard tooling | Optional WARP outbound through Xray |
+| mtg by 9seconds | Indirect upstream component that may be used by 3x-ui for Telegram proxy / MTG support |
 
-## Runtime components
+## 3x-ui and Xray-core
 
-| Component | Upstream | Role | License / notice |
-|---|---|---|---|
-| 3x-ui | <https://github.com/MHSanaei/3x-ui> | Xray management panel | GPL-3.0 upstream |
-| Xray-core | <https://github.com/XTLS/Xray-core> | VLESS runtime | MPL-2.0 upstream |
-| alexbers/mtprotoproxy | <https://github.com/alexbers/mtprotoproxy> | MTProto proxy | MIT upstream |
-| nginx | <https://nginx.org/> | HTTP/HTTPS sites, fallback, ACME, relay surface | nginx upstream license |
-| HAProxy | <https://www.haproxy.org/> | TCP/SNI frontend | HAProxy upstream license |
-| Certbot | <https://certbot.eff.org/> | Let’s Encrypt certificate automation | Certbot upstream license |
-| Let’s Encrypt | <https://letsencrypt.org/> | Public CA service | Let’s Encrypt terms apply |
-| UFW | <https://launchpad.net/ufw> | Firewall policy | Ubuntu/Canonical upstream package license |
-| fail2ban | <https://github.com/fail2ban/fail2ban> | SSH brute-force baseline protection | fail2ban upstream license |
-| systemd / systemd-resolved | <https://systemd.io/> | service management and DNS resolver policy | systemd upstream license |
+XPAM installs and configures 3x-ui/Xray as part of the server setup. XPAM does not vendor the 3x-ui or Xray-core source code into this repository.
 
----
+3x-ui and Xray-core are maintained by their respective upstream projects.
 
-## Install-time behavior
+## mtg by 9seconds
 
-### 3x-ui
+XPAM Script does not bundle, ship, or install `mtg` directly.
 
-XPAM Script downloads 3x-ui from upstream during installation. It does not vendor the 3x-ui source code or release archives into this repository.
+XPAM uses Telegram proxy / MTG functionality through 3x-ui. Depending on the 3x-ui version, this functionality may rely on the upstream `mtg` project by 9seconds.
 
-The script configures 3x-ui to:
+- Project: `9seconds/mtg`
+- License: MIT
+- Role in XPAM: indirect upstream component used through 3x-ui's Telegram proxy / MTG integration
+- XPAM responsibility: installation flow, configuration, health checks, maintenance checks, and user-facing integration around 3x-ui
+- 3x-ui responsibility: bundled/runtime integration of Telegram proxy / MTG support
 
-- bind the web panel to loopback;
-- use a configured web base path;
-- use Let’s Encrypt certificates;
-- create or validate a local Xray/VLESS inbound;
-- disable the subscription listener;
-- set External Proxy values when HAProxy is used.
+## System packages
 
-### Xray-core
+XPAM uses packages from the target operating system repositories, including nginx, HAProxy, Certbot, UFW, fail2ban and supporting utilities.
 
-Xray-core is used through 3x-ui. XPAM Script configures the resulting Xray inbound and validates the generated runtime config.
+Supported target systems for v1.3.5 are Ubuntu 24.04 LTS and Debian 12.
 
-### alexbers/mtprotoproxy
+## Licenses
 
-XPAM Script clones alexbers/mtprotoproxy from upstream during installation when an MTProto profile is selected. It writes a local `config.py`, systemd unit, user secrets, and operational checks.
-
-### System packages
-
-The project installs and configures system packages from the target OS repositories. Supported target systems are Ubuntu 24.04 LTS and Debian 12.
-
----
-
-## Ownership statement
-
-XPAM Script owns only its own automation code, templates, documentation, and integration logic.
-
-The names of third-party projects belong to their respective owners.
+XPAM Script itself is distributed under the MIT License. Third-party projects may use different licenses. Review the upstream projects for their exact license terms.

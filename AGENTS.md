@@ -1,41 +1,74 @@
-# XPAM Script agent/developer guardrails
+# Maintainer notes
 
-XPAM Script is a security-sensitive Bash automation toolkit for clean Ubuntu 24.04 and Debian 12 VPS servers.
+This file describes public maintainer rules for XPAM Script v1.3.5.
 
-## Non-negotiable service invariants
+## Public architecture
 
-- In `vless_direct`, public TCP/443 is Xray/3x-ui VLESS, not nginx and not HAProxy.
-- In MTProto profiles, public TCP/443 is HAProxy TCP mode with SNI routing.
-- HAProxy routes `SYNC_DOMAIN` to `mtprotoproxy` on `127.0.0.1:MTPROTO_PORT`.
-- HAProxy default backend routes to Xray on `127.0.0.1:XRAY_LOCAL_PORT`.
-- Xray VLESS fallback must point to nginx on `127.0.0.1:SITE_BACKEND_PORT`.
-- MTProto mask backend must be nginx on `127.0.0.1:SYNC_BACKEND_PORT ssl`.
-- 3x-ui panel must listen only on `127.0.0.1:XUI_PANEL_PORT`.
-- Public panel access must go through `https://PRIMARY_DOMAIN/PANEL_PATH/` and nginx Basic Auth.
-- Do not enable PROXY protocol unless HAProxy, Xray and nginx fallback are all changed together.
-- Do not regenerate MTProto secrets or VLESS UUIDs on repeated runs.
-- Do not remove `/etc/x-ui/x-ui.db`, `/etc/letsencrypt`, `/etc/nginx`, `/etc/haproxy`, `/opt/mtprotoproxy/config.py`, `/root/secure-notes` or WARP backup data during cleanup.
-- `certbot.timer` must remain enabled, and TCP/80 must remain available for ACME HTTP-01 renewal.
-- Weekly maintenance must not restart HAProxy/MTProto/x-ui unless configuration or certificates actually changed.
+XPAM Script v1.3.5 is documented as a VPS automation project for:
 
-## WARP rules
+- VLESS through 3x-ui/Xray;
+- Telegram proxy / MTG through 3x-ui;
+- nginx + HAProxy + TLS routing;
+- DoubleHop Mode;
+- WARP through 3x-ui/Xray;
+- health/deep-health;
+- repair and weekly maintenance;
+- safe self-update.
 
-- WARP in XPAM Script is only a 3x-ui/Xray WireGuard outbound.
-- Do not install or enable system-wide `warp-cli`.
-- Do not route server default traffic or system DNS through WARP.
-- If WARP is absent, health must treat it as optional.
-- If WARP is present, validate it without exposing private keys, reserved values, or license keys.
+Use the current public terminology consistently: **Telegram proxy / MTG**, **Telegram link**, **DoubleHop Mode**, `sudo <prefix>-xpam`, `sudo <prefix>-links`.
 
-## User-facing language
+## Command surface invariants
 
-- User-facing menu text, warnings, summaries, Telegram reports and instructions should be in Russian.
-- Technical tokens and commands must not be translated: `yes`, `no`, `systemctl`, service names, file paths, environment variables, profile names and command names stay as-is.
-- If exact confirmation is required, write in Russian but require the exact English token, for example: `Введите ровно: yes`.
+- `sudo <prefix>-xpam` is the primary management interface.
+- `sudo <prefix>-links` is the safe connection summary.
+- `sudo <prefix>-links --show-secrets` prints sensitive connection data.
+- VLESS and Telegram links shown by `sudo <prefix>-links --show-secrets` must be generated from the current 3x-ui configuration.
+- Public documentation should not reference removed user-facing command names from older releases.
 
-## Development rules
+## DoubleHop invariants
 
-- Preserve one-command bootstrap UX.
-- Prefer safe/idempotent `ensure_*` behavior: read current state, compare desired state, change only when necessary.
-- Never print secrets, VLESS links, MTProto secrets, Telegram tokens, WARP keys, private keys or relay tokens to installer logs.
-- Preserve IPv4-first behavior; do not add public IPv6 TCP/443 unless explicitly requested.
-- Run `bash -n` on changed shell scripts and rendered templates.
+- XPAM manages DoubleHop on the Entry server only.
+- The Exit server is prepared separately by the user.
+- XPAM uses a user-provided Exit VLESS link.
+- Enabling, changing or disabling DoubleHop must not change existing Entry-side VLESS or Telegram links.
+- Manual Telegram proxy / MTG secret rotation in 3x-ui must be reflected by `sudo <prefix>-links --show-secrets` and must not be reverted by health, repair or weekly maintenance.
+- Public documentation must not imply automatic Exit-server management.
+
+## Update invariants
+
+Safe self-update must follow this model:
+
+```text
+release metadata -> archive + sha256 -> SHA256 verification -> staging extract -> preflight -> backup -> apply -> postcheck -> rollback if needed
+```
+
+The updater must not print live connection links, tokens or private keys in logs.
+
+## Documentation safety
+
+Public files must not contain real project/operator data, including:
+
+- real domains;
+- real IP addresses;
+- real VLESS links;
+- real Telegram links;
+- UUIDs or tokens;
+- mock URLs;
+- local operator paths;
+- internal validation logs.
+
+Use neutral placeholders such as:
+
+```text
+example.com
+vless.example.com
+tg.example.com
+<server-ip>
+<prefix>
+<exit-vless-link>
+<redacted>
+```
+
+## Release documentation
+
+For v1.3.5 public testing wording, use the public user-facing statement that the release was tested on Ubuntu 24.04 LTS and Debian 12. Do not expose internal stage names or validation stage matrices as the public testing story.

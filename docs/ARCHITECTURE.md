@@ -1,119 +1,78 @@
 # Architecture
 
-XPAM Script builds a controlled VPS service layout around three principles:
+XPAM Script v1.3.5 prepares a clean VPS as a managed HTTPS/TLS stack with VLESS, Telegram proxy / MTG, 3x-ui/Xray, nginx, HAProxy, health checks, maintenance and safe self-update.
 
-1. keep the public port surface small;
-2. expose backends only on loopback;
-3. verify the runtime state continuously.
-
----
-
-## Public surface
-
-The expected public TCP surface is:
+## High-level model
 
 ```text
-22/tcp   SSH
-80/tcp   HTTP / ACME HTTP-01 / redirect
-443/tcp  HTTPS/TLS service surface
+Internet :443
+  -> HAProxy
+      -> 3x-ui / Xray VLESS
+      -> Telegram proxy / MTG through 3x-ui
+      -> nginx masking/fallback sites
+      -> optional WARP outbound through Xray
+      -> optional DoubleHop outbound through Exit VLESS link
 ```
 
-No separate public MTProto, relay, panel, or Xray management ports are expected.
+## Components
 
----
+- **3x-ui/Xray** — VLESS, routing and outbound management.
+- **Telegram proxy / MTG through 3x-ui** — Telegram connectivity through the 3x-ui stack.
+- **HAProxy** — public HTTPS/TLS routing layer.
+- **nginx** — local masking/fallback sites.
+- **Certbot / Let's Encrypt** — TLS certificates.
+- **UFW / fail2ban** — firewall and basic SSH protection.
+- **XPAM runtime scripts** — links, health, repair, maintenance, update and diagnostics.
 
-## Backend isolation
+## Command surface
 
-Backends are expected to bind to `127.0.0.1`.
+XPAM creates prefix-based commands:
+
+```bash
+sudo <prefix>-xpam
+sudo <prefix>-links
+sudo <prefix>-health
+sudo <prefix>-repair
+sudo <prefix>-netdiag
+```
+
+`sudo <prefix>-xpam` is the main management interface.
+
+## Link model
+
+Connection links are managed centrally:
+
+```bash
+sudo <prefix>-links
+sudo <prefix>-links --show-secrets
+```
+
+The first command is safe for diagnostics and does not print secrets. The second command prints full connection data and must be treated as sensitive.
+
+For VLESS and Telegram proxy / MTG, the full links output is built from the current 3x-ui configuration. If a VLESS client or Telegram proxy / MTG secret is changed in 3x-ui, run the command again and use the updated links.
+
+## DoubleHop Mode
+
+DoubleHop Mode is an Entry-side runtime mode.
+
+The Entry server accepts existing VLESS and Telegram links. Selected traffic may then exit through another server using a user-provided Exit VLESS link.
+
+XPAM does not automatically manage the Exit server. The Exit server is prepared separately by the user.
+
+Supported DoubleHop modes:
+
+- VLESS only;
+- Telegram only;
+- VLESS + Telegram.
+
+Entry-side VLESS and Telegram links must remain unchanged when DoubleHop is enabled, changed or disabled.
+
+## Safe self-update model
+
+XPAM v1.3.5 includes manual safe self-update:
 
 ```text
-3x-ui web panel       127.0.0.1:<XUI_PANEL_PORT>
-Xray/VLESS            127.0.0.1:<XRAY_LOCAL_PORT>
-nginx site backend    127.0.0.1:<SITE_BACKEND_PORT>
-nginx sync backend    127.0.0.1:<SYNC_BACKEND_PORT>
-MTProto backend       127.0.0.1:<MTPROTO_PORT>
+release metadata -> archive + sha256 download -> SHA256 verification -> staging extract -> preflight -> backup -> apply -> postcheck -> rollback if needed
 ```
 
-The health check validates this exposure model.
-
----
-
-## Direct VLESS profile
-
-In `vless_direct`, Xray/VLESS can own the public TLS endpoint directly. nginx provides fallback website behavior through Xray fallback.
-
-```text
-client
-  -> VPS:443
-      -> Xray/VLESS
-          -> nginx fallback site on loopback
-```
-
-This is the simplest profile and does not install HAProxy or MTProto.
-
----
-
-## HAProxy / MTProto profiles
-
-In MTProto profiles, HAProxy listens on public `443/tcp`.
-
-```text
-client
-  -> VPS:443
-      -> HAProxy TCP frontend
-          -> MTProto backend, when SNI matches MTProto domain
-          -> Xray/VLESS backend, default path
-```
-
-This allows the server to keep one public TLS port while separating roles by domain/SNI.
-
----
-
-## Certificate model
-
-XPAM Script uses Let’s Encrypt certificates through Certbot.
-
-Depending on the profile, it issues:
-
-- a certificate for the VLESS/panel domain;
-- a unified root/www/VLESS certificate;
-- a certificate for the MTProto/sync domain.
-
-Certificate consistency is checked against the runtime endpoints with OpenSSL.
-
----
-
-## Runtime install model
-
-At install time, XPAM Script writes:
-
-```text
-/etc/xpam-script/config.env
-/opt/xpam-script
-/usr/local/sbin/<prefix>-install
-/usr/local/sbin/<prefix>-health
-/usr/local/sbin/<prefix>-links
-/usr/local/sbin/<prefix>-vless
-/usr/local/sbin/<prefix>-tg
-/usr/local/sbin/<prefix>-weekly-maintenance
-```
-
-The weekly command exists as a system maintenance entry point. It is not promoted as a normal user-facing command.
-
----
-
-## Data and secrets
-
-Sensitive runtime data is stored under:
-
-```text
-/root/secure-notes
-```
-
-Configuration backups are stored under:
-
-```text
-/root/config-backups
-```
-
-These directories must not be committed or published.
+The updater must not print secrets in logs.

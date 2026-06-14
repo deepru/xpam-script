@@ -205,7 +205,7 @@ xpam_apt_get_safe(){
     local log
     xpam_apt_dpkg_recovery "$context" || return 1
     log="$(mktemp /tmp/${context//[^A-Za-z0-9_-]/_}-apt.XXXXXX)"
-    if xpam_run_with_heartbeat "APT operation: $context" env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -o DPkg::Lock::Timeout=180 "$@" > >(tee "$log") 2>&1; then
+    if xpam_run_with_heartbeat "APT operation: $context" env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -o DPkg::Lock::Timeout=180 -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 "$@" > >(tee "$log") 2>&1; then
         rm -f "$log"
         return 0
     fi
@@ -213,7 +213,7 @@ xpam_apt_get_safe(){
         echo "WARNING: apt reported interrupted dpkg or lock during $context; trying recovery and one retry"
         rm -f "$log"
         xpam_apt_dpkg_recovery "$context retry" || return 1
-        xpam_run_with_heartbeat "APT retry: $context" env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -o DPkg::Lock::Timeout=180 "$@"
+        xpam_run_with_heartbeat "APT retry: $context" env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -o DPkg::Lock::Timeout=180 -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 "$@"
         return $?
     fi
     rm -f "$log"
@@ -467,6 +467,44 @@ if profile!='vless_direct':
     allowed_local_tcp |= required_local_tcp
 else:
     allowed_local_tcp |= {int(cfg.get('XRAY_LOCAL_PORT','1443')), int(cfg.get('MTPROTO_PORT','47827')), int(cfg.get('SYNC_BACKEND_PORT','9443'))}
+
+if profile!='vless_direct' and (cfg.get('MTPROTO_BACKEND') or 'alexbers') == '3xui-mtg':
+    try:
+        proc_out=subprocess.check_output(['ss','-H','-lntp'], text=True, stderr=subprocess.DEVNULL)
+    except Exception:
+        proc_out=''
+    mtg_port=int(cfg.get('MTPROTO_PORT','0') or 0)
+    for line in proc_out.splitlines():
+        if 'mtg-linux' not in line and 'mtg-linux-amd64' not in line:
+            continue
+        parts=line.split()
+        if len(parts) < 4:
+            continue
+        local=parts[3]
+        if not (local.startswith('127.') or local.startswith('[::1]') or local.startswith('::1')):
+            continue
+        m=re.search(r':(\d+)$', local)
+        if not m:
+            continue
+        port=int(m.group(1))
+        if port != mtg_port:
+            allowed_local_tcp.add(port)
+
+    # DoubleHop / 3x-ui MTG routeThroughXray creates an expected local Xray SOCKS
+    # listener on routeXrayPort. It is loopback-only and must not make health fail.
+    try:
+        import json, sqlite3
+        conn=sqlite3.connect('/etc/x-ui/x-ui.db')
+        row=conn.execute("SELECT settings FROM inbounds WHERE protocol='mtproto' ORDER BY id ASC LIMIT 1").fetchone()
+        if row and row[0]:
+            mtg_settings=json.loads(row[0])
+            if isinstance(mtg_settings, dict) and mtg_settings.get('routeThroughXray') is True:
+                rxp=int(mtg_settings.get('routeXrayPort') or 0)
+                if rxp > 0:
+                    allowed_local_tcp.add(rxp)
+                    print(f'OK: DoubleHop MTG routeXrayPort loopback listener expected: 127.0.0.1:{rxp}')
+    except Exception:
+        pass
 
 def normalize_host(h):
     h=(h or '').strip()
@@ -768,8 +806,17 @@ xpam_startup_order_check(){
     if [ -x /usr/local/sbin/wait-for-local-port.sh ]; then echo "OK: executable exists: /usr/local/sbin/wait-for-local-port.sh"; else echo "FAIL: missing/executable wait-for-local-port.sh"; fail=1; fi
     bash -n /usr/local/sbin/wait-for-local-port.sh >/dev/null 2>&1 && echo "OK: wait-for-local-port.sh syntax" || { echo "FAIL: wait-for-local-port.sh syntax"; fail=1; }
     if [ -e /etc/systemd/system/mtprotoproxy.service.d/haproxy-order.conf ]; then echo "FAIL: obsolete mtprotoproxy haproxy-order drop-in exists"; fail=1; else echo "OK: absent as expected: /etc/systemd/system/mtprotoproxy.service.d/haproxy-order.conf"; fi
-    if systemctl cat mtprotoproxy 2>/dev/null | grep -Fq "wait-for-local-port.sh 127.0.0.1 ${SYNC_BACKEND_PORT}"; then echo "OK: mtprotoproxy waits for nginx sync backend 127.0.0.1:${SYNC_BACKEND_PORT}"; else echo "FAIL: mtprotoproxy does not wait for nginx sync backend 127.0.0.1:${SYNC_BACKEND_PORT}"; fail=1; fi
-    if systemctl cat haproxy 2>/dev/null | grep -Eq 'After=.*nginx.*x-ui.*mtprotoproxy|After=.*nginx.*mtprotoproxy.*x-ui|After=.*x-ui.*nginx.*mtprotoproxy|After=.*x-ui.*mtprotoproxy.*nginx|After=.*mtprotoproxy.*nginx.*x-ui|After=.*mtprotoproxy.*x-ui.*nginx'; then echo "OK: haproxy starts after nginx, x-ui, mtprotoproxy"; else echo "FAIL: haproxy ordering does not include nginx, x-ui and mtprotoproxy"; fail=1; fi
+    case "${MTPROTO_BACKEND:-alexbers}" in
+      3xui-mtg)
+        if systemctl cat haproxy 2>/dev/null | grep -Fq "mtprotoproxy.service"; then echo "FAIL: haproxy ordering references mtprotoproxy.service under 3xui-mtg"; fail=1; else echo "OK: haproxy ordering has no mtprotoproxy.service dependency under 3xui-mtg"; fi
+        if systemctl cat haproxy 2>/dev/null | grep -Eq 'After=.*nginx.*x-ui|After=.*x-ui.*nginx'; then echo "OK: haproxy starts after nginx and x-ui for 3xui-mtg"; else echo "FAIL: haproxy ordering does not include nginx and x-ui for 3xui-mtg"; fail=1; fi
+        if systemctl is-active --quiet mtprotoproxy.service; then echo "FAIL: mtprotoproxy must be inactive under 3xui-mtg"; fail=1; else echo "OK: mtprotoproxy inactive under 3xui-mtg"; fi
+        ;;
+      *)
+        if systemctl cat mtprotoproxy 2>/dev/null | grep -Fq "wait-for-local-port.sh 127.0.0.1 ${SYNC_BACKEND_PORT}"; then echo "OK: mtprotoproxy waits for nginx sync backend 127.0.0.1:${SYNC_BACKEND_PORT}"; else echo "FAIL: mtprotoproxy does not wait for nginx sync backend 127.0.0.1:${SYNC_BACKEND_PORT}"; fail=1; fi
+        if systemctl cat haproxy 2>/dev/null | grep -Eq 'After=.*nginx.*x-ui.*mtprotoproxy|After=.*nginx.*mtprotoproxy.*x-ui|After=.*x-ui.*nginx.*mtprotoproxy|After=.*x-ui.*mtprotoproxy.*nginx|After=.*mtprotoproxy.*nginx.*x-ui|After=.*mtprotoproxy.*x-ui.*nginx'; then echo "OK: haproxy starts after nginx, x-ui, mtprotoproxy"; else echo "FAIL: haproxy ordering does not include nginx, x-ui and mtprotoproxy"; fail=1; fi
+        ;;
+    esac
     if systemctl cat haproxy 2>/dev/null | grep -Fq "wait-for-local-port.sh 127.0.0.1 ${XRAY_LOCAL_PORT}"; then echo "OK: haproxy waits for xray local 127.0.0.1:${XRAY_LOCAL_PORT}"; else echo "FAIL: haproxy does not wait for xray local 127.0.0.1:${XRAY_LOCAL_PORT}"; fail=1; fi
     if systemctl cat haproxy 2>/dev/null | grep -Fq "wait-for-local-port.sh 127.0.0.1 ${MTPROTO_PORT}"; then echo "OK: haproxy waits for mtproto local 127.0.0.1:${MTPROTO_PORT}"; else echo "FAIL: haproxy does not wait for mtproto local 127.0.0.1:${MTPROTO_PORT}"; fail=1; fi
     /usr/local/sbin/wait-for-local-port.sh 127.0.0.1 "$SYNC_BACKEND_PORT" 3 sync-backend >/dev/null 2>&1 && echo "OK: local ${SYNC_BACKEND_PORT} reachable" || { echo "FAIL: local ${SYNC_BACKEND_PORT} not reachable"; fail=1; }
@@ -782,6 +829,260 @@ xpam_startup_order_check(){
 
 
 
+xpam_3xui_mtg_runtime_invariant_check(){
+    local cfg="$1" fail=0
+    [ -f "$cfg" ] || { echo "FAIL: XPAM config missing: $cfg"; return 1; }
+    # shellcheck disable=SC1090
+    . "$cfg"
+
+    if systemctl is-active --quiet x-ui.service; then
+        echo "OK: x-ui active for 3xui-mtg"
+    else
+        echo "FAIL: x-ui must be active for 3xui-mtg"
+        fail=1
+    fi
+
+    if systemctl is-active --quiet mtprotoproxy.service; then
+        echo "FAIL: mtprotoproxy must be inactive under 3xui-mtg"
+        fail=1
+    else
+        echo "OK: mtprotoproxy inactive under 3xui-mtg"
+    fi
+
+    if systemctl cat haproxy.service 2>/dev/null | grep -Fq 'mtprotoproxy.service'; then
+        echo "FAIL: HAProxy drop-in/order references mtprotoproxy.service under 3xui-mtg"
+        fail=1
+    else
+        echo "OK: HAProxy drop-in has no mtprotoproxy.service dependency under 3xui-mtg"
+    fi
+
+    python3 - "$cfg" <<'PY_3XUI_MTG_RUNTIME'
+import json, re, ssl, subprocess, sys, urllib.request
+from pathlib import Path
+cfg_path=Path(sys.argv[1])
+cfg={}
+for line in cfg_path.read_text(errors='ignore').splitlines():
+    if not line or line.startswith('#') or '=' not in line:
+        continue
+    k,v=line.split('=',1)
+    cfg[k]=v.strip().strip('"').strip("'")
+errs=[]
+def ok(msg): print('OK: '+msg)
+def bad(msg): print('FAIL: '+msg); errs.append(msg)
+
+backend=cfg.get('MTPROTO_BACKEND') or 'alexbers'
+if backend == '3xui-mtg':
+    ok('backend selected = 3xui-mtg')
+else:
+    bad(f'backend expected 3xui-mtg, got {backend!r}')
+
+prefix=cfg.get('SERVER_PREFIX','')
+remark=f'{prefix}-mtproto'
+sync_domain=cfg.get('SYNC_DOMAIN','')
+mtproto_port=int(cfg.get('MTPROTO_PORT','0') or 0)
+sync_backend_port=int(cfg.get('SYNC_BACKEND_PORT','0') or 0)
+panel_port=cfg.get('XUI_PANEL_PORT','57827')
+panel_path=(cfg.get('PANEL_PATH','') or '').strip('/')
+token_path=Path('/etc/xpam-script/x-ui-api-token')
+
+def api_list():
+    if not token_path.exists():
+        bad('3x-ui API token storage missing for MTG invariant check')
+        return []
+    try:
+        token=token_path.read_text(errors='ignore').splitlines()[0].strip()
+    except Exception as exc:
+        bad(f'3x-ui API token unreadable for MTG invariant check: {exc}')
+        return []
+    if not token:
+        bad('3x-ui API token empty for MTG invariant check')
+        return []
+    url=f'https://127.0.0.1:{panel_port}/{panel_path}/panel/api/inbounds/list'
+    req=urllib.request.Request(url, headers={
+        'Authorization':'Bearer '+token,
+        'Accept':'application/json',
+        'User-Agent':'XPAM-Script/health-mtg',
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=10, context=ssl._create_unverified_context()) as resp:
+            data=json.loads(resp.read(1024*1024).decode('utf-8','replace'))
+    except Exception as exc:
+        bad(f'3x-ui API list failed for MTG invariant check: {exc}')
+        return []
+    if data.get('success') is not True:
+        bad('3x-ui API list did not return success=true for MTG invariant check')
+        return []
+    items=data.get('obj') or []
+    if isinstance(items, dict):
+        items=items.get('inbounds') or items.get('items') or []
+    if not isinstance(items, list):
+        bad('3x-ui API list obj is not a list for MTG invariant check')
+        return []
+    return items
+
+def boolish(v):
+    if isinstance(v, bool): return v
+    if isinstance(v, (int, float)): return bool(v)
+    return str(v).strip().lower() in ('1','true','yes','on')
+
+def settings_from(item):
+    raw=item.get('settings')
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            return json.loads(raw)
+        except Exception:
+            return {}
+    return {}
+
+items=api_list()
+matches=[]
+for item in items:
+    if not isinstance(item, dict):
+        continue
+    if str(item.get('protocol') or '').lower() != 'mtproto':
+        continue
+    if str(item.get('remark') or '') == remark:
+        matches.append(item)
+
+if len(matches) == 1:
+    ok('XPAM-managed MTG inbound exists')
+    item=matches[0]
+    if boolish(item.get('enable')):
+        ok('XPAM-managed MTG inbound enabled')
+    else:
+        bad('XPAM-managed MTG inbound is disabled')
+    checks=[
+        ('MTG inbound protocol', str(item.get('protocol') or '').lower(), 'mtproto'),
+        ('MTG inbound listen', str(item.get('listen') or ''), '127.0.0.1'),
+        ('MTG inbound shareAddrStrategy', str(item.get('shareAddrStrategy') or ''), 'custom'),
+        ('MTG inbound shareAddr', str(item.get('shareAddr') or ''), sync_domain),
+        ('MTG inbound tag', str(item.get('tag') or ''), f'in-{mtproto_port}-tcp'),
+    ]
+    for label, got, exp in checks:
+        if got == exp:
+            ok(f'{label} = {exp}')
+        else:
+            bad(f'{label} expected {exp!r}, got {got!r}')
+    try:
+        got_port=int(item.get('port'))
+    except Exception:
+        got_port=-1
+    if got_port == mtproto_port:
+        ok(f'MTG inbound port = {mtproto_port}')
+    else:
+        bad(f'MTG inbound port expected {mtproto_port}, got {item.get("port")!r}')
+    settings=settings_from(item)
+    if settings:
+        ok('MTG inbound settings JSON parsed')
+    else:
+        bad('MTG inbound settings JSON missing or invalid')
+    if settings.get('fakeTlsDomain') == sync_domain:
+        ok(f'MTG settings.fakeTlsDomain = {sync_domain}')
+    else:
+        bad(f'MTG settings.fakeTlsDomain expected {sync_domain!r}, got {settings.get("fakeTlsDomain")!r}')
+    secret=str(settings.get('secret') or '')
+    expected_suffix=sync_domain.encode('utf-8').hex()
+    if secret.startswith('ee') and secret.lower().endswith(expected_suffix.lower()):
+        ok('MTG settings.secret is canonical FULL_EE_SECRET_HEX for SYNC_DOMAIN')
+    else:
+        bad('MTG settings.secret is not canonical FULL_EE_SECRET_HEX for SYNC_DOMAIN')
+    if settings.get('preferIp') == 'prefer-ipv4':
+        ok('MTG settings.preferIp = prefer-ipv4')
+    else:
+        bad(f'MTG settings.preferIp expected prefer-ipv4, got {settings.get("preferIp")!r}')
+    df=settings.get('domainFronting') if isinstance(settings.get('domainFronting'), dict) else {}
+    if df.get('ip') == '127.0.0.1':
+        ok('MTG domainFronting.ip = 127.0.0.1')
+    else:
+        bad(f'MTG domainFronting.ip expected 127.0.0.1, got {df.get("ip")!r}')
+    try:
+        df_port=int(df.get('port'))
+    except Exception:
+        df_port=-1
+    if df_port == sync_backend_port:
+        ok(f'MTG domainFronting.port = {sync_backend_port}')
+    else:
+        bad(f'MTG domainFronting.port expected {sync_backend_port}, got {df.get("port")!r}')
+elif len(matches) == 0:
+    bad(f'XPAM-managed MTG inbound missing: remark={remark}')
+else:
+    bad(f'expected exactly one XPAM-managed MTG inbound, found {len(matches)}')
+
+# Listener/process checks.
+try:
+    ss_out=subprocess.check_output(['ss','-H','-ltnp'], text=True, stderr=subprocess.DEVNULL)
+except Exception as exc:
+    bad(f'cannot inspect TCP listeners with ss: {exc}')
+    ss_out=''
+mtg_rows=[]
+port_rows=[]
+non_loopback_mtg=[]
+for line in ss_out.splitlines():
+    if 'mtg-linux' in line or 'mtg-linux-amd64' in line:
+        mtg_rows.append(line)
+    parts=line.split()
+    local=parts[3] if len(parts) >= 4 else ''
+    if local == f'127.0.0.1:{mtproto_port}':
+        port_rows.append(line)
+
+def local_addr(line):
+    parts=line.split()
+    return parts[3] if len(parts) >= 4 else ''
+
+if port_rows and any(('mtg-linux' in r or 'mtg-linux-amd64' in r) for r in port_rows):
+    ok(f'mtg-linux-amd64 owns 127.0.0.1:{mtproto_port}')
+else:
+    bad(f'mtg-linux-amd64 does not own 127.0.0.1:{mtproto_port}')
+if any('mtprotoproxy' in r for r in port_rows):
+    bad(f'mtprotoproxy shares 127.0.0.1:{mtproto_port}')
+else:
+    ok(f'mtprotoproxy does not share 127.0.0.1:{mtproto_port}')
+
+for row in mtg_rows:
+    addr=local_addr(row)
+    if not addr.startswith('127.'):
+        non_loopback_mtg.append(addr)
+if mtg_rows and not non_loopback_mtg:
+    ok('MTG listeners are loopback-only')
+elif non_loopback_mtg:
+    bad('MTG has non-loopback listener(s): '+', '.join(non_loopback_mtg))
+else:
+    bad('no mtg-linux listener found')
+
+metrics=[]
+for row in mtg_rows:
+    addr=local_addr(row)
+    if not addr.startswith('127.'):
+        continue
+    m=re.search(r':(\d+)$', addr)
+    if not m:
+        continue
+    port=int(m.group(1))
+    if port != mtproto_port:
+        metrics.append(port)
+if metrics:
+    ok('MTG metrics listener loopback-only: '+', '.join(str(p) for p in sorted(set(metrics))))
+    ok('public MTG metrics not exposed by listener binding')
+else:
+    bad('MTG metrics listener not found')
+
+# Telegram link source-of-truth check.
+# For 3xui-mtg, the current Telegram link is generated from the 3x-ui DB.
+# A legacy /root/secure-notes/*-mtproto.txt file is intentionally not required.
+if matches:
+    ok('MTG Telegram link source-of-truth is current 3x-ui DB settings')
+
+if errs:
+    sys.exit(1)
+print('OK: 3xui-mtg MTProto runtime invariants look correct')
+PY_3XUI_MTG_RUNTIME
+    py_rc=$?
+    if [ "$py_rc" -ne 0 ]; then fail=1; fi
+    return "$fail"
+}
+
 xpam_mtproto_config_invariant_check(){
     local cfg="$1" fail=0
     echo; echo "===== MTPROTO CONFIG INVARIANT CHECK ====="
@@ -789,6 +1090,7 @@ xpam_mtproto_config_invariant_check(){
     # shellcheck disable=SC1090
     . "$cfg"
     [ "${PROFILE:-}" = "vless_direct" ] && { echo "OK: MTProto is not enabled in this profile; invariant check skipped"; return 0; }
+    [ "${MTPROTO_BACKEND:-alexbers}" = "3xui-mtg" ] && { xpam_3xui_mtg_runtime_invariant_check "$cfg"; return $?; }
     python3 - "$cfg" <<'PY_MTPROTO_INVARIANTS'
 import importlib.util, pathlib, re, sys
 from pathlib import Path
@@ -1516,11 +1818,51 @@ xpam_ssh_runtime_check(){
     return "$fail"
 }
 
+xpam_write_journald_policy(){
+    mkdir -p /etc/systemd/journald.conf.d
+    cat > /etc/systemd/journald.conf.d/90-xpam-script.conf <<'EOF_XPAM_JOURNALD'
+# XPAM Script small-VM journal policy
+[Journal]
+SystemMaxUse=64M
+RuntimeMaxUse=32M
+MaxRetentionSec=14day
+EOF_XPAM_JOURNALD
+    chmod 644 /etc/systemd/journald.conf.d/90-xpam-script.conf 2>/dev/null || true
+    systemctl restart systemd-journald 2>/dev/null || true
+}
+
+xpam_write_logrotate_policy(){
+    if ! command -v logrotate >/dev/null 2>&1 && [ ! -d /etc/logrotate.d ]; then
+        echo "INFO: logrotate not present; XPAM internal log retention remains active"
+        return 0
+    fi
+    mkdir -p /etc/logrotate.d
+    cat > /etc/logrotate.d/xpam-script <<'EOF_XPAM_LOGROTATE'
+/var/log/xpam-script/*.log /var/log/xpam-script/netdiag/*.txt {
+    weekly
+    rotate 4
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    create 0600 root root
+}
+EOF_XPAM_LOGROTATE
+    chmod 644 /etc/logrotate.d/xpam-script 2>/dev/null || true
+}
+
+xpam_apply_small_vm_policies(){
+    xpam_write_journald_policy || true
+    xpam_write_logrotate_policy || true
+}
+
 xpam_apply_service_hygiene(){
     local cfg="$1"
     # shellcheck disable=SC1090
     . "$cfg"
     echo; echo "===== SERVICE HYGIENE APPLY ====="
+    xpam_apply_small_vm_policies || true
     echo "Profile: ${PROFILE:-unknown}"
     xpam_normalize_provider_quirks
     for unit in \
@@ -1538,12 +1880,21 @@ xpam_apply_service_hygiene(){
         xpam_stop_disable_mask_unit haproxy.service
         xpam_stop_disable_mask_unit mtprotoproxy.service
     fi
+    if [ "${PROFILE:-}" != "vless_direct" ] && [ "${MTPROTO_BACKEND:-alexbers}" = "3xui-mtg" ]; then
+        systemctl stop mtprotoproxy.service >/dev/null 2>&1 || true
+        systemctl disable mtprotoproxy.service >/dev/null 2>&1 || true
+        systemctl reset-failed mtprotoproxy.service >/dev/null 2>&1 || true
+    fi
     for unit in ssh.socket ssh.service nginx.service x-ui.service fail2ban.service ufw.service cron.service systemd-resolved.service systemd-timesyncd.service; do
         xpam_unit_exists "$unit" && systemctl enable "$unit" >/dev/null 2>&1 || true
     done
     if [ "${PROFILE:-}" != "vless_direct" ]; then
         xpam_unit_exists haproxy.service && systemctl enable haproxy.service >/dev/null 2>&1 || true
-        xpam_unit_exists mtprotoproxy.service && systemctl enable mtprotoproxy.service >/dev/null 2>&1 || true
+        if [ "${MTPROTO_BACKEND:-alexbers}" = "3xui-mtg" ]; then
+            systemctl disable mtprotoproxy.service >/dev/null 2>&1 || true
+        else
+            xpam_unit_exists mtprotoproxy.service && systemctl enable mtprotoproxy.service >/dev/null 2>&1 || true
+        fi
     fi
     for pkg in snapd packagekit packagekit-tools fwupd apport apport-core-dump-handler unattended-upgrades thermald sysstat; do
         xpam_guarded_purge_package "$pkg"
@@ -1593,9 +1944,13 @@ xpam_service_hygiene_check(){
             if [ "$state" = "active" ]; then echo "FAIL: $unit must not be active in direct VLESS profile"; fail=1; else echo "OK: $unit not active (${state:-unknown})"; fi
         done
     else
-        for unit in haproxy.service mtprotoproxy.service; do
-            systemctl is-active --quiet "$unit" && echo "OK: required service active: $unit" || { echo "FAIL: required service not active: $unit"; fail=1; }
-        done
+        systemctl is-active --quiet haproxy.service && echo "OK: required service active: haproxy.service" || { echo "FAIL: required service not active: haproxy.service"; fail=1; }
+        if [ "${MTPROTO_BACKEND:-alexbers}" = "3xui-mtg" ]; then
+            state="$(systemctl is-active mtprotoproxy.service 2>/dev/null || true)"
+            if [ "$state" = "active" ]; then echo "FAIL: mtprotoproxy.service must be inactive under 3xui-mtg"; fail=1; else echo "OK: mtprotoproxy.service inactive under 3xui-mtg (${state:-unknown})"; fi
+        else
+            systemctl is-active --quiet mtprotoproxy.service && echo "OK: required service active: mtprotoproxy.service" || { echo "FAIL: required service not active: mtprotoproxy.service"; fail=1; }
+        fi
     fi
     for unit in qemu-guest-agent.service open-vm-tools.service rsyslog.service serial-getty@ttyS0.service; do
         state="$(systemctl is-active "$unit" 2>/dev/null || true)"
@@ -1608,6 +1963,7 @@ xpam_service_hygiene_check(){
 xpam_post_install_cleanup(){
     local prefix="${1:-server}"
     echo; echo "===== POST-INSTALL SAFE CLEANUP ====="
+    xpam_apply_small_vm_policies || true
     xpam_guarded_autoremove "$prefix" || true
     apt-get clean || true
     apt-get autoclean -y || true
@@ -1646,6 +2002,7 @@ xpam_post_install_cleanup(){
 xpam_weekly_safe_cleanup(){
     local prefix="${1:-server}"
     echo; echo "===== WEEKLY SAFE CLEANUP ====="
+    xpam_apply_small_vm_policies || true
 
     echo "--- targeted temporary/audit files"
     find /root /tmp /usr/local/sbin -maxdepth 1 -type f \
@@ -1695,6 +2052,7 @@ xpam_weekly_safe_cleanup(){
     xpam_prune_keep_latest /root/manual-backups/xui-warp-normalize 'x-ui.db.*' "${XPAM_BACKUP_KEEP:-2}"
     xpam_prune_keep_latest /root/manual-backups/xui-subscription-disable 'x-ui.db.*' "${XPAM_BACKUP_KEEP:-2}"
     xpam_prune_keep_latest /root/manual-backups 'mtproto-config.py.*' "${XPAM_BACKUP_KEEP:-2}"
+    xpam_prune_keep_latest /root/manual-backups/xpam-doublehop '*' "${XPAM_DH_BACKUP_KEEP:-4}"
     find /root/manual-backups -type d -empty -delete 2>/dev/null || true
 
     echo; echo "--- older generic backup files"

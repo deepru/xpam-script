@@ -262,3 +262,5 @@ EOS
   # safe: the open descriptor can finish, but the root filesystem stays clean.
   rm -f /root/xpam-script-v*-*.log /root/xpam-script-*.log 2>/dev/null || true
 }
+
+

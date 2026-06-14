@@ -1,50 +1,49 @@
 # Release process
 
-This document describes the high-level release packaging workflow for XPAM Script.
+This checklist is for XPAM Script maintainers.
 
-## Source of truth
+## Before release
 
-- Runtime changes must be compared against the previous final release archive before packaging.
-- Release archives are distributed through GitHub Releases.
-- Detailed per-release notes belong in GitHub Releases.
-- Accumulated changes belong in `CHANGELOG.md`.
-- Current test matrix belongs in `TESTING.md`.
-- User guide lives in `docs/USER_GUIDE_RU.docx` and `docs/USER_GUIDE_RU.pdf`.
+- Confirm the runtime archive and SHA256.
+- Confirm README, release notes, changelog and testing documentation are updated.
+- Confirm public docs use current v1.3.5 terminology.
+- Confirm user guide files are either updated or intentionally left for a separate pass.
+- Confirm no public file contains real domains, IP addresses, UUIDs, live connection links, tokens, mock URLs, local paths or internal validation logs.
 
-## Archive naming
+## Public testing wording
 
-Release assets use this naming pattern:
+Use user-facing wording such as:
 
 ```text
-xpam-script-vX.Y.Z-ubuntu24-debian12.tar.gz
-xpam-script-vX.Y.Z-ubuntu24-debian12.tar.gz.sha256
+Проверено на Ubuntu 24.04 LTS и Debian 12: установка, управление сервером, VLESS, Telegram proxy / MTG, DoubleHop Mode, диагностика, восстановление и безопасное обновление.
 ```
 
-Local working archives, release candidates and final validation archives must include a short SHA256 fragment in the filename to avoid mixing artifacts. The canonical filename without a SHA fragment is used only for the public GitHub Release asset, because bootstrap expects the canonical asset name.
+Do not expose internal validation stage names as the public release story.
 
-## Pre-release checklist
+## Release assets
 
-Before publishing a release:
+For GitHub Releases, publish:
 
-1. run shell syntax checks on installer/runtime/templates;
-2. compare runtime changes against the previous final release archive;
-3. remove candidate archives, temporary patches and release-specific draft files;
-4. verify documentation contains no private domains, IP addresses, tokens or server prefixes;
-5. regenerate DOCX/PDF user guide and visually verify the rendered pages;
-6. run the documented test matrix;
-7. build the local final validation tarball with a short SHA fragment in the filename;
-8. generate SHA256 and verify it;
-9. verify the archive extracts into one clean top-level directory;
-10. only after QA PASS, copy/rename the exact tested archive to the canonical GitHub Release asset name;
-11. verify bootstrap URL/version references target the published release tag.
+- release archive;
+- `.sha256` file;
+- release notes;
+- installation command block.
 
-## Final archive build example
+Do not publish private test archives or local mock update assets.
 
-```bash
-tar -czf xpam-script-vX.Y.Z-final-<shortsha>-ubuntu24-debian12.tar.gz xpam-script-vX.Y.Z-ubuntu24-debian12
-sha256sum xpam-script-vX.Y.Z-final-<shortsha>-ubuntu24-debian12.tar.gz > xpam-script-vX.Y.Z-final-<shortsha>-ubuntu24-debian12.tar.gz.sha256
+## Leak audit
 
-# After QA PASS, create the public GitHub Release asset name from the exact tested bytes:
-cp xpam-script-vX.Y.Z-final-<shortsha>-ubuntu24-debian12.tar.gz xpam-script-vX.Y.Z-ubuntu24-debian12.tar.gz
-sha256sum xpam-script-vX.Y.Z-ubuntu24-debian12.tar.gz > xpam-script-vX.Y.Z-ubuntu24-debian12.tar.gz.sha256
-```
+Run a grep audit over public markdown/YAML files for:
+
+- live domains;
+- live IP addresses;
+- VLESS links;
+- Telegram links;
+- current 3x-ui-sourced VLESS/Telegram link output;
+- UUIDs;
+- tokens;
+- mock URLs;
+- local paths;
+- internal validation logs.
+
+All examples should use neutral placeholders such as `example.com`, `<prefix>`, `<server-ip>` and `<redacted>`.

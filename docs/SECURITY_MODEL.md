@@ -1,85 +1,47 @@
 # Security model
 
-XPAM Script is designed for a single-purpose VPS operated by root or a trusted administrator.
+XPAM Script automates a security-sensitive VPS stack. Treat generated connection data and configuration files as private.
 
----
+## Secret data
 
-## SSH
-
-Step `0` requires confirmed SSH key access before hardening SSH.
-
-The script:
-
-- checks `/root/.ssh/authorized_keys`;
-- disables SSH password authentication;
-- disables keyboard-interactive authentication;
-- disables X11 forwarding;
-- keeps TCP forwarding enabled.
-
-TCP forwarding remains enabled because it can be operationally useful for SSH tunnels.
-
----
-
-## Firewall
-
-UFW policy is rebuilt by XPAM Script.
-
-Expected public IPv4 rules:
-
-```text
-22/tcp
-80/tcp
-443/tcp
-```
-
-Public IPv6 inbound is not supported by the XPAM Script installation path. Use IPv4 A records only and remove AAAA records for XPAM domains before installation.
-
----
-
-## Local-only backends
-
-The following should not be publicly exposed:
-
-- 3x-ui panel backend;
-- Xray local backend in HAProxy mode;
-- nginx fallback backend;
-- nginx sync backend;
-- MTProto backend.
-
-The health check validates expected loopback listeners.
-
----
-
-## Secrets
-
-Secrets are stored under:
-
-```text
-/root/secure-notes
-```
-
-Never publish this directory.
-
-Sensitive values include:
+Sensitive data includes:
 
 - VLESS links;
-- MTProto links;
-- Telegram tokens;
-- Relay tokens;
-- WARP keys;
-- certificate private keys;
-- Basic Auth passwords;
-- 3x-ui admin password.
+- Telegram links;
+- Exit VLESS link for DoubleHop Mode;
+- UUIDs;
+- tokens;
+- private keys;
+- WARP/WireGuard credentials;
+- `/etc/xpam-script/config.env`;
+- output from `sudo <prefix>-links --show-secrets`.
 
----
+## Safe and unsafe link commands
 
-## Limitations
+Safe diagnostic summary:
 
-XPAM Script cannot protect against:
+```bash
+sudo <prefix>-links
+```
 
-- root compromise;
-- a malicious provider;
-- registrar or DNS account compromise;
-- malicious upstream packages;
-- unsafe manual changes;
-- publishing secrets by mistake.
+Sensitive full output:
+
+```bash
+sudo <prefix>-links --show-secrets
+```
+
+Never paste the full output into a public issue.
+
+The full output may include current VLESS and Telegram links generated from the active 3x-ui configuration.
+
+## DoubleHop Mode
+
+The Exit VLESS link is a credential. Anyone with it may be able to use the Exit-side access it represents.
+
+XPAM configures DoubleHop on the Entry server only. It does not manage the Exit server.
+
+## Update logs
+
+Safe self-update must not print live connection links, tokens or private keys in logs.
+
+Before sharing update logs, redact domains, IP addresses, URLs, UUIDs, tokens and local paths.

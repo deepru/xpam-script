@@ -21,7 +21,7 @@ Use:
   sudo XPAM_REPO="deepru/xpam-script" bash xpam-bootstrap.sh
 
 Or set:
-  XPAM_RELEASE_BASE_URL="https://github.com/deepru/xpam-script/releases/download/v1.3.0"
+  XPAM_RELEASE_BASE_URL="https://github.com/deepru/xpam-script/releases/download/v1.2.0"
 EOF
     exit 1
 fi

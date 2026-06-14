@@ -148,7 +148,12 @@ fi
 echo
 echo "===== SERVICE NOFILE LIMIT CHECK ====="
 
-for svc in nginx x-ui haproxy mtprotoproxy; do
+SERVICES_TO_CHECK="nginx x-ui haproxy"
+if [ "{{MTPROTO_BACKEND}}" != "3xui-mtg" ]; then
+  SERVICES_TO_CHECK="$SERVICES_TO_CHECK mtprotoproxy"
+fi
+
+for svc in $SERVICES_TO_CHECK; do
   if systemctl cat "$svc.service" >/dev/null 2>&1; then
     state="$(systemctl is-active "$svc" 2>/dev/null || true)"
     limit="$(systemctl show "$svc" -p LimitNOFILE --value 2>/dev/null || echo 0)"

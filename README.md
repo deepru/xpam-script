@@ -1,226 +1,204 @@
 # XPAM Script
 
-**XPAM Script** — это Bash-автоматизация для подготовки чистого VPS под аккуратную IPv4-first HTTPS/TLS-инфраструктуру с VLESS, MTProto, сайтами-маскировками, 3x-ui/Xray, HAProxy, nginx, Certbot, firewall, fail2ban, health-check, Telegram-уведомлениями, HTTPS Relay, WARP через Xray и финальной production-очисткой.
+**XPAM Script** — это Bash-автоматизация для быстрого развёртывания приватной HTTPS/TLS-инфраструктуры на чистом VPS: **VLESS**, **Telegram proxy / MTG**, 3x-ui/Xray, nginx, HAProxy, Certbot, firewall, fail2ban, health-checks, maintenance-сценарии, WARP через Xray, **DoubleHop Mode** и безопасное обновление через XPAM.
 
-Релизы и установочные архивы доступны в [GitHub Releases](https://github.com/deepru/xpam-script/releases).
+Цель проекта простая: взять чистый сервер и привести его к готовому, управляемому состоянию без ручной сборки nginx, HAProxy, TLS, 3x-ui, firewall, диагностики и служебных скриптов.
 
-> Перед использованием обязательно прочитайте [полную инструкцию пользователя в PDF](docs/USER_GUIDE_RU.pdf).
->
-> Скрипт меняет SSH, firewall, nginx, HAProxy, 3x-ui/Xray, MTProto, Certbot, fail2ban, systemd-юниты, health/maintenance-скрипты, DNS-проверки, `/etc/hosts` и сетевые параметры VPS. Это не “маленькая утилита”, а полноценная автоматизация сервера. Не запускайте XPAM Script на VPS, где уже работают важные сервисы.
+> XPAM Script меняет SSH-настройки, firewall, nginx, HAProxy, 3x-ui/Xray, Certbot, fail2ban, systemd-юниты, health/maintenance-скрипты, DNS-проверки, `/etc/hosts` и сетевые параметры VPS. Используйте его на чистом VPS, а не на сервере, где уже работают важные сервисы.
 
----
+## Что нового в v1.3.5
 
-## Для чего нужен XPAM Script
+Версия **v1.3.5** — крупное обновление архитектуры, UX и обслуживания:
 
-XPAM Script создан для ситуации, когда пользователь покупает чистый VPS и хочет получить готовую, воспроизводимую и проверяемую серверную схему без ручной сборки десятков компонентов.
+- новый основной интерфейс управления: `sudo <prefix>-xpam`;
+- обновлённый fresh-install UX без старой схемы профилей;
+- VLESS через 3x-ui/Xray;
+- Telegram proxy / MTG через 3x-ui;
+- единый просмотр данных подключения через `sudo <prefix>-links`;
+- DoubleHop Mode для маршрутизации выбранного трафика через Exit-сервер;
+- режимы DoubleHop: VLESS only, Telegram only, VLESS + Telegram;
+- WARP через 3x-ui/Xray как optional outbound;
+- backend-aware health/deep-health, repair и weekly maintenance;
+- оптимизации для небольших VPS;
+- безопасное self-update через GitHub Releases с SHA256-проверкой, staging preflight, backup и rollback.
 
-После установки пользователь получает:
+## Поддерживаемые ОС
 
-- защищённый SSH-доступ по ключу;
-- IPv4-first публичную поверхность с портами **22/80/443**;
-- HTTPS/TLS через nginx, HAProxy и Certbot;
-- 3x-ui/Xray с SQLite backend;
-- VLESS через отдельный домен;
-- MTProto proxy через отдельный домен в MTProto-профилях;
-- сайты-маскировки и fallback-сайт;
-- Telegram-уведомления о состоянии сервера;
-- опциональный HTTPS Relay для Telegram-уведомлений;
-- опциональный WARP outbound внутри Xray с normalize/reset через меню;
-- компактный health-check и подробный deep diagnostics;
-- сервисную диагностику сети/DNS;
-- repair-команду для восстановления XPAM runtime/обвязки;
-- production cleanup после завершения настройки;
-- безопасные команды, которые не печатают секреты по умолчанию.
+XPAM Script v1.3.5 предназначен для чистых VPS на:
 
----
+- **Ubuntu 24.04 LTS**;
+- **Debian 12**.
 
-## Поддерживаемые системы
+Проверено на Ubuntu 24.04 LTS и Debian 12: установка, управление сервером, VLESS, Telegram proxy / MTG, DoubleHop Mode, диагностика, восстановление и безопасное обновление.
 
-Официально проверено:
+## Как это устроено
 
-- **Ubuntu 24.04 LTS**
-- **Debian 12**
+XPAM Script не заменяет 3x-ui и не пытается быть вторым web-panel. Он устанавливает и настраивает 3x-ui/Xray, nginx, HAProxy и системную обвязку, а затем даёт простой CLI-интерфейс для типовых операций.
 
-XPAM Script рассчитан на **чистый VPS** с root-доступом. Использование на сервере с уже настроенными сайтами, панелями, VPN, reverse proxy или нестандартным firewall не рекомендуется.
+Обычно публичный вход остаётся на HTTPS/TLS `443/tcp`. HAProxy принимает внешний трафик, направляет его в нужный backend, nginx отвечает за masking/fallback, а 3x-ui/Xray обслуживает VLESS, Telegram proxy / MTG и маршрутизацию.
 
----
+## Быстрый старт
 
-## Что нужно подготовить до запуска
-
-Перед установкой должны быть готовы:
-
-1. VPS с Ubuntu 24.04 LTS или Debian 12.
-2. Root-доступ по SSH.
-3. SSH-ключ, добавленный в `/root/.ssh/authorized_keys`.
-4. Доменная зона.
-5. IPv4 A-записи для доменов, которые будет использовать XPAM Script.
-6. Отсутствие AAAA-записей для XPAM-managed доменов, если вы не понимаете последствия IPv6.
-7. Понимание будущего prefix-команд, например `<prefix>-install`, `<prefix>-health`, `<prefix>-links`.
-
-Рекомендуемая схема DNS:
-
-```text
-example.com          A    SERVER_IP
-www.example.com      A    SERVER_IP
-vless.example.com    A    SERVER_IP
-tg.example.com       A    SERVER_IP
-```
-
-`SERVER_IP` — публичный IPv4 вашего VPS.
-
----
-
-## Быстрая установка
+1. Подготовьте чистый VPS на Ubuntu 24.04 LTS или Debian 12.
+2. Настройте DNS A-записи для доменов, которые будете использовать с XPAM.
+3. Убедитесь, что у сервера есть IPv4-адрес и доступ по SSH.
+4. Скачайте актуальный релиз XPAM Script из GitHub Releases.
+5. Запустите установку по инструкции из релиза.
+6. После создания prefix-команды используйте основное меню:
 
 ```bash
-cd /root
-curl -fsSL https://raw.githubusercontent.com/deepru/xpam-script/main/bootstrap.sh -o xpam-bootstrap.sh
-sudo XPAM_REPO="deepru/xpam-script" bash xpam-bootstrap.sh
+sudo <prefix>-xpam
 ```
 
-Bootstrap скачивает опубликованный GitHub Release, проверяет SHA256, распаковывает архив и запускает установщик.
-
-После запуска сначала выберите пункт `0` для SSH-безопасности и создания prefix-команды, затем пункт `1` для установки.
+В первый запуск обычно используются пункты:
 
 ```text
 0) SSH-безопасность / создать prefix-команду
 1) Установить / продолжить настройку сервера
 ```
 
-После шага 0 пользователь работает через свои prefix-команды. Если prefix = `srv`, команды будут `sudo srv-install`, `sudo srv-health`, `sudo srv-links` и так далее.
+После установки это же меню остаётся основным интерфейсом управления сервером.
 
-В документации используется универсальная запись:
+## Основные команды
 
-```text
-sudo <prefix>-install
-sudo <prefix>-health
+```bash
+sudo <prefix>-xpam                 # основное меню управления XPAM
+sudo <prefix>-links                # безопасная сводка без вывода секретов
+sudo <prefix>-links --show-secrets # все данные подключения
+sudo <prefix>-health               # быстрая проверка состояния
+sudo <prefix>-health --deep        # расширенная проверка
+sudo <prefix>-vless                # VLESS-информация и операции
+sudo <prefix>-repair               # восстановление XPAM-обвязки
+sudo <prefix>-netdiag              # диагностика сети
+```
+
+`<prefix>` выбирается при настройке сервера. Например, если выбран prefix `my`, основной командой будет `sudo my-xpam`.
+
+## VLESS
+
+XPAM настраивает VLESS через 3x-ui/Xray и хранит подключение как часть единой конфигурации сервера.
+
+Полные данные подключения доступны через:
+
+```bash
+sudo <prefix>-links --show-secrets
+```
+
+VLESS links формируются из текущей конфигурации 3x-ui. Если вы добавили, удалили или изменили VLESS-клиента в 3x-ui, повторно запустите эту команду и используйте актуальную ссылку из вывода.
+
+Обычная команда без `--show-secrets` не печатает секреты и подходит для безопасной диагностики:
+
+```bash
 sudo <prefix>-links
 ```
 
----
+## Telegram proxy / MTG
 
-## Что именно делает XPAM Script
+XPAM v1.3.5 использует Telegram proxy / MTG через 3x-ui. Пользователю не нужна отдельная команда для Telegram: Telegram link показывается вместе с остальными данными подключения.
 
-### 1. SSH и базовая безопасность
-
-XPAM Script:
-
-- проверяет вход по SSH-ключу;
-- отключает password login;
-- оставляет root login по ключу;
-- отключает пустые пароли;
-- отключает X11 forwarding;
-- ограничивает SSH policy;
-- создаёт удобные prefix-команды;
-- не даёт продолжать установку, если key-only SSH policy не подтверждена.
-
-### 2. Firewall и публичная поверхность
-
-XPAM Script настраивает UFW так, чтобы снаружи были доступны только необходимые публичные IPv4 TCP-порты:
-
-```text
-22/tcp   SSH
-80/tcp   HTTP для Certbot/redirect
-443/tcp  HTTPS/TLS поверхность
-```
-
-Backend-сервисы остаются на loopback, а не открываются наружу напрямую. XPAM Script не создаёт публичные IPv6 TCP-правила для 22/80/443.
-
-### 3. DNS safe mode и provider-specific quirks
-
-XPAM Script использует safe DNS behavior: если DNS провайдера работает, скрипт его не переписывает. Debian без `systemd-resolved` не считается ошибкой сам по себе. Health/repair также учитывают типовые особенности VPS-образов, например no-op `rc-local.service` и Debian `ufw.service inactive (dead)` при фактически активном firewall.
-
-### 4. 3x-ui, SQLite, Xray и VLESS
-
-XPAM Script использует 3x-ui и Xray как upstream-компоненты, но автоматизирует их установку и интеграцию в общую схему.
-
-Важный контракт:
-
-- XPAM Script поддерживает 3x-ui только с SQLite backend;
-- штатная база 3x-ui должна быть `/etc/x-ui/x-ui.db`;
-- PostgreSQL backend не поддерживается;
-- health/repair остановятся с понятной ошибкой, если обнаружат PostgreSQL backend.
-
-VLESS inbound, созданный XPAM Script, получает имя `<prefix>-vless`. Пользовательские имена inbound/client и валидный пользовательский uTLS fingerprint не должны ломать health, repair и вывод VLESS-ссылок.
-
-### 5. MTProto
-
-XPAM Script может настроить MTProto proxy:
-
-- отдельный домен под MTProto;
-- маршрутизацию через HAProxy по SNI;
-- управление пользователями;
-- безопасное хранение ссылок в `/root/secure-notes`.
-
-Команда MTProto:
-
-```text
-sudo <prefix>-tg
-sudo <prefix>-tg --show
-sudo <prefix>-tg --manage
-```
-
-### 6. WARP через 3x-ui/Xray
-
-WARP в XPAM Script — это опциональный outbound внутри Xray. Он настраивается через 3x-ui и управляется через меню XPAM Script.
-
-XPAM может проверить и привести XPAM-managed WARP state к совместимому состоянию для выбранного профиля, а также отключить WARP и вернуть VLESS/sniffing/routing поведение к штатному baseline профиля.
-
-
-### 7. Health-check, repair и обслуживание
-
-После установки доступны:
-
-```text
-sudo <prefix>-health
-sudo <prefix>-health --deep
-sudo <prefix>-netdiag
-sudo <prefix>-repair
-sudo <prefix>-weekly-maintenance
-```
-
-`health` проверяет сервер как единый продукт: сервисы, firewall, TLS, DNS, 3x-ui backend, External Proxy, WARP, service hygiene, snapshot freshness, swap, kernel/reboot status и сетевую tuning policy. `repair` восстанавливает XPAM-обвязку, не меняя домены, VLESS UUID, MTProto secret и пользовательские данные.
-
----
-
-## Основные команды после установки
-
-```text
-sudo <prefix>-install        главное меню XPAM Script
-sudo <prefix>-health         быстрая проверка сервера
-sudo <prefix>-health --deep  подробная диагностика
-sudo <prefix>-links          безопасная сводка без секретов
-sudo <prefix>-vless          информация по VLESS без вывода ссылки
-sudo <prefix>-tg             информация по MTProto без вывода секретов
-sudo <prefix>-netdiag        диагностика сети/DNS
-sudo <prefix>-repair         восстановление XPAM-обвязки
-```
-
-Для осознанного вывода секретов:
-
-```text
+```bash
 sudo <prefix>-links --show-secrets
-sudo <prefix>-vless --show
-sudo <prefix>-tg --show
-sudo <prefix>-tg --manage
 ```
 
-Не публикуйте вывод этих команд в чатах, issues, screenshots или публичных логах.
+Telegram link формируется из текущей конфигурации 3x-ui. Если вы вручную изменили Telegram proxy / MTG secret в 3x-ui, старая Telegram link перестанет работать, а актуальную ссылку нужно взять из нового вывода `sudo <prefix>-links --show-secrets`.
 
----
+В пользовательской документации v1.3.5 используются термины **Telegram proxy / MTG** и **Telegram link**.
+
+## DoubleHop Mode
+
+**DoubleHop Mode** позволяет настроить Entry-сервер так, чтобы выбранный трафик выходил через другой сервер.
+
+Доступные режимы:
+
+- VLESS only;
+- Telegram only;
+- VLESS + Telegram.
+
+Важные свойства:
+
+- XPAM настраивает только Entry-сервер;
+- Exit-сервер пользователь подготавливает отдельно;
+- для включения DoubleHop пользователь вставляет VLESS-ссылку Exit-сервера;
+- текущие VLESS и Telegram links на Entry-сервере не меняются при включении, изменении режима или выключении DoubleHop.
+
+DoubleHop Mode доступен в основном меню:
+
+```bash
+sudo <prefix>-xpam
+```
+
+## WARP через 3x-ui/Xray
+
+XPAM поддерживает WARP как optional Xray outbound. Это не системный VPN для всего сервера, а управляемый outbound внутри 3x-ui/Xray. Управление доступно из XPAM-меню.
+
+## Health, repair и maintenance
+
+Быстрая проверка:
+
+```bash
+sudo <prefix>-health
+```
+
+Расширенная проверка:
+
+```bash
+sudo <prefix>-health --deep
+```
+
+Восстановление XPAM-обвязки:
+
+```bash
+sudo <prefix>-repair
+```
+
+Weekly maintenance настраивается автоматически. Он поддерживает служебную обвязку, не должен менять пользовательские links и не должен ломать активные режимы работы.
+
+## Безопасное обновление
+
+В v1.3.5 добавлено безопасное обновление через XPAM:
+
+- проверка информации о релизе;
+- скачивание архива и `.sha256`;
+- SHA256-проверка до распаковки;
+- staging preflight;
+- backup перед изменениями;
+- post-update health/deep-health;
+- rollback при ошибке.
+
+Обновление запускается вручную:
+
+```bash
+sudo <prefix>-xpam
+```
+
+Раздел: `Дополнительно` → `Проверить обновления XPAM`.
+
+## Секреты
+
+Не публикуйте:
+
+- VLESS links;
+- Telegram links;
+- Exit VLESS link для DoubleHop;
+- UUID, tokens, private keys;
+- содержимое `/etc/xpam-script/config.env`;
+- вывод `sudo <prefix>-links --show-secrets`.
+
+Для issue и bug reports используйте только отредактированные логи с заменёнными доменами, IP-адресами, UUID и ссылками.
 
 ## Документация
 
-- [Полная инструкция пользователя, PDF](docs/USER_GUIDE_RU.pdf)
-- [Полная инструкция пользователя, DOCX](docs/USER_GUIDE_RU.docx)
-- [CHANGELOG.md](CHANGELOG.md)
-- [TESTING.md](TESTING.md)
-- [SECURITY.md](SECURITY.md)
-- [THIRD_PARTY.md](THIRD_PARTY.md)
-- [GitHub Releases](https://github.com/deepru/xpam-script/releases)
+- [`docs/INSTALLATION.md`](docs/INSTALLATION.md) — установка;
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — архитектура;
+- [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) — конфигурация;
+- [`docs/PROFILES.md`](docs/PROFILES.md) — режимы работы;
+- [`docs/HEALTHCHECKS.md`](docs/HEALTHCHECKS.md) — проверки состояния;
+- [`docs/MAINTENANCE.md`](docs/MAINTENANCE.md) — обслуживание;
+- [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) — диагностика проблем;
+- [`docs/SECURITY_MODEL.md`](docs/SECURITY_MODEL.md) — модель безопасности;
+- [`SECURITY.md`](SECURITY.md) — правила безопасности проекта;
+- [`THIRD_PARTY.md`](THIRD_PARTY.md) — сторонние компоненты.
 
----
+## Лицензия
 
-## Лицензия и сторонние компоненты
-
-XPAM Script распространяется под MIT License. 3x-ui, Xray-core, MTProto proxy, nginx, HAProxy, Certbot, UFW, fail2ban, systemd и другие компоненты сохраняют свои собственные лицензии. Подробно: [`THIRD_PARTY.md`](THIRD_PARTY.md).
+XPAM Script распространяется под MIT License. Сторонние компоненты сохраняют собственные лицензии. Подробнее: [`THIRD_PARTY.md`](THIRD_PARTY.md).

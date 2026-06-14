@@ -1,89 +1,29 @@
 # Telegram notifications
 
-Telegram notifications are optional and are used for operational alerts.
+Telegram notifications are separate from Telegram proxy / MTG.
 
-They are mainly intended for:
+- **Telegram proxy / MTG** is a user connectivity feature.
+- **Telegram notifications** are XPAM operational notifications through a bot or relay flow.
 
-- failed weekly maintenance;
-- failed health check;
-- manual reboot required.
+## Security
 
-They are not intended as chatty success reports.
+Bot tokens, relay tokens and chat identifiers are sensitive. Do not publish them in issues or logs.
 
----
+## Management
 
-## Mode 1: Direct notifications
+Notification management is available from:
 
-The VPS sends messages directly to Telegram Bot API.
+```bash
+sudo <prefix>-xpam
+```
 
-Use this mode when:
+Open `Telegram-уведомления`.
 
-- the server has direct network access to Telegram API;
-- the operator manages one server;
-- the bot token can be stored on this server.
+## Troubleshooting
 
-Requires:
+If notifications fail, verify token configuration, network access and XPAM health:
 
-- Telegram bot token from BotFather;
-- personal chat with the bot.
-
----
-
-## Mode 2: Relay client
-
-The VPS sends notification payloads to another XPAM Script server acting as HTTPS Relay.
-
-Use this mode when:
-
-- this server cannot access Telegram API directly;
-- another XPAM server can access Telegram;
-- you do not want to store the Telegram bot token on this server.
-
-Requires:
-
-- Relay URL from the Relay server;
-- Relay token from the Relay server.
-
----
-
-## Mode 3: HTTPS Relay server
-
-This server receives HTTPS notification payloads from other XPAM Script servers and forwards them to Telegram.
-
-Use this mode when:
-
-- you operate multiple XPAM servers;
-- one server can access Telegram API directly;
-- other servers should not store Telegram bot token.
-
-The Relay server:
-
-- uses the existing HTTPS/443 surface;
-- does not open a separate public port;
-- stores the relay token securely;
-- is checked by health/deep-health.
-
-Relay-server mode is shown only for profiles that can safely host it through the HAProxy/MTProto HTTPS surface. Direct VLESS profile servers can still use direct notifications or Relay-client mode, but they do not offer Relay-server mode in the menu.
-
----
-
-## Verify existing settings
-
-This mode checks saved Telegram settings without reconfiguring them.
-
----
-
-## Skip
-
-Telegram notifications can be skipped. Health and maintenance still work locally.
-
----
-
-## Secrets
-
-Do not publish:
-
-- bot token;
-- Relay token;
-- Relay URL if it contains a secret path;
-- screenshots that show Telegram configuration values.
+```bash
+sudo <prefix>-health
+sudo <prefix>-health --deep
+```

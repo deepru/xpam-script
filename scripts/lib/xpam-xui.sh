@@ -108,7 +108,7 @@ xpam_xui_create_api_token_via_session(){
   [[ -n "${XUI_ADMIN_USER:-}" && -n "${XUI_ADMIN_PASS:-}" ]] || return 1
   base="$(xpam_xui_panel_base_url)"
   XPAM_XUI_BASE_URL="$base" XPAM_XUI_ADMIN_USER="$XUI_ADMIN_USER" XPAM_XUI_ADMIN_PASS="$XUI_ADMIN_PASS" python3 - <<'PY_XPAM_XUI_SESSION_TOKEN'
-import json, os, ssl, sys, time, urllib.parse, urllib.request
+import json, os, re, ssl, sys, time, urllib.parse, urllib.request
 from http.cookiejar import CookieJar
 from urllib.request import HTTPCookieProcessor, build_opener
 
@@ -119,10 +119,11 @@ ctx=ssl._create_unverified_context()
 cj=CookieJar()
 opener=build_opener(HTTPCookieProcessor(cj), urllib.request.HTTPSHandler(context=ctx))
 
-def req(method, url, data=None, headers=None):
+def req(method, url, data=None, headers=None, opener_obj=None):
     headers=headers or {}
     r=urllib.request.Request(url, data=data, method=method, headers=headers)
-    with opener.open(r, timeout=15) as resp:
+    active_opener=opener_obj or opener
+    with active_opener.open(r, timeout=20) as resp:
         return resp.read(2*1024*1024).decode('utf-8', 'replace')
 
 def load(body):
@@ -131,11 +132,50 @@ def load(body):
     except Exception:
         return {}
 
+def token_candidates(obj):
+    found=[]
+    def walk(x):
+        if isinstance(x, dict):
+            for k, v in x.items():
+                lk=str(k).lower()
+                if isinstance(v, str) and ('token' in lk or 'api' in lk):
+                    found.append(v.strip())
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+        elif isinstance(x, str):
+            found.extend(re.findall(r'[A-Za-z0-9._~+/=-]{24,}', x))
+    walk(obj)
+    clean=[]
+    seen=set()
+    for item in found:
+        if item and item not in seen:
+            seen.add(item)
+            clean.append(item)
+    return clean
+
+def api_check(token):
+    # Validate behaviour, not token shape/version. This rejects hashed-at-rest DB values,
+    # empty CLI output, and any response candidate that is not a usable Bearer token.
+    try:
+        r=urllib.request.Request(base + '/panel/api/inbounds/list', headers={
+            'Authorization': 'Bearer '+token,
+            'Accept': 'application/json',
+            'User-Agent': 'XPAM-Script/3x-ui-compat',
+        })
+        with urllib.request.urlopen(r, timeout=15, context=ctx) as resp:
+            data=json.loads(resp.read(2*1024*1024).decode('utf-8', 'replace'))
+        return data.get('success') is True
+    except Exception:
+        return False
+
 try:
     body=req('GET', base + '/csrf-token', headers={'Accept':'application/json','User-Agent':'XPAM-Script/3x-ui-compat'})
     csrf=load(body).get('obj') or ''
     if not csrf:
         sys.exit(1)
+
     login_data=urllib.parse.urlencode({'username':username,'password':password,'twoFactorCode':''}).encode()
     body=req('POST', base + '/login', data=login_data, headers={
         'Content-Type':'application/x-www-form-urlencoded',
@@ -145,21 +185,34 @@ try:
     })
     if load(body).get('success') is not True:
         sys.exit(1)
-    payload=json.dumps({'name':'xpam-script-%d' % int(time.time())}).encode()
-    body=req('POST', base + '/panel/setting/apiTokens/create', data=payload, headers={
-        'Content-Type':'application/json',
-        'Accept':'application/json',
-        'X-CSRF-Token': csrf,
-        'User-Agent':'XPAM-Script/3x-ui-compat',
-    })
-    data=load(body)
-    if data.get('success') is not True:
-        sys.exit(1)
-    obj=data.get('obj') or {}
-    token=str(obj.get('token') or '').strip()
-    if not token:
-        sys.exit(1)
-    print(token)
+
+    endpoints=(
+        # 3x-ui v3.3.0+: /panel/setting and /panel/xray moved under /panel/api.
+        '/panel/api/setting/apiTokens/create',
+        # Older 3x-ui releases.
+        '/panel/setting/apiTokens/create',
+    )
+
+    for endpoint in endpoints:
+        payload=json.dumps({'name':'xpam-script-%d' % int(time.time())}).encode()
+        try:
+            body=req('POST', base + endpoint, data=payload, headers={
+                'Content-Type':'application/json',
+                'Accept':'application/json',
+                'X-CSRF-Token': csrf,
+                'User-Agent':'XPAM-Script/3x-ui-compat',
+            })
+        except Exception:
+            continue
+        data=load(body)
+        if data.get('success') is not True:
+            continue
+        for token in token_candidates(data):
+            if api_check(token):
+                print(token)
+                sys.exit(0)
+
+    sys.exit(1)
 except Exception:
     sys.exit(1)
 PY_XPAM_XUI_SESSION_TOKEN
@@ -276,6 +329,39 @@ except Exception as exc:
     open(err_path, 'w', encoding='utf-8').write(str(exc)+'\n')
     sys.exit(1)
 PY_XPAM_XUI_API_POST
+}
+
+
+xpam_xui_api_get_json(){
+  local url="$1" out_file="$2" err_file="$3" token
+  token="$(xui_api_token)" || return 1
+  XPAM_XUI_API_TOKEN="$token" XPAM_XUI_API_URL="$url" XPAM_XUI_API_OUT="$out_file" XPAM_XUI_API_ERR="$err_file" python3 - <<'PY_XPAM_XUI_API_GET'
+import os, ssl, sys, urllib.error, urllib.request
+url=os.environ['XPAM_XUI_API_URL']
+out_path=os.environ['XPAM_XUI_API_OUT']
+err_path=os.environ['XPAM_XUI_API_ERR']
+token=os.environ['XPAM_XUI_API_TOKEN']
+ctx=ssl._create_unverified_context()
+try:
+    req=urllib.request.Request(url, method='GET', headers={
+        'Authorization': 'Bearer '+token,
+        'Accept': 'application/json',
+        'User-Agent': 'XPAM-Script/3x-ui-compat'
+    })
+    with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
+        body=resp.read(10*1024*1024)
+    open(out_path, 'wb').write(body)
+    open(err_path, 'wb').write(b'')
+except urllib.error.HTTPError as exc:
+    body=exc.read(1024*1024)
+    open(out_path, 'wb').write(body)
+    open(err_path, 'w', encoding='utf-8').write(f'HTTP error {exc.code}\n')
+    sys.exit(1)
+except Exception as exc:
+    open(out_path, 'wb').write(b'')
+    open(err_path, 'w', encoding='utf-8').write(str(exc)+'\n')
+    sys.exit(1)
+PY_XPAM_XUI_API_GET
 }
 
 xpam_xui_run_installer_sanitized(){

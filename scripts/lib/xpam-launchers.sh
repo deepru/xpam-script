@@ -5,21 +5,23 @@
 write_install_launcher(){
   [[ -n "${SERVER_PREFIX:-}" ]] || return 0
 
-  local safe_prefix launcher bin_link kit_dir_real
+  local safe_prefix launcher bin_link old_sbin old_bin kit_dir_real
   safe_prefix="$(printf '%s' "$SERVER_PREFIX" | tr -cd 'A-Za-z0-9_-')"
 
-  [[ -n "$safe_prefix" ]] || fail "SERVER_PREFIX is empty; cannot create install launcher"
+  [[ -n "$safe_prefix" ]] || fail "SERVER_PREFIX is empty; cannot create XPAM launcher"
   [[ "$safe_prefix" == "$SERVER_PREFIX" ]] || fail "SERVER_PREFIX contains unsupported chars for launcher command: $SERVER_PREFIX"
 
-  launcher="/usr/local/sbin/${safe_prefix}-install"
-  bin_link="/usr/local/bin/${safe_prefix}-install"
+  launcher="/usr/local/sbin/${safe_prefix}-xpam"
+  bin_link="/usr/local/bin/${safe_prefix}-xpam"
+  old_sbin="/usr/local/sbin/${safe_prefix}-install"
+  old_bin="/usr/local/bin/${safe_prefix}-install"
   kit_dir_real="$RUNTIME_KIT_DIR"
 
   cat > "$launcher" <<EOF_LAUNCHER
 #!/usr/bin/env bash
 set -euo pipefail
 
-LAUNCHER="/usr/local/sbin/${safe_prefix}-install"
+LAUNCHER="/usr/local/sbin/${safe_prefix}-xpam"
 KIT_DIR="${kit_dir_real}"
 
 if [ "\$(id -u)" -ne 0 ]; then
@@ -39,8 +41,12 @@ EOF_LAUNCHER
   chmod 755 "$launcher"
   ln -sf "$launcher" "$bin_link" 2>/dev/null || true
 
-  ok "Install launcher created: sudo ${safe_prefix}-install"
+  # v1.3.5 has no legacy compatibility alias/wrapper for -install.
+  rm -f "$old_sbin" "$old_bin" 2>/dev/null || true
+
+  ok "Команда управления создана: sudo ${safe_prefix}-xpam"
 }
+
 
 
 write_health_launcher(){
@@ -183,6 +189,13 @@ write_tg_launcher(){
 
   launcher="/usr/local/sbin/${safe_prefix}-tg"
   bin_link="/usr/local/bin/${safe_prefix}-tg"
+
+  if ! uses_mtproto || ! mtproto_backend_is_alexbers; then
+    rm -f "$launcher" "$bin_link" 2>/dev/null || true
+    ok "Telegram uses ${safe_prefix}-links; old ${safe_prefix}-tg launcher removed for backend: $(mtproto_backend_effective)"
+    return 0
+  fi
+
   kit_dir_real="$RUNTIME_KIT_DIR"
 
   cat > "$launcher" <<EOF_TG_LAUNCHER
@@ -214,7 +227,7 @@ EOF_TG_LAUNCHER
   [[ -x "$launcher" ]] || fail "MTProto launcher was not created: $launcher"
   [[ -x "$bin_link" ]] || fail "MTProto launcher symlink was not created or is not executable: $bin_link"
 
-  ok "MTProto users command available: sudo ${safe_prefix}-tg"
+  ok "Legacy alexbers MTProto users command available: sudo ${safe_prefix}-tg"
 }
 
 
@@ -259,3 +272,5 @@ EOF_VLESS_LAUNCHER
 
   ok "VLESS links command available: sudo ${safe_prefix}-vless"
 }
+
+

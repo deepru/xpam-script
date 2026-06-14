@@ -1,6 +1,6 @@
 [Unit]
-Wants=network-online.target nginx.service x-ui.service mtprotoproxy.service
-After=network-online.target nginx.service x-ui.service mtprotoproxy.service
+Wants={{HAPROXY_BACKEND_ORDER_UNITS}}
+After={{HAPROXY_BACKEND_ORDER_UNITS}}
 
 [Service]
 ExecStartPre=/usr/local/sbin/wait-for-local-port.sh 127.0.0.1 {{XRAY_LOCAL_PORT}} 30 xray-local

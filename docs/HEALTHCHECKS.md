@@ -1,63 +1,43 @@
 # Health checks
 
-The health command is:
+XPAM Script provides quick and extended health checks.
+
+## Quick health
 
 ```bash
 sudo <prefix>-health
 ```
 
-It validates the server from the operator’s point of view.
+This checks the main runtime state and service availability.
 
-The normal health output is intentionally compact. Full diagnostics are available through:
+## Deep health
 
 ```bash
 sudo <prefix>-health --deep
 ```
 
----
+Deep health performs broader checks and is recommended after installation, updates, repair, DoubleHop changes and network troubleshooting.
 
-## Main checks
+## What is covered
 
-The health script checks:
+Health checks cover the XPAM-managed stack, including:
 
-- failed systemd units;
-- nginx service and config;
-- x-ui service;
-- fail2ban;
-- certbot timer;
-- UFW/firewall policy;
-- cron;
-- SSH config syntax;
-- SSH service/socket;
-- HAProxy and MTProto, when used;
-- HAProxy/MTProto startup ordering;
-- public HTTP/HTTPS routes;
-- Basic Auth panel path response;
-- MTProto secret leakage in recent journal;
-- 3x-ui database settings and schema compatibility;
-- Xray generated config;
-- 3x-ui API token storage and Bearer access;
-- TLS certificate consistency;
-- public and loopback port exposure;
-- optional WARP state;
-- Telegram Relay, when configured;
-- service hygiene;
-- config snapshot freshness;
-- disk and inode usage;
-- swap policy;
-- kernel/reboot requirement;
-- DNS/provider behavior;
-- network tuning;
-- service file descriptor limits.
+- command surface;
+- nginx / HAProxy state;
+- 3x-ui / Xray state;
+- VLESS availability;
+- Telegram proxy / MTG state;
+- certificate and routing assumptions;
+- DoubleHop consistency when enabled;
+- small-VM policies and maintenance assumptions.
 
----
+## After changes
 
-## Result
+Run both checks after significant operations:
 
-A healthy server ends with:
-
-```text
-OK: <PREFIX> server looks healthy
+```bash
+sudo <prefix>-health
+sudo <prefix>-health --deep
 ```
 
-A failed or suspicious check is reported as `FAIL` or warning text. Do not ignore failed systemd units.
+If a check fails, use `sudo <prefix>-repair` or inspect logs with secrets redacted before sharing.

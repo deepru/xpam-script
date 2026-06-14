@@ -1,100 +1,56 @@
 # Changelog
 
-## v1.3.0 - Core modularization, 3x-ui compatibility layer, MTProto hardening, WARP reset and release QA
+## v1.3.5
 
-- Refactored the XPAM Script runtime into a cleaner modular structure. Large parts of the previously monolithic logic were split into dedicated helper layers for core runtime operations, 3x-ui integration, health checks, repair, WARP handling, Telegram notifications and profile-specific behavior.
-- Added a dedicated 3x-ui compatibility layer foundation so XPAM Script can keep its own server contract stable while 3x-ui remains an upstream component managed by the operator.
-- Reworked the 3x-ui API-token flow for newer 3x-ui releases where the token is available as plaintext only at creation time. XPAM now stores the usable API token in a root-only file with `0600` permissions and validates Bearer access in health checks.
-- Improved 3x-ui/Xray validation in deep health checks, including backend SQLite access, schema compatibility, panel settings, inbound configuration, generated Xray config, TLS certificate paths, external proxy settings, fallback configuration and optional WARP state.
-- Improved repair/runtime refresh behavior so `<prefix>-repair` refreshes the installed modular runtime, launchers and helper commands under `/opt/xpam-script`, `/usr/local/sbin` and `/usr/local/bin` instead of leaving older menu code behind.
-- Fixed and refreshed helper launchers so profile-prefixed commands such as `<prefix>-install`, `<prefix>-health`, `<prefix>-repair`, `<prefix>-netdiag`, `<prefix>-links`, `<prefix>-vless`, `<prefix>-tg` and `<prefix>-weekly-maintenance` are installed consistently.
-- Added stricter reboot-gate checks after package updates. XPAM now checks reboot requirement markers, package-level reboot signals, running-vs-installed kernel mismatch and sensitive package upgrade markers before finalizing installation.
-- Hardened MTProto deployment for HAProxy-backed profiles: MTProto is kept on loopback, TLS-only mode is enforced, the local mask backend is verified, IPv4-first behavior is explicit and deep health validates MTProto invariants without printing secrets.
-- Improved HAProxy/MTProto startup ordering. HAProxy now waits for the local Xray and MTProto backends, while MTProto waits for the local nginx sync backend. Historical or recovered backend events are reported as informational diagnostics when the current backend state is healthy.
-- Made quick health output compact and user-friendly. Full diagnostics remain available through `<prefix>-health --deep` and detailed log files.
-- Improved deep health coverage for service state, firewall policy, public port exposure, DNS/provider behavior, certificate consistency, config snapshot freshness, service hygiene, kernel/reboot state, swap policy, network tuning and file descriptor limits.
-- Added WARP normalize flow for XPAM-managed WARP state created through the 3x-ui panel. XPAM now checks the WARP configuration and brings the managed WARP state to a compatible baseline for the active profile.
-- Added WARP disable/reset flow for XPAM-managed WARP state. XPAM can disable the managed WARP configuration and restore VLESS sniffing/routing behavior to the correct baseline for the active profile.
-- Clarified WARP behavior across profiles: direct VLESS keeps Route-only sniffing as its normal baseline, while HAProxy/MTProto profiles return sniffing to OFF after WARP reset.
-- Improved Telegram notification UX. Direct notifications and Relay-client mode remain available where applicable; Relay-server mode is shown only for profiles that can host it safely through the existing HAProxy/MTProto HTTPS surface.
-- Added HTTPS Telegram Relay health checks for the relay service, Unix socket, token handling and method handling, without opening an additional public port.
-- Improved final production cleanup and weekly maintenance behavior, including guarded apt operations, config snapshots, retention cleanup, journal cleanup, certbot renewal checks and post-maintenance quick health validation.
-- Improved service hygiene, DNS/provider compatibility, port exposure validation and network tuning checks across Ubuntu 24.04 and Debian 12.
-- Preserved the existing public IPv4-first policy: XPAM-managed public TCP exposure remains limited to `22/80/443`, backend services stay on loopback and public IPv6 listeners on XPAM-managed public ports are not part of the supported contract.
-- Verified the final release line across the release matrix: Ubuntu 24.04/Profile 1 and Debian 12/Profile 3 final validation passed for the final archive. Debian 12/Profile 2 was also validated on the same code line before final packaging. These checks cover the direct VLESS path, the separate-subdomain HAProxy/MTProto path and the full HAProxy/MTProto/root-site path. The final archive SHA256 is `7efeb82fcc856c2ffb6155cbd94265d668944eb2e1c1ce87d98f06ad41e0987f`.
+### Главное
 
+- Добавлен новый основной интерфейс управления: `sudo <prefix>-xpam`.
+- Обновлён fresh-install UX и убрана старая пользовательская схема профилей.
+- VLESS настраивается через 3x-ui/Xray.
+- Telegram proxy / MTG настраивается через 3x-ui.
+- Данные подключения объединены в `sudo <prefix>-links` и `sudo <prefix>-links --show-secrets`.
+- VLESS и Telegram links в полной выдаче берутся из текущей конфигурации 3x-ui.
+- Добавлен DoubleHop Mode для Entry-сервера.
+- Добавлены режимы DoubleHop: VLESS only, Telegram only, VLESS + Telegram.
+- Добавлены small-VM оптимизации для слабых VPS.
+- Добавлен safe self-update через GitHub Releases.
+- Добавлены SHA256 verification, staging preflight, backup и rollback для обновлений.
 
-## v1.2.0 - 3x-ui compatibility, SQLite contract and diagnostics release
+### Health, repair и maintenance
 
-- Added an explicit 3x-ui SQLite-only compatibility contract. XPAM Script supports 3x-ui through `/etc/x-ui/x-ui.db`; PostgreSQL backend is detected and rejected safely in install, health and repair flows.
-- Added 3x-ui backend/schema guards so health and repair report unsupported backend state clearly instead of producing misleading SQLite/inbound errors.
-- Improved 3x-ui External Proxy consistency for XPAM-managed VLESS inbounds so generated VLESS links point to the public domain and port.
-- The MTProto user command is now `<prefix>-tg`; no backward-compatible legacy launcher is created.
-- Changed the default XPAM-managed VLESS inbound remark to `<prefix>-vless`; legacy XPAM remarks are still recognized.
-- Made VLESS health, repair and link output tolerant of user-managed inbound names, client names and valid custom uTLS fingerprints.
-- Changed the default uTLS fingerprint for XPAM-created VLESS inbounds to `firefox`.
-- Added clearer network tuning diagnostics and repair handling for `net.ipv4.tcp_syncookies` runtime drift, missing policy, broken policy, later sysctl override and unsupported provider/kernel behavior.
-- Improved provider-image compatibility for no-op `rc-local.service`, Debian UFW oneshot behavior and reboot decisions when the running kernel differs from the newest installed kernel.
-- Improved WARP diagnostics: XPAM preserves WARP reserved bytes when present, warns when Cloudflare WARP reserved bytes are missing, does not generate them automatically, and keeps WARP as an Xray outbound rather than a system VPN.
-- Improved WARP UX: fixed panel URL rendering, added a warning before restarting 3x-ui/Xray, softened Xray/WARP UDP listener reporting when UFW does not allow public UDP, and moved install logs out of `/root`.
-- Cleaned documentation structure: accumulated changes are in `CHANGELOG.md`, current verification is in `TESTING.md`, security policy is in `SECURITY.md`, and detailed per-release notes belong in GitHub Releases.
+- Health/deep-health учитывают актуальную Telegram proxy / MTG архитектуру.
+- Repair и weekly maintenance не должны менять VLESS/Telegram links.
+- Ручная смена Telegram proxy / MTG secret в 3x-ui не должна ломать health/deep-health/weekly; актуальная Telegram link должна отображаться через `sudo <prefix>-links --show-secrets`.
+- Maintenance-сценарии проверены в direct/off и DoubleHop-сценариях.
+- Сохранены journald/logrotate политики и backup retention для небольших VPS.
 
-## v1.1.1 - Direct VLESS IPv4 bind hotfix
+### DoubleHop Mode
 
-- Fixed direct VLESS profile behavior on provider images where Xray could expose public 443 through an IPv6 wildcard / dual-stack socket instead of a real IPv4 listener.
-- Direct VLESS now binds the public inbound to the detected public IPv4 address.
-- Repair can normalize an existing XPAM-managed direct VLESS inbound without changing UUIDs, clients, TLS certificates, fallback, WARP, Telegram Relay, nginx, HAProxy or MTProto settings.
-- Health/deep-health now treats public IPv6 listeners on XPAM-managed public ports 22/80/443 as FAIL and checks direct VLESS TLS against the detected public IPv4 address.
-- HAProxy/MTProto routing remains unchanged: HAProxy owns public IPv4 443 and Xray/MTProto/nginx backends remain loopback-only.
-- External Proxy is normalized for XPAM-managed VLESS inbounds in all profiles so 3x-ui generated links consistently use the public domain and port.
+- XPAM управляет DoubleHop только на Entry-сервере.
+- Exit-сервер пользователь подготавливает отдельно.
+- Для Exit используется VLESS-ссылка, которую пользователь вставляет в XPAM.
+- Включение, изменение режима и выключение DoubleHop не меняют текущие Entry-side VLESS и Telegram links.
 
-## v1.1.0 - Stability, Debian compatibility, safe UX and cleanup release
+### Safe self-update
 
-- Added stable IPv4-first installation flow for Ubuntu 24.04 and Debian 12.
-- Removed the old interactive public IPv6/TLS prompt from the supported installation path.
-- DNS handling now uses safe mode: working provider DNS is accepted and not rewritten.
-- Debian 12 compatibility was improved for provider images without systemd-resolved.
-- fail2ban now uses the systemd backend with python3-systemd on Debian and Ubuntu.
-- SSH hardening now normalizes hostname resolution in `/etc/hosts` to avoid sudo hostname warnings without mapping managed domains to localhost.
-- Ubuntu ssh.socket public listener is normalized to IPv4-only while IPv6 is not globally disabled.
-- Public firewall policy remains 22/80/443 over IPv4; internal service ports remain on `127.0.0.1`.
-- Connection commands are safer by default: `<prefix>-links`, `<prefix>-vless` and the MTProto command no longer print secrets unless explicitly requested.
-- Added `<prefix>-netdiag` for network/DNS diagnostics and `<prefix>-repair` for restoring XPAM service policy.
-- WARP through 3x-ui/Xray was polished and health now validates the safe technical form of the WARP outbound.
-- Production cleanup removes installer archives, sha256 files, extracted folders, test logs and empty root-side cache folders while preserving secure-notes, config backups, manual backups and SSH keys.
-- Russian user guide was fully updated.
+- Обновление запускается вручную из XPAM-меню.
+- Архив обновления проверяется по SHA256 до применения.
+- Static preflight выполняется до mutation.
+- Перед применением создаётся backup runtime и служебных команд.
+- При ошибке post-update проверки выполняется rollback.
+- Секреты не должны печататься в update logs.
 
-## v1.0.9 - Documentation / publication polish
+### Проверка
 
-- README.md became the Russian-first main GitHub project page.
-- Previous English technical README content was preserved as README_EN.md.
-- User-facing documentation references were updated for the public release line.
-- USER_GUIDE_RU.docx and USER_GUIDE_RU.pdf were regenerated with the current release version.
-- Runtime deployment logic, health checks, weekly maintenance, nginx, HAProxy, Xray, 3x-ui, MTProto, DNS policy and network tuning logic were not changed.
-- v1.0.8 final cleanup behavior was retained.
+Проверено на Ubuntu 24.04 LTS и Debian 12: установка, управление сервером, VLESS, Telegram proxy / MTG, DoubleHop Mode, диагностика, восстановление и безопасное обновление.
 
-## v1.0.8 - Final cleanup polish
+## v1.3.0
 
-- Final production cleanup removes GitHub bootstrap and extracted installer leftovers from `/root`.
-- Delayed cleanup protection covers install/build directories if a shell is still standing inside them.
-- Bootstrap default version was updated.
-- The cleanup change was limited to final production cleanup and did not alter health checks, weekly maintenance, nginx, HAProxy, Xray, 3x-ui, MTProto, DNS policy or network tuning logic.
+- Добавлена стабильная IPv4-first установка для Ubuntu 24.04 и Debian 12.
+- Улучшена интеграция 3x-ui/Xray, nginx, HAProxy, Certbot, firewall, fail2ban и health-checks.
+- Добавлены production cleanup и базовые maintenance-сценарии.
 
-## v1.0.7 - Public GitHub-ready baseline
+## v1.2.0
 
-- Added GitHub-ready documentation set.
-- Added bootstrap installer template for GitHub Releases.
-- Added release process documentation.
-- Added publication audit notes.
-- Added GitHub issue template and pull request template.
-- Updated release archive naming and references for GitHub distribution.
-- Verified public bootstrap flow through GitHub Releases.
-
-## v1.0.6 - Initial public release line
-
-- Prepared the initial public project structure.
-- Added installer, runtime scripts, templates, documentation and site assets.
-- Added support for Ubuntu 24.04 LTS and Debian 12.
-- Added SSH hardening, UFW, fail2ban, nginx, Certbot, HAProxy, 3x-ui, Xray/VLESS and MTProto automation.
-- Added health checks, weekly maintenance, DNS policy and network tuning logic.
-- Added Russian user guide and public project documentation.
+- Добавлены installer, runtime scripts, templates, документация и site assets.
+- Добавлены SSH hardening, UFW, fail2ban, nginx, Certbot, HAProxy, 3x-ui, Xray/VLESS и Telegram-related automation.
