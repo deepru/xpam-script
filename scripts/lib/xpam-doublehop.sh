@@ -440,6 +440,102 @@ dh_prompt_and_save_exit_link(){
 
 # ---------- DB mutation ----------
 
+dh_materialize_xray_template_if_missing(){
+  # Some current/clean 3x-ui installs can run Xray normally while the
+  # persistent settings.xrayTemplateConfig row is still absent. DoubleHop
+  # mutates that persistent template, so materialize a safe template from the
+  # generated config before DH mutation.  Keep only the API/tunnel inbound in
+  # the template; proxy inbounds remain managed by the 3x-ui inbounds table and
+  # will be re-rendered by 3x-ui. Preserve outbounds/routing/policy/log/stats.
+  XPAM_DH_EXIT_TAG="$DH_EXIT_TAG" python3 - <<'PY_DH_MATERIALIZE'
+import json, os, sqlite3, sys
+from pathlib import Path
+
+tag=os.environ.get('XPAM_DH_EXIT_TAG','xpam-dh-exit')
+db_path='/etc/x-ui/x-ui.db'
+gen_path=Path('/usr/local/x-ui/bin/config.json')
+
+def fail(msg):
+    print(msg, file=sys.stderr)
+    sys.exit(1)
+
+def load_json_text(txt, label):
+    try:
+        if txt is None or txt == '':
+            return None
+        return json.loads(txt)
+    except Exception as e:
+        fail(f'{label} invalid JSON: {type(e).__name__}: {e}')
+
+conn=sqlite3.connect(db_path)
+try:
+    cur=conn.cursor()
+    row=cur.execute("SELECT value FROM settings WHERE key='xrayTemplateConfig'").fetchone()
+    if row and (row[0] or '').strip():
+        current=load_json_text(row[0], 'xrayTemplateConfig')
+        if not isinstance(current, dict):
+            fail('xrayTemplateConfig is not a JSON object')
+        print('OK: xrayTemplateConfig already present')
+        sys.exit(0)
+
+    if not gen_path.exists() or gen_path.stat().st_size <= 0:
+        fail('generated Xray config missing: /usr/local/x-ui/bin/config.json')
+    cfg=load_json_text(gen_path.read_text(), 'generated Xray config')
+    if not isinstance(cfg, dict):
+        fail('generated Xray config is not a JSON object')
+
+    # Do not materialize from an already-mutated DoubleHop runtime config.
+    if tag in json.dumps(cfg, ensure_ascii=False):
+        fail('generated config already contains DoubleHop state; refusing automatic materialize')
+
+    generated_inbounds=cfg.get('inbounds')
+    if not isinstance(generated_inbounds, list):
+        fail('generated Xray config has no inbounds list')
+
+    api_inbounds=[]
+    non_api_inbounds=[]
+    for ib in generated_inbounds:
+        if not isinstance(ib, dict):
+            continue
+        if ib.get('protocol') == 'tunnel' and ib.get('tag') == 'api':
+            api_inbounds.append(ib)
+        else:
+            non_api_inbounds.append(ib)
+
+    if len(api_inbounds) != 1:
+        fail(f'expected exactly one api/tunnel inbound in generated config, got {len(api_inbounds)}')
+
+    # Safety: every non-api generated inbound must correspond to a 3x-ui DB inbound.
+    # If a user manually injected a raw inbound only into generated config, automatic
+    # materialization is unsafe because 3x-ui itself would not preserve that state.
+    rows=cur.execute("SELECT tag, protocol, listen, port FROM inbounds WHERE enable=1").fetchall()
+    db_tags={str(r[0]) for r in rows if r and r[0] is not None and str(r[0])}
+    db_tuples={(str(r[1] or ''), str(r[2] or ''), str(r[3] or '')) for r in rows}
+
+    for ib in non_api_inbounds:
+        ib_tag=str(ib.get('tag') or '')
+        ib_tuple=(str(ib.get('protocol') or ''), str(ib.get('listen') or ''), str(ib.get('port') or ''))
+        if ib_tag and ib_tag in db_tags:
+            continue
+        if ib_tuple in db_tuples:
+            continue
+        fail('generated config contains a non-DB inbound; refusing automatic materialize')
+
+    cfg['inbounds']=api_inbounds
+    value=json.dumps(cfg, ensure_ascii=False, separators=(',',':'))
+
+    if row:
+        cur.execute("UPDATE settings SET value=? WHERE key='xrayTemplateConfig'", (value,))
+    else:
+        cur.execute("INSERT INTO settings(key, value) VALUES(?, ?)", ('xrayTemplateConfig', value))
+    conn.commit()
+    print('OK: xrayTemplateConfig materialized')
+    print('xrayTemplateConfig_len:', len(value))
+finally:
+    conn.close()
+PY_DH_MATERIALIZE
+}
+
 dh_mutate_mode(){
   local mode="$1" remove_outbound="${2:-0}" link_file
   link_file="$(dh_exit_link_file)"
@@ -814,7 +910,8 @@ dh_run_health_validation(){
 dh_apply_mode_with_rollback(){
   local mode="$1" user_label="$2" backup_dir rc=0
   backup_dir="$(dh_snapshot_create)" || fail "Не удалось создать backup перед изменением DoubleHop. Изменения не внесены."
-  if ! dh_mutate_mode "$mode" 0 >>"$backup_dir/operation.log" 2>&1; then rc=1; fi
+  if ! dh_materialize_xray_template_if_missing >>"$backup_dir/operation.log" 2>&1; then rc=1; fi
+  if [[ $rc -eq 0 ]] && ! dh_mutate_mode "$mode" 0 >>"$backup_dir/operation.log" 2>&1; then rc=1; fi
   if [[ $rc -eq 0 ]] && ! dh_restart_runtime >>"$backup_dir/operation.log" 2>&1; then rc=1; fi
   if [[ $rc -eq 0 ]] && ! dh_verify_clean_state "$mode" >>"$backup_dir/operation.log" 2>&1; then rc=1; fi
   if [[ $rc -eq 0 ]] && ! dh_verify_links_unchanged "$backup_dir" >>"$backup_dir/operation.log" 2>&1; then rc=1; fi
@@ -858,7 +955,8 @@ dh_disable_with_rollback(){
     return 0
   fi
   backup_dir="$(dh_snapshot_create)" || fail "Не удалось создать backup перед выключением DoubleHop."
-  if ! dh_mutate_mode "off" 0 >>"$backup_dir/operation.log" 2>&1; then rc=1; fi
+  if ! dh_materialize_xray_template_if_missing >>"$backup_dir/operation.log" 2>&1; then rc=1; fi
+  if [[ $rc -eq 0 ]] && ! dh_mutate_mode "off" 0 >>"$backup_dir/operation.log" 2>&1; then rc=1; fi
   if [[ $rc -eq 0 ]] && ! dh_restart_runtime >>"$backup_dir/operation.log" 2>&1; then rc=1; fi
   if [[ $rc -eq 0 ]] && ! dh_verify_clean_state "off" >>"$backup_dir/operation.log" 2>&1; then rc=1; fi
   if [[ $rc -eq 0 ]] && ! dh_verify_links_unchanged "$backup_dir" >>"$backup_dir/operation.log" 2>&1; then rc=1; fi
@@ -882,7 +980,8 @@ dh_remove_config_with_rollback(){
   local backup_dir rc=0
   backup_dir="$(dh_snapshot_create)" || fail "Не удалось создать backup перед удалением настройки DoubleHop."
   # Always disable first, then remove local outbound/link.
-  if ! dh_mutate_mode "off" 1 >>"$backup_dir/operation.log" 2>&1; then rc=1; fi
+  if ! dh_materialize_xray_template_if_missing >>"$backup_dir/operation.log" 2>&1; then rc=1; fi
+  if [[ $rc -eq 0 ]] && ! dh_mutate_mode "off" 1 >>"$backup_dir/operation.log" 2>&1; then rc=1; fi
   if [[ $rc -eq 0 ]] && ! dh_restart_runtime >>"$backup_dir/operation.log" 2>&1; then rc=1; fi
   if [[ $rc -eq 0 ]] && ! dh_verify_clean_state "removed" >>"$backup_dir/operation.log" 2>&1; then rc=1; fi
   if [[ $rc -eq 0 ]] && ! dh_verify_links_unchanged "$backup_dir" >>"$backup_dir/operation.log" 2>&1; then rc=1; fi
