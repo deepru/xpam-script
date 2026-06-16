@@ -83,10 +83,10 @@ FAIL=0
 . "$XPAM_CONFIG"
 warn_fail(){ echo "FAIL: $*"; FAIL=1; }
 check_active(){ systemctl is-active --quiet "$1" && echo "OK: service $1 active" || warn_fail "service $1 not active"; }
-check_http(){ local name="$1" exp="$2" url="$3" code; code="$(curl -4ksS -o /dev/null -w '%{http_code}' --max-time 12 "$url" 2>/dev/null)"; [[ "$code" == "$exp" ]] && echo "OK: $name HTTP $code" || warn_fail "$name expected $exp got $code"; }
+check_http(){ local name="$1" exp="$2" url="$3" code; code="$(curl -ksS -o /dev/null -w '%{http_code}' --max-time 12 "$url" 2>/dev/null)"; [[ "$code" == "$exp" ]] && echo "OK: $name HTTP $code" || warn_fail "$name expected $exp got $code"; }
 check_redirect(){
   local name="$1" url="$2" expected_prefix="$3" out code redir
-  out="$(curl -4ksS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 12 "$url" 2>/dev/null)"
+  out="$(curl -ksS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 12 "$url" 2>/dev/null)"
   code="${out%% *}"
   redir="${out#* }"
   if [[ "$code" =~ ^30(1|2|7|8)$ && "$redir" == "$expected_prefix"* ]]; then
@@ -198,14 +198,14 @@ if [[ -f "$relay_env" ]]; then
   if [[ -n "${SYNC_DOMAIN:-}" && -n "${TELEGRAM_HTTPS_RELAY_PATH:-}" && -n "${TELEGRAM_HTTPS_RELAY_TOKEN:-}" ]]; then
     relay_url="https://${SYNC_DOMAIN}/${TELEGRAM_HTTPS_RELAY_PATH}/"
 
-    relay_code_no_token="$(curl -4ksS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 "$relay_url" 2>/dev/null || true)"
+    relay_code_no_token="$(curl -ksS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 "$relay_url" 2>/dev/null || true)"
     if [[ "$relay_code_no_token" == "401" ]]; then
       echo "OK: Relay endpoint without token returns HTTP 401"
     else
       warn_fail "Relay endpoint without token returned HTTP ${relay_code_no_token:-none}; expected 401"
     fi
 
-    relay_code_get_with_token="$(curl -4ksS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 -H "Authorization: Bearer ${TELEGRAM_HTTPS_RELAY_TOKEN}" "$relay_url" 2>/dev/null || true)"
+    relay_code_get_with_token="$(curl -ksS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 -H "Authorization: Bearer ${TELEGRAM_HTTPS_RELAY_TOKEN}" "$relay_url" 2>/dev/null || true)"
     if [[ "$relay_code_get_with_token" == "405" ]]; then
       echo "OK: Relay endpoint GET with token returns HTTP 405"
     else

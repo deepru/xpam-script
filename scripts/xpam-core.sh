@@ -860,9 +860,9 @@ systemctl restart haproxy || warn_fail "haproxy restart failed"
 if systemctl is-active --quiet haproxy; then
   sleep 5
   if [ -n "${SYNC_DOMAIN:-}" ]; then
-    code="$(curl -4sk --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" "https://${SYNC_DOMAIN}/health" 2>/dev/null || true)"
+    code="$(curl -sk --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" "https://${SYNC_DOMAIN}/health" 2>/dev/null || true)"
     [ "$code" = "200" ] || warn_fail "${SYNC_DOMAIN}/health expected 200 after HAProxy restart got ${code:-000}"
-    code="$(curl -4sk --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" "https://${SYNC_DOMAIN}/v1" 2>/dev/null || true)"
+    code="$(curl -sk --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" "https://${SYNC_DOMAIN}/v1" 2>/dev/null || true)"
     [ "$code" = "401" ] || warn_fail "${SYNC_DOMAIN}/v1 expected 401 after HAProxy restart got ${code:-000}"
   fi
 fi'
@@ -884,9 +884,9 @@ systemctl restart haproxy || warn_fail "haproxy restart failed"
 if systemctl is-active --quiet haproxy; then
   sleep 5
   if [ -n "${SYNC_DOMAIN:-}" ]; then
-    code="$(curl -4sk --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" "https://${SYNC_DOMAIN}/health" 2>/dev/null || true)"
+    code="$(curl -sk --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" "https://${SYNC_DOMAIN}/health" 2>/dev/null || true)"
     [ "$code" = "200" ] || warn_fail "${SYNC_DOMAIN}/health expected 200 after HAProxy restart got ${code:-000}"
-    code="$(curl -4sk --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" "https://${SYNC_DOMAIN}/v1" 2>/dev/null || true)"
+    code="$(curl -sk --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" "https://${SYNC_DOMAIN}/v1" 2>/dev/null || true)"
     [ "$code" = "401" ] || warn_fail "${SYNC_DOMAIN}/v1 expected 401 after HAProxy restart got ${code:-000}"
   fi
 fi'
@@ -2322,11 +2322,11 @@ reboot_gate_before_finalize(){
 
 xui_latest_release_tag_any(){
   local tag json
-  json="$(curl -4fsSL --connect-timeout 8 --max-time 20 https://api.github.com/repos/MHSanaei/3x-ui/releases 2>/dev/null || true)"
+  json="$(curl -fsSL --connect-timeout 8 --max-time 20 https://api.github.com/repos/MHSanaei/3x-ui/releases 2>/dev/null || true)"
   tag="$(printf '%s' "$json" | jq -r '.[0].tag_name // empty' 2>/dev/null || true)"
   if [[ -z "$tag" ]]; then
     warn "Could not query /releases; falling back to GitHub /releases/latest"
-    json="$(curl -4fsSL --connect-timeout 8 --max-time 20 https://api.github.com/repos/MHSanaei/3x-ui/releases/latest 2>/dev/null || true)"
+    json="$(curl -fsSL --connect-timeout 8 --max-time 20 https://api.github.com/repos/MHSanaei/3x-ui/releases/latest 2>/dev/null || true)"
     tag="$(printf '%s' "$json" | jq -r '.tag_name // empty' 2>/dev/null || true)"
   fi
   [[ -n "$tag" ]] || fail "Could not detect latest 3x-ui tag from GitHub"
@@ -2874,7 +2874,7 @@ install_configure_3xui_auto(){
   say "Installing 3x-ui tag ${tag} (latest GitHub release including pre-release)"
   xui_prepare_sqlite_backend_for_install
   installer="$(mktemp /tmp/3x-ui-install.XXXXXX.sh)"
-  curl -4fsSL --connect-timeout 8 --max-time 30 -o "$installer" https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh || fail "Could not download 3x-ui installer"
+  curl -fsSL --connect-timeout 8 --max-time 30 -o "$installer" https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh || fail "Could not download 3x-ui installer"
   chmod +x "$installer"
   if ! xpam_xui_run_installer_sanitized "$installer" "$tag" "$XUI_PANEL_PORT"; then
     rm -f "$installer"

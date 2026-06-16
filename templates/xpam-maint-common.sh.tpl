@@ -34,7 +34,7 @@ xpam_notify_send(){
     relay_token="${TELEGRAM_RELAY_TOKEN:-}"
 
     if [ -n "$relay_url" ] && [ -n "$relay_token" ]; then
-        curl -4fsS --connect-timeout 3 --max-time 8 \
+        curl -fsS --connect-timeout 3 --max-time 8 \
           -X POST "$relay_url" \
           -H "Authorization: Bearer ${relay_token}" \
           --data-binary "$msg" \
@@ -45,7 +45,7 @@ xpam_notify_send(){
     [ -n "${TELEGRAM_BOT_TOKEN:-}" ] || return 0
     [ -n "${TELEGRAM_CHAT_ID:-}" ] || return 0
 
-    curl -4fsS --connect-timeout 3 --max-time 8 \
+    curl -fsS --connect-timeout 3 --max-time 8 \
       -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
       -d "chat_id=${TELEGRAM_CHAT_ID}" \
       --data-urlencode "text=${msg}" \

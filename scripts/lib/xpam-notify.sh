@@ -189,7 +189,7 @@ telegram_api_base(){ printf 'https://api.telegram.org/bot%s' "$1"; }
 
 telegram_validate_token(){
   local token="$1" json ok username
-  json="$(curl -4fsS --connect-timeout 5 --max-time 10 "$(telegram_api_base "$token")/getMe" 2>/dev/null || true)"
+  json="$(curl -fsS --connect-timeout 5 --max-time 10 "$(telegram_api_base "$token")/getMe" 2>/dev/null || true)"
   [[ -n "$json" ]] || return 1
   ok="$(printf '%s' "$json" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("true" if d.get("ok") is True else "false")' 2>/dev/null || echo false)"
   [[ "$ok" == "true" ]] || return 1
@@ -200,7 +200,7 @@ telegram_validate_token(){
 
 telegram_send_test(){
   local token="$1" chat="$2" text="$3"
-  curl -4fsS --connect-timeout 5 --max-time 10 \
+  curl -fsS --connect-timeout 5 --max-time 10 \
     -X POST "$(telegram_api_base "$token")/sendMessage" \
     -d "chat_id=${chat}" \
     --data-urlencode "text=${text}" \
@@ -209,7 +209,7 @@ telegram_send_test(){
 
 telegram_private_chat_id(){
   local token="$1"
-  curl -4fsS --connect-timeout 5 --max-time 10 "$(telegram_api_base "$token")/getUpdates" 2>/dev/null | python3 -c 'import sys,json; d=json.load(sys.stdin); chats=[]
+  curl -fsS --connect-timeout 5 --max-time 10 "$(telegram_api_base "$token")/getUpdates" 2>/dev/null | python3 -c 'import sys,json; d=json.load(sys.stdin); chats=[]
 for u in d.get("result",[]):
     m=u.get("message") or u.get("edited_message") or {}
     c=m.get("chat") or {}
@@ -350,7 +350,7 @@ setup_https_relay_client(){
   echo "Relay URL будет сохранён как: ${relay_url}"
 
   say "Отправляем тестовое сообщение через HTTPS Relay"
-  if curl -4fsS --connect-timeout 5 --max-time 12 \
+  if curl -fsS --connect-timeout 5 --max-time 12 \
       -X POST "$relay_url" \
       -H "Authorization: Bearer ${relay_token}" \
       --data-binary "[${SERVER_PREFIX:-$(hostname -s)}] Проверка отправки через HTTPS Relay: OK" \
@@ -375,9 +375,9 @@ telegram_relay_wait_http_code(){
   local i
   for i in 1 2 3 4 5 6 7 8 9 10; do
     if [[ -n "$token" ]]; then
-      code="$(curl -4ksS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 -H "Authorization: Bearer ${token}" "$url" 2>/dev/null || true)"
+      code="$(curl -ksS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 -H "Authorization: Bearer ${token}" "$url" 2>/dev/null || true)"
     else
-      code="$(curl -4ksS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 "$url" 2>/dev/null || true)"
+      code="$(curl -ksS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 "$url" 2>/dev/null || true)"
     fi
     [[ "$code" == "$expect" ]] && { echo "$code"; return 0; }
     sleep 1
@@ -391,7 +391,7 @@ telegram_relay_post_with_retry(){
   local url="$1" token="$2" message="$3"
   local i
   for i in 1 2 3 4 5 6 7 8 9 10; do
-    if curl -4fsS --connect-timeout 5 --max-time 12 \
+    if curl -fsS --connect-timeout 5 --max-time 12 \
         -X POST "$url" \
         -H "Authorization: Bearer ${token}" \
         --data-binary "$message" \
