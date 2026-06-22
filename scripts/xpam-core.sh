@@ -2863,7 +2863,7 @@ install_configure_3xui_auto(){
   ensure_web_cert_for_xui
   [[ -n "${XUI_ADMIN_USER:-}" ]] || ask XUI_ADMIN_USER "3x-ui admin username" "vlessuser"
   [[ -n "${XUI_ADMIN_PASS:-}" ]] || ask_xui_admin_credentials
-  local cert key tag installer
+  local cert key tag installer installer_url fallback_url
   cert="/etc/letsencrypt/live/$(web_cert_name)/fullchain.pem"
   key="/etc/letsencrypt/live/$(web_cert_name)/privkey.pem"
   [[ -s "$cert" && -s "$key" ]] || fail "Cert/key missing for 3x-ui panel: $cert / $key"
@@ -2874,13 +2874,18 @@ install_configure_3xui_auto(){
   say "Installing 3x-ui tag ${tag} (latest GitHub release including pre-release)"
   xui_prepare_sqlite_backend_for_install
   installer="$(mktemp /tmp/3x-ui-install.XXXXXX.sh)"
-  curl -fsSL --connect-timeout 8 --max-time 30 -o "$installer" https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh || fail "Could not download 3x-ui installer"
-  chmod +x "$installer"
+  installer_url="https://raw.githubusercontent.com/MHSanaei/3x-ui/${tag}/install.sh"
+  fallback_url="https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh"
+  if ! curl -fsSL --connect-timeout 8 --max-time 30 -o "$installer" "$installer_url"; then
+    warn "Could not download 3x-ui installer from selected tag ${tag}; falling back to upstream master installer"
+    curl -fsSL --connect-timeout 8 --max-time 30 -o "$installer" "$fallback_url" || fail "Could not download 3x-ui installer"
+  fi
+  xpam_xui_prepare_installer_sanitized "$installer" "$tag"
   if ! xpam_xui_run_installer_sanitized "$installer" "$tag" "$XUI_PANEL_PORT"; then
-    rm -f "$installer"
+    rm -f "$installer" "${installer}.orig"
     fail "3x-ui installer failed"
   fi
-  rm -f "$installer"
+  rm -f "$installer" "${installer}.orig"
   xui_validate_sqlite_contract
 
   say "Forcing XPAM Script panel settings"

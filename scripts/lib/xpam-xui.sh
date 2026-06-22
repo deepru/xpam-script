@@ -364,15 +364,99 @@ except Exception as exc:
 PY_XPAM_XUI_API_GET
 }
 
+xpam_xui_prepare_installer_sanitized(){
+  local installer="$1" tag="${2:-}"
+  [[ -s "$installer" ]] || fail "3x-ui installer file is missing or empty: $installer"
+  cp -a "$installer" "${installer}.orig" || fail "Could not backup temporary 3x-ui installer"
+  XPAM_XUI_INSTALLER="$installer" XPAM_XUI_INSTALLER_TAG="$tag" python3 <<'PY_XPAM_XUI_INSTALLER_SANITIZE'
+import os, re, sys
+from pathlib import Path
+
+path = Path(os.environ['XPAM_XUI_INSTALLER'])
+tag = os.environ.get('XPAM_XUI_INSTALLER_TAG', '').strip()
+try:
+    text = path.read_text(encoding='utf-8')
+except UnicodeDecodeError:
+    text = path.read_text(encoding='utf-8', errors='replace')
+
+original = text
+
+# Some upstream 3x-ui install.sh versions still hard-pin downloads to IPv4.
+# That breaks on VPS providers where GitHub/raw works only in curl auto mode
+# or over IPv6. Remove only curl's forced IP-version option from lines that
+# actually invoke curl in the temporary upstream installer; do not touch system
+# curl and do not alter MTG preferIp or other IPv4 runtime settings.
+forced_ipv4_pattern = re.compile(r'(?<!\S)(?:-4|--ipv4)(?=\s|$)|(?<!\S)-4(?=[A-Za-z])')
+
+def strip_forced_ipv4_from_curl_line(line: str) -> str:
+    if 'curl' not in line:
+        return line
+    # curl -4fLR ... -> curl -fLR ...
+    line = re.sub(r'(?<!\S)-4(?=[A-Za-z])', '-', line)
+    # curl -4 ... / curl --ipv4 ... -> curl ...
+    line = re.sub(r'(?<!\S)(?:-4|--ipv4)(?=\s|$)[ \t]*', '', line)
+    return line
+
+text = ''.join(strip_forced_ipv4_from_curl_line(line) for line in text.splitlines(keepends=True))
+
+remaining_forced_ipv4 = [
+    line for line in text.splitlines()
+    if 'curl' in line and forced_ipv4_pattern.search(line)
+]
+if remaining_forced_ipv4:
+    print('ERROR: forced IPv4 curl option remains in temporary 3x-ui installer after sanitization', file=sys.stderr)
+    for line in remaining_forced_ipv4[:5]:
+        print(line, file=sys.stderr)
+    sys.exit(1)
+
+# Keep helper scripts/service files aligned with the selected 3x-ui release tag.
+# Upstream installers historically download x-ui.sh/service files from main even
+# when a concrete binary release tag is requested. XPAM needs reproducible fresh
+# installs, so pin raw helper URLs to the same tag when the tag is safe.
+if tag and re.fullmatch(r'[A-Za-z0-9._/-]+', tag):
+    raw_tag = f'https://raw.githubusercontent.com/MHSanaei/3x-ui/{tag}/'
+    text = text.replace('https://raw.githubusercontent.com/MHSanaei/3x-ui/main/', raw_tag)
+    text = text.replace('https://raw.githubusercontent.com/MHSanaei/3x-ui/master/', raw_tag)
+    text = text.replace('https://raw.githubusercontent.com/mhsanaei/3x-ui/main/', raw_tag)
+    text = text.replace('https://raw.githubusercontent.com/mhsanaei/3x-ui/master/', raw_tag)
+
+path.write_text(text, encoding='utf-8')
+print('OK: temporary 3x-ui installer sanitized')
+before_count = len([line for line in original.splitlines() if 'curl' in line and forced_ipv4_pattern.search(line)])
+after_count = len([line for line in text.splitlines() if 'curl' in line and forced_ipv4_pattern.search(line)])
+print(f'OK: forced IPv4 curl occurrences before={before_count} after={after_count}')
+if tag:
+    print(f'OK: temporary 3x-ui helper URLs pinned to tag/ref: {tag}')
+PY_XPAM_XUI_INSTALLER_SANITIZE
+  chmod +x "$installer"
+}
+
 xpam_xui_run_installer_sanitized(){
-  local installer="$1" tag="$2" port="$3" out rc token file
-  out="$(mktemp /tmp/xpam-script-3x-ui-install.XXXXXX.log)"
-  # Flow for current 3x-ui installer: SQLite -> customize panel port -> port -> skip SSL -> bind panel to 127.0.0.1.
-  # XPAM still validates SQLite after install; user-managed 3x-ui updates remain outside XPAM.
-  printf '1\ny\n%s\n4\ny\n' "$port" | bash "$installer" "$tag" >"$out" 2>&1
+  local installer="$1" tag="$2" port="$3" raw_out redacted_out rc token file timeout_sec
+  timeout_sec="${XPAM_XUI_INSTALL_TIMEOUT:-900}"
+  raw_out="$(mktemp /tmp/xpam-script-3x-ui-install.XXXXXX.log)"
+  redacted_out="${raw_out%.log}.redacted.log"
+  chmod 600 "$raw_out" 2>/dev/null || true
+
+  # New 3x-ui installers support unattended mode; older ones still use stdin prompts.
+  # Use both: explicit env for current/future installers, and the legacy answer stream
+  # for tagged installers that have not learned those variables yet.
+  printf '1\ny\n%s\n4\ny\n' "$port" | \
+    timeout --foreground "$timeout_sec" env \
+      XUI_NONINTERACTIVE=1 \
+      XUI_DB_TYPE=sqlite \
+      XUI_DB_DSN= \
+      XUI_DB_FOLDER=/etc/x-ui \
+      XUI_PANEL_PORT="$port" \
+      XUI_SSL_MODE=none \
+      bash "$installer" "$tag" >"$raw_out" 2>&1
   rc=$?
+
+  xpam_xui_redact_output < "$raw_out" > "$redacted_out" 2>/dev/null || cp -f "$raw_out" "$redacted_out"
+  chmod 600 "$redacted_out" 2>/dev/null || true
+
   if [[ $rc -eq 0 ]]; then
-    token="$(xpam_xui_extract_api_token_from_output < "$out" 2>/dev/null || true)"
+    token="$(xpam_xui_extract_api_token_from_output < "$raw_out" 2>/dev/null || true)"
     if [[ -n "$token" ]]; then
       file="$(xpam_xui_api_token_file)"
       if xpam_xui_store_api_token "$token"; then
@@ -383,9 +467,17 @@ xpam_xui_run_installer_sanitized(){
     else
       warn "3x-ui installer output did not expose an API token; will try authenticated token creation after panel restart"
     fi
+  elif [[ $rc -eq 124 ]]; then
+    warn "3x-ui installer timed out after ${timeout_sec}s"
   fi
-  xpam_xui_redact_output < "$out" | sed -n '1,220p'
-  rm -f "$out"
+
+  sed -n '1,220p' "$redacted_out"
+  rm -f "$raw_out"
+  if [[ $rc -eq 0 ]]; then
+    rm -f "$redacted_out"
+  else
+    warn "Sanitized 3x-ui installer log kept for diagnostics: $redacted_out"
+  fi
   return "$rc"
 }
 
