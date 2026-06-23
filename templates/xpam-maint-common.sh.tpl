@@ -1179,7 +1179,7 @@ xpam_mtproto_public_fallback_check(){
     [ "${PROFILE:-}" = "vless_direct" ] && { echo "OK: MTProto is not enabled in this profile; public fallback check skipped"; return 0; }
     server_ipv4="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}')"
     if [ -z "$server_ipv4" ]; then
-        echo "FAIL: could not detect server IPv4 for curl --resolve test"
+        echo "FAIL: could not detect server IPv4 for public fallback check"
         return 1
     fi
     code="$(curl -4ksS --connect-timeout 5 --max-time 15 -o /dev/null -w '%{http_code}' --resolve "${SYNC_DOMAIN}:443:${server_ipv4}" "https://${SYNC_DOMAIN}/health" 2>/dev/null || true)"
