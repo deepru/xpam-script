@@ -1,6 +1,30 @@
 # Changelog
 
+## v1.3.6
+
+### Compatibility and release hardening
+
+- Hardened GitHub download paths in bootstrap and self-update with HTTP/1.1 retries and temporary CDN-edge fallback while keeping SHA256 verification mandatory.
+- Hardened 3x-ui installer handling for current upstream behavior, including stable-release selection and `XUI_ENABLE_FAIL2BAN=false` guard.
+- Added health/deep-health checks for unexpected upstream 3x-ui `3x-ipl` fail2ban files/jail.
+- Added additional 3x-ui/Xray compatibility diagnostics: version visibility, generated config JSON/readability, SQLite journal mode, subscription/Managed Hosts sanity, and Telegram feature separation.
+- Preferred `systemd-timesyncd` and avoided unnecessary public `ntp/ntpsec` UDP `:123` exposure in XPAM-managed runtime.
+- Removed legacy WireGuard `workers=2` recommendation for current Xray/3x-ui builds.
+- Kept VLESS/Telegram links unchanged across tested DoubleHop enable/disable scenarios.
+
 ## v1.3.5
+
+### Compatibility hardening after 3x-ui v3.4.0
+
+- Added XPAM-owned guard against upstream 3x-ui fail2ban/IP-limit auto-setup: `XUI_ENABLE_FAIL2BAN=false`.
+- Added health/deep-health checks for unexpected upstream `3x-ipl` fail2ban files/jail.
+- Hardened GitHub download paths with HTTP/1.1 retries and temporary CDN-edge fallback while keeping SHA256 verification mandatory.
+- 3x-ui auto-install now selects the latest stable GitHub release and skips prereleases by default.
+- Hardened bootstrap documentation for VPS networks with broken GitHub CDN edge routing.
+- Added 3x-ui/Xray compatibility information to deep-health: version, generated config readability, SQLite journal mode, subscription/Managed Hosts sanity.
+- Kept XPAM Telegram proxy / MTG, XPAM Telegram notifications, and upstream 3x-ui Telegram notifications clearly separated.
+- Preferred `systemd-timesyncd` for local time sync and removed unnecessary public `ntp/ntpsec` server exposure during XPAM-managed installs.
+- Removed legacy WireGuard `workers=2` recommendation for current Xray/3x-ui builds.
 
 ### Главное
 

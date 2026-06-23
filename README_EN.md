@@ -56,7 +56,7 @@ Before installation, read the full user guide.
 
 Additional documents:
 
-- [Release notes v1.3.5](RELEASE_NOTES_v1.3.5_RU.md)
+- [Release notes v1.3.6](RELEASE_NOTES_v1.3.6_RU.md)
 - [GitHub Releases](https://github.com/deepru/xpam-script/releases)
 - [CHANGELOG.md](CHANGELOG.md)
 - [TESTING.md](TESTING.md)

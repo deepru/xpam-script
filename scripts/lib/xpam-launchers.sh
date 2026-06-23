@@ -41,7 +41,7 @@ EOF_LAUNCHER
   chmod 755 "$launcher"
   ln -sf "$launcher" "$bin_link" 2>/dev/null || true
 
-  # v1.3.5 has no legacy compatibility alias/wrapper for -install.
+  # v1.3.6 has no legacy compatibility alias/wrapper for -install.
   rm -f "$old_sbin" "$old_bin" 2>/dev/null || true
 
   ok "Команда управления создана: sudo ${safe_prefix}-xpam"

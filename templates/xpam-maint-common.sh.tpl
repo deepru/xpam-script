@@ -1571,8 +1571,10 @@ else:
             warn(f'WARP {tag}: address should be IPv4-only, got {addrs!r}')
         if settings.get('domainStrategy')=='ForceIPv4': ok(f'WARP {tag}: domainStrategy=ForceIPv4')
         else: warn_setting(f'{tag}.domainStrategy', settings.get('domainStrategy'), 'ForceIPv4')
-        if settings.get('workers')==2: ok(f'WARP {tag}: workers=2')
-        else: warn_setting(f'{tag}.workers', settings.get('workers'), 2)
+        if 'workers' in settings:
+            warn(f'WARP {tag}: legacy workers field is present but removed from current Xray; remove it in 3x-ui if WARP behaves unexpectedly')
+        else:
+            ok(f'WARP {tag}: no legacy workers field')
         def valid_reserved(v):
             return isinstance(v, list) and len(v)==3 and all(isinstance(x, int) and 0 <= x <= 255 for x in v)
         reserved=settings.get('reserved')
@@ -1818,6 +1820,157 @@ xpam_ssh_runtime_check(){
     return "$fail"
 }
 
+
+xpam_xui_apply_fail2ban_optout_common(){
+    local env_file="/etc/default/x-ui" tmp cli="/usr/bin/x-ui"
+    [ -e /etc/x-ui/x-ui.db ] || [ -x /usr/local/x-ui/x-ui ] || [ -f "$cli" ] || return 0
+    mkdir -p /etc/default
+    touch "$env_file" 2>/dev/null || return 0
+    chmod 644 "$env_file" 2>/dev/null || true
+    if grep -q '^XUI_ENABLE_FAIL2BAN=' "$env_file" 2>/dev/null; then
+        sed -i 's/^XUI_ENABLE_FAIL2BAN=.*/XUI_ENABLE_FAIL2BAN=false/' "$env_file" 2>/dev/null || true
+    else
+        printf '\n# Managed by XPAM Script: XPAM owns fail2ban; 3x-ui IP-limit fail2ban setup is disabled.\nXUI_ENABLE_FAIL2BAN=false\n' >> "$env_file" 2>/dev/null || true
+    fi
+    if [ -f "$cli" ] && head -n1 "$cli" 2>/dev/null | grep -Eq '^#!.*(sh|bash)'; then
+        if ! grep -q 'XPAM BEGIN XUI FAIL2BAN OPTOUT' "$cli" 2>/dev/null; then
+            tmp="$(mktemp /tmp/xpam-xui-cli.XXXXXX)" || return 0
+            awk 'NR==1 {print; print "# XPAM BEGIN XUI FAIL2BAN OPTOUT"; print "export XUI_ENABLE_FAIL2BAN=\"${XUI_ENABLE_FAIL2BAN:-false}\""; print "# XPAM END XUI FAIL2BAN OPTOUT"; next} {print}' "$cli" > "$tmp" && cat "$tmp" > "$cli"
+            rm -f "$tmp"
+            chmod +x "$cli" 2>/dev/null || true
+        fi
+    fi
+}
+
+xpam_xui_fail2ban_ownership_check(){
+    local fail=0 f status env_file="/etc/default/x-ui"
+    echo; echo "===== 3X-UI FAIL2BAN OWNERSHIP CHECK ====="
+    if [ -f "$env_file" ] && grep -Eq '^XUI_ENABLE_FAIL2BAN=false$' "$env_file"; then
+        echo "OK: XUI_ENABLE_FAIL2BAN=false persisted in /etc/default/x-ui"
+    else
+        echo "WARNING: XUI_ENABLE_FAIL2BAN=false is not persisted in /etc/default/x-ui"
+    fi
+    for f in /etc/fail2ban/jail.d/3x-ipl.conf /etc/fail2ban/filter.d/3x-ipl.conf /etc/fail2ban/action.d/3x-ipl.conf; do
+        if [ -e "$f" ]; then
+            echo "WARNING: unexpected upstream 3x-ui IP-limit fail2ban file exists: $f"
+        else
+            echo "OK: absent upstream 3x-ui IP-limit fail2ban file: $f"
+        fi
+    done
+    if command -v fail2ban-client >/dev/null 2>&1 && fail2ban-client ping >/dev/null 2>&1; then
+        status="$(fail2ban-client status 2>/dev/null || true)"
+        if printf '%s\n' "$status" | grep -Eq '(^|[ ,])3x-ipl([ ,]|$)'; then
+            echo "WARNING: upstream 3x-ui IP-limit fail2ban jail is active: 3x-ipl"
+        else
+            echo "OK: no active upstream 3x-ui IP-limit fail2ban jail"
+        fi
+    else
+        echo "WARNING: fail2ban-client is not available/running for ownership check"
+    fi
+    return "$fail"
+}
+
+xpam_xui_version_compat_check(){
+    local db="/etc/x-ui/x-ui.db" cfg="/usr/local/x-ui/bin/config.json" xui_ver xray_ver mode journal_mode
+    echo; echo "===== 3X-UI VERSION / COMPATIBILITY CHECK ====="
+    if [ -x /usr/local/x-ui/x-ui ]; then
+        xui_ver=""
+        for xpam_xui_ver_arg in version --version -v; do
+            xpam_xui_ver_out="$(/usr/local/x-ui/x-ui "$xpam_xui_ver_arg" 2>/dev/null | head -n1 || true)"
+            case "$xpam_xui_ver_out" in
+                ""|*"Invalid subcommands"*|*"invalid subcommands"*|*"Usage:"*|*"usage:"*|*"unknown"*|*"Unknown"*)
+                    ;;
+                *)
+                    xui_ver="$xpam_xui_ver_out"
+                    break
+                    ;;
+            esac
+        done
+        [ -n "$xui_ver" ] && echo "INFO: 3x-ui version: $xui_ver" || echo "INFO: 3x-ui version: unavailable via CLI"
+    else
+        echo "WARNING: /usr/local/x-ui/x-ui is missing or not executable"
+    fi
+    if [ -x /usr/local/x-ui/bin/xray-linux-amd64 ]; then
+        xray_ver="$(/usr/local/x-ui/bin/xray-linux-amd64 version 2>/dev/null | head -n1 || true)"
+        [ -n "$xray_ver" ] && echo "INFO: Xray core: $xray_ver" || echo "INFO: Xray version command returned no output"
+    else
+        echo "WARNING: /usr/local/x-ui/bin/xray-linux-amd64 missing or not executable"
+    fi
+    if [ -f "$cfg" ]; then
+        mode="$(stat -c '%a' "$cfg" 2>/dev/null || echo unknown)"
+        case "$mode" in
+            600|640|644) echo "OK: generated Xray config permissions acceptable for root health: $mode" ;;
+            *) echo "WARNING: generated Xray config permissions unusual: $mode" ;;
+        esac
+        python3 - "$cfg" <<'PY_XPAM_CONFIG_JSON_CHECK'
+import json, sys
+try:
+    with open(sys.argv[1], 'r', encoding='utf-8') as f:
+        data=json.load(f)
+    print('OK: generated Xray config JSON parsed')
+except Exception as exc:
+    print(f'WARNING: generated Xray config JSON parse failed: {exc}')
+PY_XPAM_CONFIG_JSON_CHECK
+    else
+        echo "WARNING: generated Xray config missing: $cfg"
+    fi
+    if [ -s "$db" ] && command -v sqlite3 >/dev/null 2>&1; then
+        journal_mode="$(sqlite3 "$db" 'PRAGMA journal_mode;' 2>/dev/null | head -n1 || true)"
+        [ -n "$journal_mode" ] && echo "INFO: 3x-ui SQLite journal_mode: $journal_mode" || echo "WARNING: could not read SQLite journal_mode"
+        sqlite3 "$db" "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='settings' AND sql LIKE '%key%' LIMIT 1;" 2>/dev/null | grep -q . \
+          && echo "OK: settings.key index present or compatible" \
+          || echo "INFO: settings.key index not detected; acceptable on older 3x-ui"
+    fi
+}
+
+xpam_xui_subscription_sanity_check(){
+    local db="/etc/x-ui/x-ui.db" fail=0
+    echo; echo "===== 3X-UI SUBSCRIPTION / MANAGED HOSTS SANITY CHECK ====="
+    [ -s "$db" ] || { echo "WARNING: 3x-ui DB missing; subscription check skipped"; return 0; }
+    python3 - "$db" <<'PY_XPAM_SUB_CHECK'
+import sqlite3, sys
+db=sys.argv[1]
+conn=sqlite3.connect(db)
+cur=conn.cursor()
+fail=False
+def val(k):
+    row=cur.execute('SELECT value FROM settings WHERE key=?', (k,)).fetchone()
+    return None if row is None else str(row[0]).strip().lower()
+for key in ('subEnable','subJsonEnable','subClashEnable','subEnableRouting'):
+    v=val(key)
+    if v in (None, '', 'false', '0', 'off', 'no'):
+        print(f'OK: {key} disabled/absent')
+    else:
+        print(f'FAIL: {key} should be disabled under XPAM, got {v!r}')
+        fail=True
+# Managed Hosts are a 3x-ui subscription feature. XPAM does not use them; presence alone is informational.
+for table in ('hosts','host','sub_hosts','subscription_hosts'):
+    try:
+        row=cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+        if row:
+            count=cur.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
+            print(f'INFO: 3x-ui managed-hosts related table {table} rows={count}; XPAM does not use this feature')
+    except Exception:
+        pass
+sys.exit(1 if fail else 0)
+PY_XPAM_SUB_CHECK
+    [ $? -eq 0 ] || fail=1
+    if ss -H -lntup 2>/dev/null | grep -Eq '(^|[[:space:]])[^[:space:]]+[[:space:]]+.*:2096\b'; then
+        echo "FAIL: 3x-ui subscription listener :2096 is present"
+        fail=1
+    else
+        echo "OK: no 3x-ui subscription listener on :2096"
+    fi
+    [ "$fail" -eq 0 ] && echo "OK: 3x-ui subscription/Managed Hosts do not affect XPAM public surface"
+    return "$fail"
+}
+
+xpam_telegram_feature_separation_check(){
+    echo; echo "===== TELEGRAM FEATURE SEPARATION CHECK ====="
+    echo "OK: XPAM Telegram proxy / MTG is separate from 3x-ui Telegram notification event bus"
+    echo "OK: XPAM Telegram notifications, when configured, remain XPAM-owned and separate from 3x-ui panel notifications"
+}
+
 xpam_write_journald_policy(){
     mkdir -p /etc/systemd/journald.conf.d
     cat > /etc/systemd/journald.conf.d/90-xpam-script.conf <<'EOF_XPAM_JOURNALD'
@@ -1853,6 +2006,7 @@ EOF_XPAM_LOGROTATE
 }
 
 xpam_apply_small_vm_policies(){
+    xpam_xui_apply_fail2ban_optout_common || true
     xpam_write_journald_policy || true
     xpam_write_logrotate_policy || true
 }

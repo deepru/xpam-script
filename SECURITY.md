@@ -2,7 +2,7 @@
 
 ## Supported version
 
-Only the current XPAM Script v1.3.5 documentation and release path are maintained.
+Only the current XPAM Script v1.3.6 documentation and release path are maintained.
 
 Use the latest published release from GitHub Releases for new installations.
 

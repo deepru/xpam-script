@@ -1,6 +1,6 @@
 # Installation
 
-XPAM Script v1.3.5 is intended for clean VPS installations on Ubuntu 24.04 LTS and Debian 12.
+XPAM Script v1.3.6 is intended for clean VPS installations on Ubuntu 24.04 LTS and Debian 12.
 
 ## Requirements
 
@@ -23,7 +23,32 @@ panel.example.com
 
 Use the current release archive and SHA256 file from GitHub Releases. The install flow should download the release archive, verify SHA256, extract it and start installation.
 
-Follow the exact command block published in the GitHub release page for the current version.
+Follow the exact command block published in the GitHub release page for the current version. Current bootstrap download should use HTTP/1.1 and retries:
+
+```bash
+cd /root
+curl --http1.1 -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+  --connect-timeout 20 --max-time 120 \
+  https://raw.githubusercontent.com/deepru/xpam-script/main/bootstrap.sh \
+  -o xpam-bootstrap.sh
+sudo XPAM_REPO="deepru/xpam-script" bash xpam-bootstrap.sh
+```
+
+If a provider has a broken route to one GitHub CDN edge and `raw.githubusercontent.com` times out, use temporary `curl --resolve` fallback only for this download:
+
+```bash
+cd /root
+for ip in 185.199.108.133 185.199.109.133 185.199.110.133 185.199.111.133; do
+  curl --http1.1 -fsSL --connect-timeout 15 --max-time 120 \
+    --resolve raw.githubusercontent.com:443:${ip} \
+    https://raw.githubusercontent.com/deepru/xpam-script/main/bootstrap.sh \
+    -o xpam-bootstrap.sh && break
+done
+test -s xpam-bootstrap.sh || { echo "bootstrap download failed"; exit 1; }
+sudo XPAM_REPO="deepru/xpam-script" bash xpam-bootstrap.sh
+```
+
+Do not pin GitHub CDN IPs in `/etc/hosts`. XPAM uses temporary fallback only for the failing download and still verifies release SHA256.
 
 ## First run
 

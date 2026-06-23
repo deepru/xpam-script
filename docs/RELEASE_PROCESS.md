@@ -6,7 +6,7 @@ This checklist is for XPAM Script maintainers.
 
 - Confirm the runtime archive and SHA256.
 - Confirm README, release notes, changelog and testing documentation are updated.
-- Confirm public docs use current v1.3.5 terminology.
+- Confirm public docs use current v1.3.6 terminology.
 - Confirm user guide files are either updated or intentionally left for a separate pass.
 - Confirm no public file contains real domains, IP addresses, UUIDs, live connection links, tokens, mock URLs, local paths or internal validation logs.
 

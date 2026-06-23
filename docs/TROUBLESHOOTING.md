@@ -1,6 +1,6 @@
 # Troubleshooting
 
-This guide lists common XPAM Script v1.3.5 troubleshooting steps.
+This guide lists common XPAM Script v1.3.6 troubleshooting steps.
 
 ## Main command not found
 
@@ -86,10 +86,19 @@ Do not publish update logs without redacting secrets and environment details.
 
 ## Low disk or low memory warnings
 
-v1.3.5 includes small-VPS safeguards, but very small VPS plans can still fail during package installation, certificate issuance or updates.
+v1.3.6 includes small-VPS safeguards, but very small VPS plans can still fail during package installation, certificate issuance or updates.
 
 Free disk space and make sure the package manager is not in a broken state before retrying.
 
 ## Telegram notifications do not work
 
 Telegram notifications are separate from Telegram proxy / MTG. Check bot token, relay settings and network access.
+
+
+## GitHub CDN timeout during bootstrap/update
+
+Some VPS networks can reach `github.com` but time out against one GitHub CDN edge used by `raw.githubusercontent.com` or `release-assets.githubusercontent.com`. The symptom is usually `curl: (28) SSL connection timeout`.
+
+XPAM download paths retry with HTTP/1.1 and can temporarily try GitHub CDN edge IPs with `curl --resolve`. This does not edit DNS or `/etc/hosts`, and archive SHA256 verification remains mandatory.
+
+For the very first bootstrap file, before XPAM is running, use the fallback command from `README.md` / `docs/INSTALLATION.md` if the normal `curl` command times out.

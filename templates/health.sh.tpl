@@ -126,6 +126,10 @@ if [[ "${PROFILE:-}" != "vless_direct" ]]; then
 fi
 if ! xpam_xui_xray_config_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-xui-xray-config-fail" "[$(xpam_server_label $XPAM_PREFIX)] 3x-ui/Xray config check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi
 if ! xpam_xui_api_token_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-xui-api-token-fail" "[$(xpam_server_label $XPAM_PREFIX)] 3x-ui API token check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi
+xpam_xui_version_compat_check || true
+xpam_xui_fail2ban_ownership_check || true
+if ! xpam_xui_subscription_sanity_check; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-xui-subscription-sanity-fail" "[$(xpam_server_label $XPAM_PREFIX)] 3x-ui subscription/Managed Hosts sanity check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi
+xpam_telegram_feature_separation_check || true
 if ! xpam_tls_cert_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-tls-cert-fail" "[$(xpam_server_label $XPAM_PREFIX)] TLS certificate check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi
 if ! xpam_port_exposure_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-port-exposure-fail" "[$(xpam_server_label $XPAM_PREFIX)] port exposure check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi
 if ! xpam_service_hygiene_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-service-hygiene-fail" "[$(xpam_server_label $XPAM_PREFIX)] service hygiene check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi

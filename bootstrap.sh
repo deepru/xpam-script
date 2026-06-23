@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-XPAM_VERSION="${XPAM_VERSION:-v1.3.5}"
+XPAM_VERSION="${XPAM_VERSION:-v1.3.6}"
 XPAM_ASSET="${XPAM_ASSET:-xpam-script-${XPAM_VERSION}-ubuntu24-debian12.tar.gz}"
 XPAM_INSTALL_DIR="${XPAM_INSTALL_DIR:-/root/xpam-install}"
 
@@ -21,7 +21,7 @@ Use:
   sudo XPAM_REPO="deepru/xpam-script" bash xpam-bootstrap.sh
 
 Or set:
-  XPAM_RELEASE_BASE_URL="https://github.com/deepru/xpam-script/releases/download/v1.2.0"
+  XPAM_RELEASE_BASE_URL="https://github.com/deepru/xpam-script/releases/download/v1.3.6"
 EOF
     exit 1
 fi
@@ -35,6 +35,38 @@ fi
 ARCHIVE_URL="${XPAM_ARCHIVE_URL:-${BASE_URL}/${XPAM_ASSET}}"
 SHA256_URL="${XPAM_SHA256_URL:-${BASE_URL}/${XPAM_ASSET}.sha256}"
 
+
+XPAM_GITHUB_CDN_IPS=(185.199.108.133 185.199.109.133 185.199.110.133 185.199.111.133)
+
+xpam_download_with_github_cdn_fallback() {
+    local url="$1" out="$2" label="${3:-file}" max_time="${4:-300}" ip
+    rm -f "$out"
+    if curl --http1.1 -fL --retry 5 --retry-delay 2 --retry-all-errors \
+        --connect-timeout 20 --max-time "$max_time" -o "$out" "$url"; then
+        return 0
+    fi
+
+    case "$url" in
+        *github.com/*|*githubusercontent.com/*) ;;
+        *) return 1 ;;
+    esac
+
+    echo "WARN: normal GitHub download failed for ${label}; trying temporary CDN edge fallback" >&2
+    for ip in "${XPAM_GITHUB_CDN_IPS[@]}"; do
+        rm -f "$out"
+        echo "==> Trying GitHub CDN edge ${ip} for ${label}" >&2
+        if curl --http1.1 -fL --retry 1 --retry-delay 1 --retry-all-errors \
+            --connect-timeout 15 --max-time "$max_time" \
+            --resolve "release-assets.githubusercontent.com:443:${ip}" \
+            --resolve "raw.githubusercontent.com:443:${ip}" \
+            --resolve "objects.githubusercontent.com:443:${ip}" \
+            -o "$out" "$url"; then
+            return 0
+        fi
+    done
+    rm -f "$out"
+    return 1
+}
 
 xpam_bootstrap_apt_auto_guard() {
     # Fresh cloud images often start apt-daily / unattended-upgrades during
@@ -125,10 +157,10 @@ ARCHIVE_FILE="$TMP_DIR/$XPAM_ASSET"
 SHA256_FILE="$TMP_DIR/$XPAM_ASSET.sha256"
 
 echo "==> Downloading XPAM Script ${XPAM_VERSION}"
-curl -fL --retry 3 --connect-timeout 15 -o "$ARCHIVE_FILE" "$ARCHIVE_URL"
+xpam_download_with_github_cdn_fallback "$ARCHIVE_URL" "$ARCHIVE_FILE" "XPAM archive" 300
 
 echo "==> Downloading SHA256"
-curl -fL --retry 3 --connect-timeout 15 -o "$SHA256_FILE" "$SHA256_URL"
+xpam_download_with_github_cdn_fallback "$SHA256_URL" "$SHA256_FILE" "XPAM SHA256" 120
 
 DIGEST="$(awk '{print $1; exit}' "$SHA256_FILE")"
 if ! printf '%s' "$DIGEST" | grep -Eq '^[0-9a-fA-F]{64}$'; then

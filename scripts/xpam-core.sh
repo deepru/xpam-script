@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-KIT_VERSION="v1.3.5"
+KIT_VERSION="v1.3.6"
 KIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG_DIR="/etc/xpam-script"
 CONFIG_FILE="${CONFIG_DIR}/config.env"
@@ -1215,13 +1215,30 @@ preinstall_system_update(){
 }
 install_base_packages_inner(){
   apt_get_safe "apt update before base packages" update &&
-  apt_get_safe "base package install" install -y --no-install-recommends ca-certificates curl wget gnupg lsb-release unzip tar gzip cron ufw fail2ban python3-systemd nginx certbot openssl python3 python3-venv xxd systemd-sysv rsync sqlite3 jq dnsutils openssh-client iproute2
+  apt_get_safe "base package install" install -y --no-install-recommends ca-certificates curl wget gnupg lsb-release unzip tar gzip cron ufw fail2ban systemd-timesyncd python3-systemd nginx certbot openssl python3 python3-venv xxd systemd-sysv rsync sqlite3 jq dnsutils openssh-client iproute2
 }
 install_base_packages(){
   say "Installing base packages"
   apt_dpkg_recovery "base packages"
   track_sensitive_package_changes "base package install" install_base_packages_inner || fail "Base package install failed"
   systemctl enable --now certbot.timer 2>/dev/null || true
+  xpam_time_sync_hygiene || true
+}
+
+xpam_time_sync_hygiene(){
+  # Minimal VPS providers sometimes preinstall ntp/ntpsec listening publicly on UDP/123.
+  # XPAM does not need to serve NTP; it only needs a synchronized local clock.
+  # Prefer systemd-timesyncd and remove ntp/ntpsec when present. Do not purge chrony.
+  if systemctl list-unit-files systemd-timesyncd.service >/dev/null 2>&1; then
+    systemctl enable --now systemd-timesyncd >/dev/null 2>&1 || true
+  fi
+  if dpkg -l ntp ntpsec 2>/dev/null | awk '$1 ~ /^(ii|rc)$/ {found=1} END{exit found?0:1}'; then
+    systemctl disable --now ntp ntpd ntpsec ntpsec.service ntpsec-systemd-netif.service ntpsec-rotate-stats.service >/dev/null 2>&1 || true
+    apt_get_safe "remove public NTP server packages" purge -y ntp ntpsec || true
+    apt_get_safe "autoremove after NTP cleanup" autoremove -y || true
+    systemctl enable --now systemd-timesyncd >/dev/null 2>&1 || true
+    ok "Local time sync uses systemd-timesyncd; public ntp/ntpsec server packages removed"
+  fi
 }
 
 install_mtproto_haproxy_packages(){
@@ -2164,7 +2181,7 @@ write_manual_3xui_note(){
     sniffing="ON: HTTP, TLS, QUIC; Route only ON. This is required only if you use Xray routing/WARP rules like selected-domain WARP routing."
   fi
   proxy_protocol_note="Proxy Protocol: OFF. Do not enable it unless HAProxy backend is also changed to send-proxy and health checks/nginx are adjusted.\nFallback PROXY/xVer: OFF / 0. Do not enable unless nginx fallback listens with proxy_protocol.\nFallback SNI/name: empty. Empty means catch-all fallback to the masked website; do not narrow it to one domain unless you intentionally maintain several fallback destinations.\nAuthentication: None / empty. Do not enable X25519/ML-KEM auth for this VLESS+TLS+fallback layout."
-  warp_block="Direct profile optional WARP notes:\n  WARP is configured manually inside 3x-ui/Xray, not by XPAM Script.\n  Recommended outbound values: tag=warp, protocol=wireguard, MTU=1420, domainStrategy=ForceIPv4, workers=2, noKernelTun=false.\n  Use reserved from your WARP profile and peer keepAlive=25.\n  Peer allowedIPs should be IPv4-only: 0.0.0.0/0. Do not add ::/0.\n  Address should be IPv4-only, for example 172.16.0.2/32. Do not add Cloudflare IPv6 address 2606:.../128 on this IPv4-only public layout.\n  Endpoint is usually engage.cloudflareclient.com:2408, but follow your actual WARP profile if it differs.\n  Use routing rules for selected domains only; keep system DNS independent from wg0/WARP.\n  wg0 may be lazy/absent immediately after reboot; health treats that as acceptable when WireGuard outbound exists.\n  Never paste WARP private keys into XPAM Script files, notes, screenshots or support messages."
+  warp_block="Direct profile optional WARP notes:\n  WARP is configured manually inside 3x-ui/Xray, not by XPAM Script.\n  Recommended outbound values: tag=warp, protocol=wireguard, MTU=1420, domainStrategy=ForceIPv4, noKernelTun=false. Do not use the removed WireGuard workers field on current Xray/3x-ui builds.\n  Use reserved from your WARP profile and peer keepAlive=25.\n  Peer allowedIPs should be IPv4-only: 0.0.0.0/0. Do not add ::/0.\n  Address should be IPv4-only, for example 172.16.0.2/32. Do not add Cloudflare IPv6 address 2606:.../128 on this IPv4-only public layout.\n  Endpoint is usually engage.cloudflareclient.com:2408, but follow your actual WARP profile if it differs.\n  Use routing rules for selected domains only; keep system DNS independent from wg0/WARP.\n  wg0 may be lazy/absent immediately after reboot; health treats that as acceptable when WireGuard outbound exists.\n  Never paste WARP private keys into XPAM Script files, notes, screenshots or support messages."
   cat > "$note" <<EOF
 Manual 3x-ui setup for XPAM Script
 =========================================================
@@ -2322,11 +2339,11 @@ reboot_gate_before_finalize(){
 
 xui_latest_release_tag_any(){
   local tag json
-  json="$(curl -fsSL --connect-timeout 8 --max-time 20 https://api.github.com/repos/MHSanaei/3x-ui/releases 2>/dev/null || true)"
-  tag="$(printf '%s' "$json" | jq -r '.[0].tag_name // empty' 2>/dev/null || true)"
+  json="$(curl --http1.1 -fsSL --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 8 --max-time 30 https://api.github.com/repos/MHSanaei/3x-ui/releases 2>/dev/null || true)"
+  tag="$(printf '%s' "$json" | jq -r '[.[] | select((.draft|not) and (.prerelease|not))][0].tag_name // empty' 2>/dev/null || true)"
   if [[ -z "$tag" ]]; then
-    warn "Could not query /releases; falling back to GitHub /releases/latest"
-    json="$(curl -fsSL --connect-timeout 8 --max-time 20 https://api.github.com/repos/MHSanaei/3x-ui/releases/latest 2>/dev/null || true)"
+    warn "Could not query stable releases list; falling back to GitHub /releases/latest"
+    json="$(curl --http1.1 -fsSL --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 8 --max-time 30 https://api.github.com/repos/MHSanaei/3x-ui/releases/latest 2>/dev/null || true)"
     tag="$(printf '%s' "$json" | jq -r '.tag_name // empty' 2>/dev/null || true)"
   fi
   [[ -n "$tag" ]] || fail "Could not detect latest 3x-ui tag from GitHub"
@@ -2871,14 +2888,14 @@ install_configure_3xui_auto(){
   tag="$(xui_latest_release_tag_any)"
   XUI_INSTALLED_TAG="$tag"
   save_config
-  say "Installing 3x-ui tag ${tag} (latest GitHub release including pre-release)"
+  say "Installing 3x-ui tag ${tag} (latest stable GitHub release)"
   xui_prepare_sqlite_backend_for_install
   installer="$(mktemp /tmp/3x-ui-install.XXXXXX.sh)"
   installer_url="https://raw.githubusercontent.com/MHSanaei/3x-ui/${tag}/install.sh"
   fallback_url="https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh"
-  if ! curl -fsSL --connect-timeout 8 --max-time 30 -o "$installer" "$installer_url"; then
+  if ! xpam_xui_download_url "$installer_url" "$installer" "3x-ui installer ${tag}"; then
     warn "Could not download 3x-ui installer from selected tag ${tag}; falling back to upstream master installer"
-    curl -fsSL --connect-timeout 8 --max-time 30 -o "$installer" "$fallback_url" || fail "Could not download 3x-ui installer"
+    xpam_xui_download_url "$fallback_url" "$installer" "3x-ui master installer" || fail "Could not download 3x-ui installer"
   fi
   xpam_xui_prepare_installer_sanitized "$installer" "$tag"
   if ! xpam_xui_run_installer_sanitized "$installer" "$tag" "$XUI_PANEL_PORT"; then
@@ -2886,12 +2903,14 @@ install_configure_3xui_auto(){
     fail "3x-ui installer failed"
   fi
   rm -f "$installer" "${installer}.orig"
+  xpam_xui_apply_fail2ban_optout || true
   xui_validate_sqlite_contract
 
   say "Forcing XPAM Script panel settings"
   /usr/local/x-ui/x-ui setting -username "$XUI_ADMIN_USER" -password "$XUI_ADMIN_PASS" -port "$XUI_PANEL_PORT" -webBasePath "/${PANEL_PATH}/" -listenIP "127.0.0.1" || fail "x-ui setting failed"
   /usr/local/x-ui/x-ui cert -webCert "$cert" -webCertKey "$key" || fail "x-ui cert failed"
   xui_disable_subscription
+  xpam_xui_apply_fail2ban_optout || true
   systemctl enable x-ui >/dev/null 2>&1 || true
   systemctl restart x-ui || fail "x-ui restart failed"
   write_wait_for_port
@@ -3635,7 +3654,7 @@ warp_print_3xui_manual_steps(){
   echo "  protocol=wireguard"
   echo "  mtu=1420"
   echo "  domainStrategy=ForceIPv4"
-  echo "  workers=2"
+  echo "  WireGuard workers field is intentionally not used on current Xray/3x-ui builds"
   echo "  noKernelTun=false"
   echo "  address=IPv4-only"
   echo "  peer allowedIPs=0.0.0.0/0"

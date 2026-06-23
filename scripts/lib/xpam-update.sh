@@ -91,10 +91,35 @@ xpam_update_release_source_label(){
 }
 
 xpam_update_download_url(){
-  local url="$1" out="$2"
-  curl -fsSL --connect-timeout 15 --max-time 120 --retry 2 --retry-delay 2 \
+  local url="$1" out="$2" ip max_time
+  max_time="${XPAM_UPDATE_DOWNLOAD_MAX_TIME:-180}"
+  rm -f "$out"
+  if curl --http1.1 -fsSL --connect-timeout 20 --max-time "$max_time" --retry 5 --retry-delay 2 --retry-all-errors \
     -H 'Accept: application/vnd.github+json' \
-    -o "$out" "$url"
+    -o "$out" "$url"; then
+    return 0
+  fi
+
+  case "$url" in
+    *github.com/*|*githubusercontent.com/*) ;;
+    *) return 1 ;;
+  esac
+
+  xpam_update_log "normal GitHub download failed; trying CDN edge fallback for $url"
+  for ip in 185.199.108.133 185.199.109.133 185.199.110.133 185.199.111.133; do
+    rm -f "$out"
+    xpam_update_log "trying GitHub CDN edge $ip for $url"
+    if curl --http1.1 -fsSL --connect-timeout 15 --max-time "$max_time" --retry 1 --retry-delay 1 --retry-all-errors \
+      --resolve "release-assets.githubusercontent.com:443:${ip}" \
+      --resolve "raw.githubusercontent.com:443:${ip}" \
+      --resolve "objects.githubusercontent.com:443:${ip}" \
+      -H 'Accept: application/vnd.github+json' \
+      -o "$out" "$url"; then
+      return 0
+    fi
+  done
+  rm -f "$out"
+  return 1
 }
 
 xpam_update_fetch_release_metadata(){
@@ -500,6 +525,7 @@ xpam_update_apply(){
     load_config
     fix_managed_hosts || true
     install_runtime_kit
+    xpam_xui_apply_fail2ban_optout || true
     write_install_launcher
     write_health_weekly
     write_common_library

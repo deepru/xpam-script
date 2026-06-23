@@ -1,6 +1,6 @@
 # Testing
 
-XPAM Script v1.3.5 прошёл полное тестирование на:
+XPAM Script v1.3.6 прошёл полное тестирование на:
 
 - Ubuntu 24.04 LTS;
 - Debian 12.

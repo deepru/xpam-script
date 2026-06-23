@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # XPAM Script module: Entry-side DoubleHop Mode.
-# Server B / Exit is external in v1.3.5: XPAM only accepts a pasted VLESS link.
+# Server B / Exit is external in v1.3.6: XPAM only accepts a pasted VLESS link.
 # Keep normal UX simple; technical fields are shown only in Advanced diagnostics.
 
 DH_EXIT_TAG="xpam-dh-exit"

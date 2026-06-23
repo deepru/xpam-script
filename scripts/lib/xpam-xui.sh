@@ -13,6 +13,54 @@ xpam_xui_panel_base_url(){
   printf 'https://127.0.0.1:%s/%s' "${XUI_PANEL_PORT}" "${panel_path_clean}"
 }
 
+
+xpam_xui_download_url(){
+  local url="$1" out="$2" label="${3:-3x-ui file}" ip
+  rm -f "$out"
+  if curl --http1.1 -fsSL --connect-timeout 20 --max-time 120 --retry 5 --retry-delay 2 --retry-all-errors -o "$out" "$url"; then
+    return 0
+  fi
+  case "$url" in
+    *github.com/*|*githubusercontent.com/*) ;;
+    *) return 1 ;;
+  esac
+  warn "Не удалось скачать ${label} обычным способом; пробую GitHub CDN fallback"
+  for ip in 185.199.108.133 185.199.109.133 185.199.110.133 185.199.111.133; do
+    rm -f "$out"
+    if curl --http1.1 -fsSL --connect-timeout 15 --max-time 120 --retry 1 --retry-delay 1 --retry-all-errors \
+      --resolve "release-assets.githubusercontent.com:443:${ip}" \
+      --resolve "raw.githubusercontent.com:443:${ip}" \
+      --resolve "objects.githubusercontent.com:443:${ip}" \
+      -o "$out" "$url"; then
+      ok "GitHub CDN fallback сработал для ${label}: ${ip}"
+      return 0
+    fi
+  done
+  rm -f "$out"
+  return 1
+}
+
+xpam_xui_apply_fail2ban_optout(){
+  local env_file="/etc/default/x-ui" tmp cli="/usr/bin/x-ui"
+  mkdir -p /etc/default
+  touch "$env_file"
+  chmod 644 "$env_file" 2>/dev/null || true
+  if grep -q '^XUI_ENABLE_FAIL2BAN=' "$env_file" 2>/dev/null; then
+    sed -i 's/^XUI_ENABLE_FAIL2BAN=.*/XUI_ENABLE_FAIL2BAN=false/' "$env_file"
+  else
+    printf '\n# Managed by XPAM Script: XPAM owns fail2ban; 3x-ui IP-limit fail2ban setup is disabled.\nXUI_ENABLE_FAIL2BAN=false\n' >> "$env_file"
+  fi
+
+  if [[ -f "$cli" ]] && head -n1 "$cli" 2>/dev/null | grep -Eq '^#!.*(sh|bash)'; then
+    if ! grep -q 'XPAM BEGIN XUI FAIL2BAN OPTOUT' "$cli" 2>/dev/null; then
+      tmp="$(mktemp /tmp/xpam-xui-cli.XXXXXX)" || return 0
+      awk 'NR==1 {print; print "# XPAM BEGIN XUI FAIL2BAN OPTOUT"; print "export XUI_ENABLE_FAIL2BAN=\"${XUI_ENABLE_FAIL2BAN:-false}\""; print "# XPAM END XUI FAIL2BAN OPTOUT"; next} {print}' "$cli" > "$tmp" && cat "$tmp" > "$cli"
+      rm -f "$tmp"
+      chmod +x "$cli" 2>/dev/null || true
+    fi
+  fi
+}
+
 xpam_xui_redact_output(){
   sed -E \
     -e 's/([Aa][Pp][Ii][ _-]?[Tt]oken[^:]*:[[:space:]]*)[^[:space:]]+/\1[redacted]/g' \
@@ -444,6 +492,7 @@ xpam_xui_run_installer_sanitized(){
   printf '1\ny\n%s\n4\ny\n' "$port" | \
     timeout --foreground "$timeout_sec" env \
       XUI_NONINTERACTIVE=1 \
+      XUI_ENABLE_FAIL2BAN=false \
       XUI_DB_TYPE=sqlite \
       XUI_DB_DSN= \
       XUI_DB_FOLDER=/etc/x-ui \

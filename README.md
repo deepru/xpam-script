@@ -19,11 +19,28 @@ XPAM настраивает **VLESS**, **Telegram proxy / MTG**, 3x-ui/Xray, ngi
 
 ```bash
 cd /root
-curl -fsSL https://raw.githubusercontent.com/deepru/xpam-script/main/bootstrap.sh -o xpam-bootstrap.sh
+curl --http1.1 -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+  --connect-timeout 20 --max-time 120 \
+  https://raw.githubusercontent.com/deepru/xpam-script/main/bootstrap.sh \
+  -o xpam-bootstrap.sh
 sudo XPAM_REPO="deepru/xpam-script" bash xpam-bootstrap.sh
 ```
 
 Bootstrap скачивает опубликованный архив из **GitHub Releases**, проверяет SHA256, распаковывает XPAM Script и запускает установку.
+
+Если конкретный VPS-провайдер нестабильно ходит до GitHub CDN и первая команда завершается `SSL connection timeout`, скачайте bootstrap через временный CDN fallback, без изменения DNS и `/etc/hosts`:
+
+```bash
+cd /root
+for ip in 185.199.108.133 185.199.109.133 185.199.110.133 185.199.111.133; do
+  curl --http1.1 -fsSL --connect-timeout 15 --max-time 120 \
+    --resolve raw.githubusercontent.com:443:${ip} \
+    https://raw.githubusercontent.com/deepru/xpam-script/main/bootstrap.sh \
+    -o xpam-bootstrap.sh && break
+done
+test -s xpam-bootstrap.sh || { echo "bootstrap download failed"; exit 1; }
+sudo XPAM_REPO="deepru/xpam-script" bash xpam-bootstrap.sh
+```
 
 После запуска сначала выполните пункт `0` для SSH-безопасности и создания prefix-команды, затем пункт `1` для установки сервера.
 
@@ -56,7 +73,7 @@ sudo srv-xpam
 
 Дополнительные материалы:
 
-- [Release notes v1.3.5](RELEASE_NOTES_v1.3.5_RU.md)
+- [Release notes v1.3.6](RELEASE_NOTES_v1.3.6_RU.md)
 - [GitHub Releases](https://github.com/deepru/xpam-script/releases)
 - [CHANGELOG.md](CHANGELOG.md)
 - [TESTING.md](TESTING.md)
