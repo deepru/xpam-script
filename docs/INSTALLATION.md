@@ -34,19 +34,8 @@ curl --http1.1 -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
 sudo XPAM_REPO="deepru/xpam-script" bash xpam-bootstrap.sh
 ```
 
-If a provider has a broken route to one GitHub CDN edge and `raw.githubusercontent.com` times out, use temporary `curl --resolve` fallback only for this download:
+If bootstrap download temporarily fails because of a provider or GitHub network issue, retry later or download `bootstrap.sh` locally and upload it to the VPS manually. XPAM still downloads the published archive from GitHub Releases and verifies SHA256 before installation.
 
-```bash
-cd /root
-for ip in 185.199.108.133 185.199.109.133 185.199.110.133 185.199.111.133; do
-  curl --http1.1 -fsSL --connect-timeout 15 --max-time 120 \
-    --resolve raw.githubusercontent.com:443:${ip} \
-    https://raw.githubusercontent.com/deepru/xpam-script/main/bootstrap.sh \
-    -o xpam-bootstrap.sh && break
-done
-test -s xpam-bootstrap.sh || { echo "bootstrap download failed"; exit 1; }
-sudo XPAM_REPO="deepru/xpam-script" bash xpam-bootstrap.sh
-```
 
 Do not pin GitHub CDN IPs in `/etc/hosts`. XPAM uses temporary fallback only for the failing download and still verifies release SHA256.
 

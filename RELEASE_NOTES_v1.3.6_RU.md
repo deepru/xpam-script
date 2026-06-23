@@ -6,7 +6,7 @@
 
 ## Главное в v1.3.6
 
-- Добавлен более устойчивый GitHub download flow для bootstrap, updater и загрузки 3x-ui installer: HTTP/1.1, retries и временный CDN-edge fallback без постоянного `/etc/hosts`/DNS pin.
+- Добавлен более устойчивый GitHub download flow для bootstrap, updater и загрузки 3x-ui installer: HTTP/1.1, retries/timeouts и обязательная SHA256-проверка архива перед применением.
 - SHA256-проверка архива остаётся обязательной перед установкой или обновлением.
 - Установщик 3x-ui дополнительно защищён от upstream-изменений вокруг fail2ban/IP Limit: XPAM явно задаёт `XUI_ENABLE_FAIL2BAN=false`.
 - Health/deep-health проверяют, что upstream `3x-ipl` fail2ban files/jail не появились и не перехватили XPAM-owned fail2ban policy.

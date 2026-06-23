@@ -28,19 +28,7 @@ sudo XPAM_REPO="deepru/xpam-script" bash xpam-bootstrap.sh
 
 Bootstrap скачивает опубликованный архив из **GitHub Releases**, проверяет SHA256, распаковывает XPAM Script и запускает установку.
 
-Если конкретный VPS-провайдер нестабильно ходит до GitHub CDN и первая команда завершается `SSL connection timeout`, скачайте bootstrap через временный CDN fallback, без изменения DNS и `/etc/hosts`:
-
-```bash
-cd /root
-for ip in 185.199.108.133 185.199.109.133 185.199.110.133 185.199.111.133; do
-  curl --http1.1 -fsSL --connect-timeout 15 --max-time 120 \
-    --resolve raw.githubusercontent.com:443:${ip} \
-    https://raw.githubusercontent.com/deepru/xpam-script/main/bootstrap.sh \
-    -o xpam-bootstrap.sh && break
-done
-test -s xpam-bootstrap.sh || { echo "bootstrap download failed"; exit 1; }
-sudo XPAM_REPO="deepru/xpam-script" bash xpam-bootstrap.sh
-```
+Если загрузка bootstrap временно не проходит из-за сетевой ошибки провайдера или GitHub, повторите команду позже либо скачайте `bootstrap.sh` локально и загрузите его на VPS вручную. XPAM всё равно скачивает опубликованный архив из GitHub Releases и проверяет SHA256 перед установкой.
 
 После запуска сначала выполните пункт `0` для SSH-безопасности и создания prefix-команды, затем пункт `1` для установки сервера.
 

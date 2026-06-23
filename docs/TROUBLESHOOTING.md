@@ -99,6 +99,6 @@ Telegram notifications are separate from Telegram proxy / MTG. Check bot token, 
 
 Some VPS networks can reach `github.com` but time out against one GitHub CDN edge used by `raw.githubusercontent.com` or `release-assets.githubusercontent.com`. The symptom is usually `curl: (28) SSL connection timeout`.
 
-XPAM download paths retry with HTTP/1.1 and can temporarily try GitHub CDN edge IPs with `curl --resolve`. This does not edit DNS or `/etc/hosts`, and archive SHA256 verification remains mandatory.
+XPAM download paths use HTTP/1.1 retries/timeouts and mandatory SHA256 verification. If GitHub is temporarily unreachable from the provider network, retry later or download the release archive from another network and upload it manually.
 
 For the very first bootstrap file, before XPAM is running, use the fallback command from `README.md` / `docs/INSTALLATION.md` if the normal `curl` command times out.
