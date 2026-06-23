@@ -27,10 +27,7 @@ Follow the exact command block published in the GitHub release page for the curr
 
 ```bash
 cd /root
-curl --http1.1 -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
-  --connect-timeout 20 --max-time 120 \
-  https://raw.githubusercontent.com/deepru/xpam-script/main/bootstrap.sh \
-  -o xpam-bootstrap.sh
+curl -fsSL https://raw.githubusercontent.com/deepru/xpam-script/main/bootstrap.sh -o xpam-bootstrap.sh
 sudo XPAM_REPO="deepru/xpam-script" bash xpam-bootstrap.sh
 ```
 
