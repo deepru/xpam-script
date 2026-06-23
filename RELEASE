@@ -1,6 +1,6 @@
 XPAM_VERSION=1.3.6
 XPAM_STAGE=stage9j-r3-v136
-XPAM_BUILD=3xui-v340-cdn-full-hardening
+XPAM_BUILD=3xui-v340-cdn-full-hardening-health-warp-hotfix
 XPAM_BASE_STAGE=stage9j-r3-clean
 XPAM_BASE_BUILD=89027a60
 XPAM_ARCHIVE_SHA256_SOURCE=external-sha256-file

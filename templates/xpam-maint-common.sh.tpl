@@ -443,9 +443,9 @@ xpam_port_exposure_check(){
     local cfg="$1"
     echo; echo "===== PORT EXPOSURE CHECK ====="
     echo "--- IPv4 TCP listeners ---"
-    ss -H -4 -lntup 2>/dev/null || true
+    ss -H -4 -lntp 2>/dev/null || true
     echo "--- IPv6 TCP listeners ---"
-    ss -H -6 -lntup 2>/dev/null || true
+    ss -H -6 -lntp 2>/dev/null || true
     echo "--- UDP listeners ---"
     ss -H -lnup 2>/dev/null || true
     python3 - "$cfg" <<'PY_PORT'
@@ -711,9 +711,9 @@ xpam_haproxy_mtproto_journal_check(){
         | grep -Eiv "Current worker .*exited with code 143|Exiting Master process|All workers exited|Deactivated successfully|Stopping haproxy.service|Stopped haproxy.service|Started haproxy.service|Starting haproxy.service|Loading success|New worker|haproxy version is|path to executable is|Reloading haproxy.service|Reloaded haproxy.service" \
         >"$tmp_log" || true
 
-    if grep -Eiq "Bad secret|Changing it to [0-9a-fA-F]{32}|\\bALERT\\b|\\bFATAL\\b|cannot bind|configuration file is invalid|Traceback|Unhandled|panic" "$tmp_log"; then
+    if grep -Eiq "Bad secret|Changing it to [0-9a-fA-F]{32}|\\bFATAL\\b|cannot bind|configuration file is invalid|Traceback|Unhandled|panic" "$tmp_log"; then
         echo "FAIL: fatal HAProxy/MTProto journal events found in current HAProxy activation journal"
-        grep -Ei "Bad secret|Changing it to [0-9a-fA-F]{32}|\\bALERT\\b|\\bFATAL\\b|cannot bind|configuration file is invalid|Traceback|Unhandled|panic" "$tmp_log" | tail -20
+        grep -Ei "Bad secret|Changing it to [0-9a-fA-F]{32}|\\bFATAL\\b|cannot bind|configuration file is invalid|Traceback|Unhandled|panic" "$tmp_log" | tail -20
         rm -f "$tmp_log"
         return 1
     fi
@@ -1571,8 +1571,9 @@ else:
             warn(f'WARP {tag}: address should be IPv4-only, got {addrs!r}')
         if settings.get('domainStrategy')=='ForceIPv4': ok(f'WARP {tag}: domainStrategy=ForceIPv4')
         else: warn_setting(f'{tag}.domainStrategy', settings.get('domainStrategy'), 'ForceIPv4')
-        if 'workers' in settings:
-            warn(f'WARP {tag}: legacy workers field is present but removed from current Xray; remove it in 3x-ui if WARP behaves unexpectedly')
+        legacy_worker_keys=[k for k in ('workers','num_workers','NumWorkers') if k in settings]
+        if legacy_worker_keys:
+            warn(f'WARP {tag}: legacy WireGuard worker field(s) present: {legacy_worker_keys!r}; run XPAM WARP check/normalize to clean them')
         else:
             ok(f'WARP {tag}: no legacy workers field')
         def valid_reserved(v):

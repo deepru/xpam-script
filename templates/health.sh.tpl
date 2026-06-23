@@ -17,7 +17,7 @@ if [[ "${1:-}" != "--deep" ]]; then
 
   warn_tmp="$(mktemp 2>/dev/null || true)"
   if [[ -n "$warn_tmp" ]]; then
-    grep -E '^WARN: ' "$LOG" 2>/dev/null       | grep -Ev 'HAProxy .*historical DOWN/no-server|HAProxy .*transient DOWN/no-server|provider networking.service issue'       >"$warn_tmp" || true
+    grep -E '^(WARN|WARNING): ' "$LOG" 2>/dev/null       | grep -Ev 'HAProxy .*historical DOWN/no-server|HAProxy .*transient DOWN/no-server|provider networking.service issue'       >"$warn_tmp" || true
   fi
 
   if [[ $rc -eq 0 ]]; then

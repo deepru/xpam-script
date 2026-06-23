@@ -2956,7 +2956,7 @@ verify_xui_manual_setup(){
 write_nginx_final(){ export_vars; cleanup_legacy_nginx_files; if uses_mtproto; then ensure_telegram_relay_nginx_snippet; render_template "$KIT_DIR/templates/nginx-mtproto.conf.tpl" /etc/nginx/sites-available/xpam-script-final.conf; else render_template "$KIT_DIR/templates/nginx-direct.conf.tpl" /etc/nginx/sites-available/xpam-script-final.conf; fi; rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/xpam-script-certonly.conf; ln -sf /etc/nginx/sites-available/xpam-script-final.conf /etc/nginx/sites-enabled/xpam-script-final.conf; ensure_htpasswd; nginx -t; systemctl reload nginx || systemctl restart nginx; }
 
 write_haproxy(){ uses_mtproto || return 0; export_vars; render_template "$KIT_DIR/templates/haproxy.cfg.tpl" /etc/haproxy/haproxy.cfg; haproxy -c -f /etc/haproxy/haproxy.cfg; mkdir -p /etc/systemd/system/haproxy.service.d; render_template "$KIT_DIR/templates/backend-order.conf.tpl" /etc/systemd/system/haproxy.service.d/backend-order.conf; systemctl daemon-reload; systemctl enable haproxy; systemctl restart haproxy; }
-write_health_weekly(){ say "Writing health and weekly scripts"; write_common_library; bash -c '. /usr/local/sbin/xpam-maint-common.sh; xpam_apply_small_vm_policies' || true; write_dns_policy_script; write_network_tuning_policy_script; write_telegram_https_relay_worker; migrate_legacy_system_file_names || true; export_vars; render_template "$KIT_DIR/templates/health.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-health"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-health"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-health"; write_health_launcher || true; write_links_launcher || true; write_vless_launcher || true; write_tg_launcher || true; write_repair_launcher || true; write_netdiag_launcher || true; render_template "$KIT_DIR/templates/weekly.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; write_weekly_launcher || true; local cron_min=35; [[ "$SERVER_PREFIX" == "se" ]] && cron_min=30; [[ "$SERVER_PREFIX" == "lt" ]] && cron_min=40; cat > "/etc/cron.d/${SERVER_PREFIX}-weekly-maintenance" <<EOF
+write_health_weekly(){ say "Writing health and weekly scripts"; write_common_library; bash -c '. /usr/local/sbin/xpam-maint-common.sh; xpam_apply_small_vm_policies' || true; xpam_xui_cleanup_legacy_warp_workers || true; write_dns_policy_script; write_network_tuning_policy_script; write_telegram_https_relay_worker; migrate_legacy_system_file_names || true; export_vars; render_template "$KIT_DIR/templates/health.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-health"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-health"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-health"; write_health_launcher || true; write_links_launcher || true; write_vless_launcher || true; write_tg_launcher || true; write_repair_launcher || true; write_netdiag_launcher || true; render_template "$KIT_DIR/templates/weekly.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; write_weekly_launcher || true; local cron_min=35; [[ "$SERVER_PREFIX" == "se" ]] && cron_min=30; [[ "$SERVER_PREFIX" == "lt" ]] && cron_min=40; cat > "/etc/cron.d/${SERVER_PREFIX}-weekly-maintenance" <<EOF
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ${cron_min} 4 * * 0 root /usr/bin/nice -n 19 /usr/bin/ionice -c3 /usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh >/dev/null 2>&1
@@ -3615,6 +3615,107 @@ stage_finalize(){
 }
 stage_check_only(){ need_root; load_config; validate_inputs; verify_ssh_preflight; [[ -x "/usr/local/sbin/${SERVER_PREFIX}-health" ]] && "/usr/local/sbin/${SERVER_PREFIX}-health" || verify_xui_manual_setup; }
 
+
+xpam_xui_cleanup_legacy_warp_workers(){
+  # Safe cleanup for Xray 26.6.22 / 3x-ui 3.4.0+.
+  # The WireGuard workers/num_workers fields were removed upstream. 3x-ui UI
+  # no longer exposes them, but older XPAM releases may have left the raw JSON
+  # keys in settings.xrayTemplateConfig or generated config.json.
+  # This function only removes legacy keys from XPAM-managed WARP outbound
+  # tag=warp. It does not change private keys, reserved bytes, peers,
+  # endpoint, routing rules, users, links or domains. It does not restart x-ui.
+  local db backup_dir backup cfg_file
+  db="/etc/x-ui/x-ui.db"
+  cfg_file="/usr/local/x-ui/bin/config.json"
+  [[ -s "$db" ]] || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  backup_dir="/root/manual-backups/xui-warp-legacy-workers-cleanup"
+  mkdir -p "$backup_dir" 2>/dev/null || true
+  chmod 700 "$backup_dir" 2>/dev/null || true
+  backup="${backup_dir}/x-ui.db.$(date +%Y%m%d-%H%M%S)"
+  export XPAM_XUI_DB="$db" XPAM_XRAY_CONFIG_JSON="$cfg_file" XPAM_WARP_CLEANUP_BACKUP="$backup"
+  python3 <<'PY_XPAM_WARP_WORKERS_CLEANUP'
+import json, os, shutil, sqlite3, tempfile
+from pathlib import Path
+
+legacy_keys = ('workers', 'num_workers', 'NumWorkers')
+db = Path(os.environ.get('XPAM_XUI_DB','/etc/x-ui/x-ui.db'))
+cfg_file = Path(os.environ.get('XPAM_XRAY_CONFIG_JSON','/usr/local/x-ui/bin/config.json'))
+backup = Path(os.environ.get('XPAM_WARP_CLEANUP_BACKUP',''))
+changed_db = False
+changed_file = False
+
+def scrub_config_obj(obj):
+    changed = False
+    if not isinstance(obj, dict):
+        return False
+    outbounds = obj.get('outbounds') or []
+    if not isinstance(outbounds, list):
+        return False
+    for outbound in outbounds:
+        if not isinstance(outbound, dict):
+            continue
+        if outbound.get('protocol') != 'wireguard' or outbound.get('tag') != 'warp':
+            continue
+        settings = outbound.get('settings')
+        if not isinstance(settings, dict):
+            continue
+        for key in legacy_keys:
+            if key in settings:
+                settings.pop(key, None)
+                changed = True
+    return changed
+
+# Clean settings.xrayTemplateConfig in SQLite if present.
+try:
+    conn = sqlite3.connect(str(db))
+    cur = conn.cursor()
+    row = cur.execute("SELECT value FROM settings WHERE key='xrayTemplateConfig'").fetchone()
+    if row and row[0]:
+        cfg = json.loads(row[0])
+        if scrub_config_obj(cfg):
+            try:
+                if backup and not backup.exists():
+                    backup.parent.mkdir(parents=True, exist_ok=True)
+                    # sqlite backup API gives a consistent copy even when WAL/SHM exist.
+                    dst = sqlite3.connect(str(backup))
+                    conn.backup(dst)
+                    dst.close()
+                    try:
+                        backup.chmod(0o600)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            cur.execute("UPDATE settings SET value=? WHERE key='xrayTemplateConfig'", (json.dumps(cfg, ensure_ascii=False, separators=(',',':')),))
+            conn.commit()
+            changed_db = True
+    conn.close()
+except Exception:
+    pass
+
+# Clean generated config.json too, so health/deep-health sees the corrected
+# state immediately without forcing a disruptive x-ui restart.
+try:
+    if cfg_file.exists() and cfg_file.stat().st_size > 0:
+        old_mode = cfg_file.stat().st_mode & 0o777
+        old_text = cfg_file.read_text()
+        cfg = json.loads(old_text)
+        if scrub_config_obj(cfg):
+            fd, tmp_name = tempfile.mkstemp(prefix='.xpam-config-json-', dir=str(cfg_file.parent))
+            with os.fdopen(fd, 'w') as f:
+                json.dump(cfg, f, ensure_ascii=False, separators=(',',':'))
+            os.chmod(tmp_name, old_mode)
+            shutil.move(tmp_name, cfg_file)
+            changed_file = True
+except Exception:
+    pass
+
+if changed_db or changed_file:
+    print('OK: legacy WARP workers field removed from XPAM-managed WARP config')
+PY_XPAM_WARP_WORKERS_CLEANUP
+}
+
 warp_print_3xui_manual_steps(){
   echo "============================================================"
   echo "WARP через 3x-ui / Xray"
@@ -3751,7 +3852,10 @@ if not warp:
 ob=warp[0]
 settings=ob.setdefault('settings', {})
 settings['mtu']=1420
-settings['workers']=2
+# Xray 26.6.22 / 3x-ui 3.4.0 removed WireGuard workers/num_workers.
+# XPAM must not create that legacy field and should clean old raw JSON keys.
+for _legacy_key in ('workers', 'num_workers', 'NumWorkers'):
+    settings.pop(_legacy_key, None)
 settings['domainStrategy']='ForceIPv4'
 settings['noKernelTun']=False
 
@@ -4055,6 +4159,7 @@ stage_repair(){
   write_certbot_hook || true
   write_health_weekly || true
   xui_assert_sqlite_backend
+  xpam_xui_cleanup_legacy_warp_workers || true
   xui_ensure_api_token || true
   xui_enforce_direct_ipv4_bind || true
   apply_service_hygiene || true
