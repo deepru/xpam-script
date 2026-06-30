@@ -178,99 +178,28 @@ EOF_LINKS_LAUNCHER
 }
 
 
-write_tg_launcher(){
+# The legacy alexbers <prefix>-tg command was removed; Telegram now uses the single
+# 3x-ui-managed link shown by <prefix>-links --show-secrets. This idempotently drops
+# any orphaned <prefix>-tg launcher left over from older alexbers installs.
+remove_legacy_tg_launcher(){
   [[ -n "${SERVER_PREFIX:-}" ]] || return 0
 
-  local safe_prefix launcher bin_link kit_dir_real
+  local safe_prefix
   safe_prefix="$(printf '%s' "$SERVER_PREFIX" | tr -cd 'A-Za-z0-9_-')"
+  [[ -n "$safe_prefix" ]] || return 0
 
-  [[ -n "$safe_prefix" ]] || fail "SERVER_PREFIX is empty; cannot create tg launcher"
-  [[ "$safe_prefix" == "$SERVER_PREFIX" ]] || fail "SERVER_PREFIX contains unsupported chars for launcher command: $SERVER_PREFIX"
-
-  launcher="/usr/local/sbin/${safe_prefix}-tg"
-  bin_link="/usr/local/bin/${safe_prefix}-tg"
-
-  if ! uses_mtproto || ! mtproto_backend_is_alexbers; then
-    rm -f "$launcher" "$bin_link" 2>/dev/null || true
-    ok "Telegram uses ${safe_prefix}-links; old ${safe_prefix}-tg launcher removed for backend: $(mtproto_backend_effective)"
-    return 0
-  fi
-
-  kit_dir_real="$RUNTIME_KIT_DIR"
-
-  cat > "$launcher" <<EOF_TG_LAUNCHER
-#!/usr/bin/env bash
-set -euo pipefail
-
-LAUNCHER="/usr/local/sbin/${safe_prefix}-tg"
-KIT_DIR="${kit_dir_real}"
-
-if [ "\$(id -u)" -ne 0 ]; then
-  exec sudo "\$LAUNCHER" "\$@"
-fi
-
-if [ ! -f "\$KIT_DIR/scripts/xpam-core.sh" ]; then
-  echo "ERROR: XPAM Script runtime is missing: \$KIT_DIR/scripts/xpam-core.sh" >&2
-  echo "Re-upload the XPAM Script archive or restore /opt/xpam-script." >&2
-  exit 1
-fi
-
-export XPAM_SCRIPT_QUIET_LOAD_CONFIG=1
-# shellcheck source=/dev/null
-source "\$KIT_DIR/scripts/xpam-core.sh"
-stage_tg_direct "\$@"
-EOF_TG_LAUNCHER
-
-  chmod 755 "$launcher"
-  ln -sf "$launcher" "$bin_link" 2>/dev/null || true
-
-  [[ -x "$launcher" ]] || fail "MTProto launcher was not created: $launcher"
-  [[ -x "$bin_link" ]] || fail "MTProto launcher symlink was not created or is not executable: $bin_link"
-
-  ok "Legacy alexbers MTProto users command available: sudo ${safe_prefix}-tg"
+  rm -f "/usr/local/sbin/${safe_prefix}-tg" "/usr/local/bin/${safe_prefix}-tg" 2>/dev/null || true
 }
 
 
-write_vless_launcher(){
+remove_legacy_vless_launcher(){
+  # The <prefix>-vless command was removed (VLESS links are shown by <prefix>-links --show-secrets).
+  # Drop any launcher orphaned by an earlier install/upgrade. Idempotent; safe if already absent.
   [[ -n "${SERVER_PREFIX:-}" ]] || return 0
-
-  local safe_prefix launcher bin_link kit_dir_real
+  local safe_prefix
   safe_prefix="$(printf '%s' "$SERVER_PREFIX" | tr -cd 'A-Za-z0-9_-')"
-
-  [[ -n "$safe_prefix" ]] || fail "SERVER_PREFIX is empty; cannot create vless launcher"
-  [[ "$safe_prefix" == "$SERVER_PREFIX" ]] || fail "SERVER_PREFIX contains unsupported chars for launcher command: $SERVER_PREFIX"
-
-  launcher="/usr/local/sbin/${safe_prefix}-vless"
-  bin_link="/usr/local/bin/${safe_prefix}-vless"
-  kit_dir_real="$RUNTIME_KIT_DIR"
-
-  cat > "$launcher" <<EOF_VLESS_LAUNCHER
-#!/usr/bin/env bash
-set -euo pipefail
-
-LAUNCHER="/usr/local/sbin/${safe_prefix}-vless"
-KIT_DIR="${kit_dir_real}"
-
-if [ "\$(id -u)" -ne 0 ]; then
-  exec sudo "\$LAUNCHER" "\$@"
-fi
-
-if [ ! -f "\$KIT_DIR/scripts/xpam-core.sh" ]; then
-  echo "ERROR: XPAM Script runtime is missing: \$KIT_DIR/scripts/xpam-core.sh" >&2
-  echo "Re-upload the XPAM Script archive or restore /opt/xpam-script." >&2
-  exit 1
-fi
-
-export XPAM_SCRIPT_QUIET_LOAD_CONFIG=1
-# shellcheck source=/dev/null
-source "\$KIT_DIR/scripts/xpam-core.sh"
-stage_vless_direct "\$@"
-EOF_VLESS_LAUNCHER
-
-  chmod 755 "$launcher"
-  ln -sf "$launcher" "$bin_link" 2>/dev/null || true
-
-  ok "VLESS links command available: sudo ${safe_prefix}-vless"
+  [[ -n "$safe_prefix" ]] || return 0
+  rm -f "/usr/local/sbin/${safe_prefix}-vless" "/usr/local/bin/${safe_prefix}-vless" 2>/dev/null || true
 }
 
 

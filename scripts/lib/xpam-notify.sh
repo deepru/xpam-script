@@ -146,8 +146,17 @@ def main():
         gid = grp.getgrnam("www-data").gr_gid
         os.chown(SOCKET_PATH, 0, gid)
         os.chmod(SOCKET_PATH, 0o660)
-    except Exception:
-        os.chmod(SOCKET_PATH, 0o666)
+    except Exception as exc:
+        # Fail safe: if the www-data group lookup fails, keep the socket root-only
+        # (0o660 root:root) rather than world-writable (0o666), and warn loudly. A
+        # world-writable relay socket would let any local user post Telegram messages
+        # through it. The relay will be unreachable from nginx (www-data) until fixed.
+        os.chmod(SOCKET_PATH, 0o660)
+        print(
+            f"WARNING: telegram relay socket could not be shared with www-data ({exc}); "
+            "kept root-only 0o660 — nginx will not reach the relay until this is resolved.",
+            file=sys.stderr,
+        )
     try:
         server.serve_forever()
     finally:

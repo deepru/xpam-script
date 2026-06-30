@@ -281,8 +281,7 @@ ensure_xui_ready_for_finalize(){
 }
 
 PROFILE=""; SERVER_PREFIX=""; ROOT_DOMAIN=""; WWW_DOMAIN=""; PRIMARY_DOMAIN=""; SYNC_DOMAIN=""; WEB_CERT_NAME=""; CERT_EMAIL=""
-PANEL_PATH="api/internal/storage"; XUI_PANEL_PORT="57827"; XUI_AUTO_SETUP="yes"; XUI_ADMIN_USER="vlessuser"; XUI_ADMIN_PASS="${XUI_ADMIN_PASS:-}"; XUI_INSTALLED_TAG=""; XRAY_PUBLIC_PORT="443"; XRAY_LOCAL_PORT="1443"; SSH_PUBLIC_PORT="22"; HTTP_PUBLIC_PORT="80"; SITE_BACKEND_PORT="8080"; SYNC_BACKEND_PORT="9443"; MTPROTO_PORT="47827"; MTPROTO_BACKEND="${MTPROTO_BACKEND:-alexbers}"; ALLOW_IPV6_443="no"; BASIC_USER="admin"
-MTPROTO_REPO_URL="https://github.com/alexbers/mtprotoproxy.git"; MTPROTO_REPO_BRANCH="stable"
+PANEL_PATH="api/internal/storage"; XUI_PANEL_PORT="57827"; XUI_AUTO_SETUP="yes"; XUI_ADMIN_USER="vlessuser"; XUI_ADMIN_PASS="${XUI_ADMIN_PASS:-}"; XUI_INSTALLED_TAG=""; XRAY_PUBLIC_PORT="443"; XRAY_LOCAL_PORT="1443"; SSH_PUBLIC_PORT="22"; HTTP_PUBLIC_PORT="80"; SITE_BACKEND_PORT="8080"; SYNC_BACKEND_PORT="9443"; MTPROTO_PORT="47827"; MTPROTO_BACKEND="3xui-mtg"; ALLOW_IPV6_443="no"; BASIC_USER="admin"
 TELEGRAM_RELAY_PATH="api/internal/notify-relay"; TELEGRAM_RELAY_SOCKET="/run/xpam-script-telegram-relay.sock"
 
 # XPAM Auto internal policy defaults. These are intentionally hidden from the normal user menu.
@@ -375,66 +374,16 @@ normalize_https_relay_url(){
 }
 unique_domains(){ printf '%s\n' "$@" | awk 'NF && !seen[$0]++' | xargs; }
 uses_mtproto(){ [[ "$PROFILE" == "subdomains_mtproto" || "$PROFILE" == "root_mtproto" ]]; }
-uses_haproxy(){ uses_mtproto; }
-# Backend selector/abstraction. Stage 4 supports alexbers legacy/rollback and
-# the controlled 3xui-mtg runtime path. Teleproxy remains reserved/future.
-mtproto_backend_allowed_values(){ printf 'alexbers 3xui-mtg teleproxy\n'; }
+# MTProto backend: 3x-ui MTG only. The legacy alexbers backend and the reserved
+# teleproxy slot were removed; MTPROTO_BACKEND is pinned to 3xui-mtg.
 mtproto_backend_effective(){
-  if ! uses_mtproto; then
-    printf 'none\n'
-    return 0
-  fi
-  local backend="${MTPROTO_BACKEND:-}"
-  [[ -n "$backend" ]] || backend="alexbers"
-  printf '%s\n' "$backend"
+  if uses_mtproto; then printf '3xui-mtg\n'; else printf 'none\n'; fi
 }
-mtproto_backend_validate_value(){
-  local backend="${1:-}"
-  case "$backend" in
-    ""|alexbers|3xui-mtg|teleproxy) return 0 ;;
-    *) fail "MTPROTO_BACKEND must be one of: $(mtproto_backend_allowed_values); got: $backend" ;;
-  esac
-}
-mtproto_backend_runtime_supported(){
-  local backend
-  backend="$(mtproto_backend_effective)"
-  [[ "$backend" == "none" || "$backend" == "alexbers" || "$backend" == "3xui-mtg" ]]
-}
-mtproto_backend_is_alexbers(){ [[ "$(mtproto_backend_effective)" == "alexbers" ]]; }
-mtproto_backend_is_3xui_mtg(){ [[ "$(mtproto_backend_effective)" == "3xui-mtg" ]]; }
-mtproto_backend_is_teleproxy(){ [[ "$(mtproto_backend_effective)" == "teleproxy" ]]; }
-mtproto_backend_reserved_message(){
-  local backend="${1:-$(mtproto_backend_effective)}"
-  printf 'MTPROTO_BACKEND=%s is recognized/reserved but not implemented in this runtime patch yet. Current runtime support is alexbers legacy/rollback and 3xui-mtg.' "$backend"
-}
-mtproto_backend_require_runtime_supported(){
-  local backend
-  backend="$(mtproto_backend_effective)"
-  case "$backend" in
-    none|alexbers|3xui-mtg) return 0 ;;
-    teleproxy) fail "$(mtproto_backend_reserved_message "$backend")" ;;
-    *) fail "Unsupported MTPROTO_BACKEND: $backend" ;;
-  esac
-}
-# Backward-compatible name for the Stage 1 gate; keep it while later stages
-# switch call sites to the generic backend runtime gate.
-mtproto_backend_require_stage1_runtime_supported(){ mtproto_backend_require_runtime_supported; }
-mtproto_backend_normalize_for_config(){
-  if uses_mtproto; then
-    MTPROTO_BACKEND="$(mtproto_backend_effective)"
-  else
-    MTPROTO_BACKEND="${MTPROTO_BACKEND:-alexbers}"
-  fi
-}
+mtproto_backend_is_3xui_mtg(){ uses_mtproto; }
+mtproto_backend_normalize_for_config(){ MTPROTO_BACKEND="3xui-mtg"; }
 web_cert_name(){ [[ -n "$WEB_CERT_NAME" ]] && echo "$WEB_CERT_NAME" || echo "$PRIMARY_DOMAIN"; }
-expected_xray_port(){ uses_haproxy && echo "$XRAY_LOCAL_PORT" || echo "$XRAY_PUBLIC_PORT"; }
-expected_xray_listen_host(){
-  if uses_haproxy; then
-    echo "127.0.0.1"
-  else
-    server_public_ipv4
-  fi
-}
+expected_xray_port(){ echo "$XRAY_LOCAL_PORT"; }
+expected_xray_listen_host(){ echo "127.0.0.1"; }
 wait_for_xray_vless(){
   local timeout="${1:-30}" host port
   host="$(expected_xray_listen_host)"
@@ -443,7 +392,7 @@ wait_for_xray_vless(){
   /usr/local/sbin/wait-for-local-port.sh "$host" "$port" "$timeout" xray-vless
 }
 root_web_domains(){ [[ "$PROFILE" == "root_mtproto" ]] && unique_domains "$ROOT_DOMAIN" "$WWW_DOMAIN" || true; }
-web_domains(){ case "$PROFILE" in vless_direct|subdomains_mtproto) unique_domains "$PRIMARY_DOMAIN" ;; root_mtproto) unique_domains "$ROOT_DOMAIN" "$WWW_DOMAIN" "$PRIMARY_DOMAIN" ;; *) echo "" ;; esac; }
+web_domains(){ case "$PROFILE" in subdomains_mtproto) unique_domains "$PRIMARY_DOMAIN" ;; root_mtproto) unique_domains "$ROOT_DOMAIN" "$WWW_DOMAIN" "$PRIMARY_DOMAIN" ;; *) echo "" ;; esac; }
 root_site_dir(){ if [[ -n "${ROOT_DOMAIN:-}" ]]; then echo "/var/www/${ROOT_DOMAIN}"; else echo "/var/www/${SERVER_PREFIX}-main-site"; fi; }
 service_site_dir(){ echo "/var/www/${PRIMARY_DOMAIN}"; }
 backup_file(){ local f="$1"; [[ -e "$f" ]] && cp -a "$f" "$f.bak-xpam-script-$(date +%Y%m%d-%H%M%S)" || true; }
@@ -466,7 +415,22 @@ validate_panel_path(){
 }
 
 require_os(){ source /etc/os-release || true; case "${ID:-}" in ubuntu|debian) ok "OS supported: ${PRETTY_NAME:-$ID}" ;; *) fail "Unsupported OS: ${PRETTY_NAME:-unknown}. Use Ubuntu 24.04 or Debian 12." ;; esac; }
+# Reject configs from removed profiles/backends. vless_direct and the alexbers/
+# teleproxy MTProto backends were dropped; only subdomains_mtproto/root_mtproto with
+# the 3xui-mtg backend remain. Empty is allowed so install-wizard flows (which set
+# these just before validating) are not blocked.
+assert_supported_profile_backend(){
+  case "${PROFILE:-}" in
+    subdomains_mtproto|root_mtproto|"") : ;;
+    *) fail "Unsupported PROFILE='${PROFILE}': this build supports only subdomains_mtproto and root_mtproto (the 'vless_direct' profile was removed). Reinstall on a clean VM with a supported profile." ;;
+  esac
+  case "${MTPROTO_BACKEND:-}" in
+    3xui-mtg|"") : ;;
+    *) fail "Unsupported MTPROTO_BACKEND='${MTPROTO_BACKEND}': only '3xui-mtg' is supported (the legacy 'alexbers' backend and the reserved 'teleproxy' slot were removed). Reinstall on a clean VM." ;;
+  esac
+}
 validate_inputs(){
+  assert_supported_profile_backend
   validate_domain PRIMARY_DOMAIN "$PRIMARY_DOMAIN"; WEB_CERT_NAME="$(web_cert_name)"; validate_cert_name WEB_CERT_NAME "$WEB_CERT_NAME"
 
   # External/public ports are fixed by design. Do not let profiles drift into unsafe layouts.
@@ -484,8 +448,6 @@ validate_inputs(){
   [[ "$TELEGRAM_RELAY_PATH" != *..* ]] || fail "TELEGRAM_RELAY_PATH must not contain .."
 
   if uses_mtproto; then
-    mtproto_backend_validate_value "${MTPROTO_BACKEND:-}"
-    mtproto_backend_require_runtime_supported
     validate_domain SYNC_DOMAIN "$SYNC_DOMAIN"
     validate_port MTPROTO_PORT "$MTPROTO_PORT"
     validate_port SYNC_BACKEND_PORT "$SYNC_BACKEND_PORT"
@@ -508,14 +470,12 @@ validate_inputs(){
     [[ "$seen_ports" != *" $port "* ]] || fail "Internal/local port conflict detected: $port"
     seen_ports+="$port "
   done
-  if uses_haproxy; then
-    for pair in "XRAY_LOCAL_PORT:$XRAY_LOCAL_PORT"; do
-      name="${pair%%:*}"; port="${pair##*:}"
-      [[ "$forbidden" != *" $port "* ]] || fail "$name is an internal/local port and must not be 22, 80, or 443"
-      [[ "$seen_ports" != *" $port "* ]] || fail "Internal/local port conflict detected: $port"
-      seen_ports+="$port "
-    done
-  fi
+  for pair in "XRAY_LOCAL_PORT:$XRAY_LOCAL_PORT"; do
+    name="${pair%%:*}"; port="${pair##*:}"
+    [[ "$forbidden" != *" $port "* ]] || fail "$name is an internal/local port and must not be 22, 80, or 443"
+    [[ "$seen_ports" != *" $port "* ]] || fail "Internal/local port conflict detected: $port"
+    seen_ports+="$port "
+  done
   if uses_mtproto; then
     for pair in "SYNC_BACKEND_PORT:$SYNC_BACKEND_PORT" "MTPROTO_PORT:$MTPROTO_PORT"; do
       name="${pair%%:*}"; port="${pair##*:}"
@@ -525,7 +485,7 @@ validate_inputs(){
     done
   fi
 
-  if uses_haproxy && [[ "$(expected_xray_port)" == "$XRAY_PUBLIC_PORT" ]]; then fail "HAProxy mode requires local Xray port different from public 443"; fi
+  if [[ "$(expected_xray_port)" == "$XRAY_PUBLIC_PORT" ]]; then fail "HAProxy mode requires local Xray port different from public 443"; fi
 }
 
 
@@ -654,13 +614,17 @@ maybe_import_existing_config(){
   if [[ -f "$legacy_config" ]]; then
     # shellcheck disable=SC1090
     source "$legacy_config"
+    # Fail fast on configs from removed profiles/backends — they cannot be migrated
+    # silently (vless_direct ran Xray on the public IP without HAProxy; the alexbers
+    # backend ran a separate mtprotoproxy daemon).
+    assert_supported_profile_backend
     TELEGRAM_RELAY_SOCKET="/run/xpam-script-telegram-relay.sock"
     validate_server_prefix
     mkdir -p "$CONFIG_DIR"
     chmod 700 "$CONFIG_DIR"
     {
       echo "# Managed by xpam-script ${KIT_VERSION}"
-      for v in PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER MTPROTO_REPO_URL MTPROTO_REPO_BRANCH TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY; do
+      for v in PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY; do
         printf '%s=%q\n' "$v" "${!v:-}"
       done
     } > "$CONFIG_FILE"
@@ -745,7 +709,7 @@ save_config(){
   validate_server_prefix
   {
     echo "# Managed by xpam-script ${KIT_VERSION}"
-    for v in PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER MTPROTO_REPO_URL MTPROTO_REPO_BRANCH TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY; do
+    for v in PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY; do
       printf '%s=%q\n' "$v" "${!v}"
     done
   } > "$CONFIG_FILE"
@@ -755,8 +719,8 @@ save_config(){
   install_runtime_kit || true
   write_install_launcher || true
   write_links_launcher || true
-  write_vless_launcher || true
-  write_tg_launcher || true
+  remove_legacy_vless_launcher || true
+  remove_legacy_tg_launcher || true
   write_repair_launcher || true
   write_netdiag_launcher || true
 }
@@ -788,13 +752,9 @@ open(dst,'w').write(s)
 PY
 }
 export_vars(){
-  export PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER MTPROTO_REPO_URL MTPROTO_REPO_BRANCH TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY
+  export PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY
   export WEB_SERVER_NAMES="$(web_domains)" CERTONLY_SERVER_NAMES="$(web_domains)${SYNC_DOMAIN:+ $SYNC_DOMAIN}" SERVICE_SITE_DIR="$(service_site_dir)" ROOT_SITE_DIR="$(root_site_dir)" SERVER_PREFIX_UP="$(printf '%s' "$SERVER_PREFIX" | tr '[:lower:]' '[:upper:]')"
-  if uses_mtproto && mtproto_backend_is_3xui_mtg; then
-    export HAPROXY_BACKEND_ORDER_UNITS="network-online.target nginx.service x-ui.service"
-  else
-    export HAPROXY_BACKEND_ORDER_UNITS="network-online.target nginx.service x-ui.service mtprotoproxy.service"
-  fi
+  export HAPROXY_BACKEND_ORDER_UNITS="network-online.target nginx.service x-ui.service"
   if [[ "$PROFILE" == "root_mtproto" ]]; then
     ROOT_SITE_BLOCK="$(cat <<EOF_ROOT_SITE_BLOCK
 server {
@@ -1246,11 +1206,7 @@ install_mtproto_haproxy_packages(){
     say "Installing HAProxy/MTProto dependencies"
     apt_dpkg_recovery "HAProxy/MTProto package install"
     apt_get_safe "apt update before HAProxy/MTProto packages" update
-    if mtproto_backend_is_alexbers; then
-      apt_get_safe "HAProxy/alexbers MTProto package install" install -y haproxy git python3-cryptography
-    else
-      apt_get_safe "HAProxy package install for 3xui-mtg" install -y haproxy
-    fi
+    apt_get_safe "HAProxy package install for 3xui-mtg" install -y haproxy
   fi
 }
 
@@ -1559,8 +1515,6 @@ JAIL
   fail "fail2ban did not become ready after restart"
 }
 
-render_tree(){ local dir="$1" site_domain="$2" root_domain="$3" sync_domain="$4"; find "$dir" -type f \( -name '*.html' -o -name '*.css' -o -name '*.js' -o -name '*.txt' \) -print0 2>/dev/null | while IFS= read -r -d '' f; do sed -i -e "s#__SITE_DOMAIN__#${site_domain}#g" -e "s#__ROOT_DOMAIN__#${root_domain}#g" -e "s#__SYNC_DOMAIN__#${sync_domain}#g" "$f"; done; }
-copy_site(){ local src="$1" dst="$2" domain="$3" rootd="$4" syncd="$5"; mkdir -p "$dst"; rsync -a --delete "$src"/ "$dst"/ 2>/dev/null || { rm -rf "$dst"; mkdir -p "$dst"; cp -a "$src"/. "$dst"/; }; render_tree "$dst" "$domain" "$rootd" "$syncd"; chown -R www-data:www-data "$dst" || true; }
 setup_sites(){
   say "Preparing domain-named web roots"
 
@@ -1587,11 +1541,7 @@ setup_sites(){
     find "$dst" -type f -exec chmod 644 {} \; 2>/dev/null || true
   }
 
-  if [[ "$PROFILE" == "vless_direct" ]]; then
-    install_site_template "$KIT_DIR/sites/panel-vless-mask-site" "/var/www/${PRIMARY_DOMAIN}" "$PRIMARY_DOMAIN"
-  else
-    install_site_template "$KIT_DIR/sites/panel-vless-mask-site" "/var/www/${PRIMARY_DOMAIN}" "$PRIMARY_DOMAIN"
-  fi
+  install_site_template "$KIT_DIR/sites/panel-vless-mask-site" "/var/www/${PRIMARY_DOMAIN}" "$PRIMARY_DOMAIN"
 
   if uses_mtproto; then
     if [[ "$PROFILE" == "root_mtproto" ]]; then
@@ -1797,9 +1747,6 @@ apply_service_nofile_limits(){
   say "Applying service LimitNOFILE=524288 where services are installed"
   local svc
   local -a svcs=(nginx x-ui haproxy)
-  if uses_mtproto && mtproto_backend_is_alexbers; then
-    svcs+=(mtprotoproxy)
-  fi
   for svc in "${svcs[@]}"; do
     if systemctl cat "$svc.service" >/dev/null 2>&1; then
       mkdir -p "/etc/systemd/system/$svc.service.d"
@@ -2173,15 +2120,10 @@ write_manual_3xui_note(){
   server_prefix_up="$(printf '%s' "$SERVER_PREFIX" | tr '[:lower:]' '[:upper:]')"
   xray_port="$(expected_xray_port)"
   external_proxy_block="External Proxy: ENABLED\n  Force TLS: same / Тот же\n  Dest/Host: ${PRIMARY_DOMAIN}\n  Port: ${XRAY_PUBLIC_PORT}\n  Remark: ${server_prefix_up}-public-${XRAY_PUBLIC_PORT}\n  Purpose: generated VLESS links must always use ${PRIMARY_DOMAIN}:${XRAY_PUBLIC_PORT}, regardless of whether Xray listens directly on the public IPv4 address or behind HAProxy."
-  if uses_haproxy; then
-    xray_listen="127.0.0.1"
-    sniffing="OFF by default. If you later enable WARP/domain routing inside 3x-ui/Xray, XPAM Script can switch sniffing to Route only for that routing use-case."
-  else
-    xray_listen="server public IPv4 address, for example 203.0.113.10"
-    sniffing="ON: HTTP, TLS, QUIC; Route only ON. This is required only if you use Xray routing/WARP rules like selected-domain WARP routing."
-  fi
+  xray_listen="127.0.0.1"
+  sniffing="OFF by default. If you later enable WARP/domain routing inside 3x-ui/Xray, XPAM Script can switch sniffing to Route only for that routing use-case."
   proxy_protocol_note="Proxy Protocol: OFF. Do not enable it unless HAProxy backend is also changed to send-proxy and health checks/nginx are adjusted.\nFallback PROXY/xVer: OFF / 0. Do not enable unless nginx fallback listens with proxy_protocol.\nFallback SNI/name: empty. Empty means catch-all fallback to the masked website; do not narrow it to one domain unless you intentionally maintain several fallback destinations.\nAuthentication: None / empty. Do not enable X25519/ML-KEM auth for this VLESS+TLS+fallback layout."
-  warp_block="Direct profile optional WARP notes:\n  WARP is configured manually inside 3x-ui/Xray, not by XPAM Script.\n  Recommended outbound values: tag=warp, protocol=wireguard, MTU=1420, domainStrategy=ForceIPv4, noKernelTun=false. Do not use the removed WireGuard workers field on current Xray/3x-ui builds.\n  Use reserved from your WARP profile and peer keepAlive=25.\n  Peer allowedIPs should be IPv4-only: 0.0.0.0/0. Do not add ::/0.\n  Address should be IPv4-only, for example 172.16.0.2/32. Do not add Cloudflare IPv6 address 2606:.../128 on this IPv4-only public layout.\n  Endpoint is usually engage.cloudflareclient.com:2408, but follow your actual WARP profile if it differs.\n  Use routing rules for selected domains only; keep system DNS independent from wg0/WARP.\n  wg0 may be lazy/absent immediately after reboot; health treats that as acceptable when WireGuard outbound exists.\n  Never paste WARP private keys into XPAM Script files, notes, screenshots or support messages."
+  warp_block="Optional WARP notes:\n  WARP is configured manually inside 3x-ui/Xray, not by XPAM Script.\n  Recommended outbound values: tag=warp, protocol=wireguard, MTU=1420, domainStrategy=ForceIPv4, noKernelTun=false. Do not use the removed WireGuard workers field on current Xray/3x-ui builds.\n  Use reserved from your WARP profile and peer keepAlive=25.\n  Peer allowedIPs should be IPv4-only: 0.0.0.0/0. Do not add ::/0.\n  Address should be IPv4-only, for example 172.16.0.2/32. Do not add Cloudflare IPv6 address 2606:.../128 on this IPv4-only public layout.\n  Endpoint is usually engage.cloudflareclient.com:2408, but follow your actual WARP profile if it differs.\n  Use routing rules for selected domains only; keep system DNS independent from wg0/WARP.\n  wg0 may be lazy/absent immediately after reboot; health treats that as acceptable when WireGuard outbound exists.\n  Never paste WARP private keys into XPAM Script files, notes, screenshots or support messages."
   cat > "$note" <<EOF
 Manual 3x-ui setup for XPAM Script
 =========================================================
@@ -2237,9 +2179,8 @@ $(printf '%b' "$proxy_protocol_note")
 $(printf '%b' "$warp_block")
 
 Generated VLESS link sanity check:
-  HAProxy mode must generate: vless://UUID@${PRIMARY_DOMAIN}:${XRAY_PUBLIC_PORT}?...
-  direct mode must generate:     vless://UUID@${PRIMARY_DOMAIN}:${XRAY_PUBLIC_PORT}?...
-  It must never generate 127.0.0.1:${XRAY_LOCAL_PORT} for HAProxy-mode clients after External Proxy is configured.
+  Must generate: vless://UUID@${PRIMARY_DOMAIN}:${XRAY_PUBLIC_PORT}?...
+  It must never generate 127.0.0.1:${XRAY_LOCAL_PORT} for clients after External Proxy is configured.
 
 Then run the XPAM Script menu again and choose Install / continue server setup.
 EOF
@@ -2364,18 +2305,10 @@ PYUUID
   external_proxy_remark="${SERVER_PREFIX}-public-${XRAY_PUBLIC_PORT}"
   external_proxy_json='[{"forceTls":"same","dest":"'"${PRIMARY_DOMAIN}"'","port":'"${XRAY_PUBLIC_PORT}"',"remark":"'"${external_proxy_remark}"'"}]'
 
-  if uses_haproxy; then
-    xray_listen="127.0.0.1"
-    sniff_enabled="false"
-    sniff_route="false"
-    inbound_remark="${SERVER_PREFIX}-vless"
-  else
-    xray_listen="$(server_public_ipv4)"
-    [[ "$xray_listen" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || fail "Could not detect public IPv4 for direct VLESS bind"
-    sniff_enabled="true"
-    sniff_route="true"
-    inbound_remark="${SERVER_PREFIX}-vless"
-  fi
+  xray_listen="127.0.0.1"
+  sniff_enabled="false"
+  sniff_route="false"
+  inbound_remark="${SERVER_PREFIX}-vless"
 
   cert="/etc/letsencrypt/live/$(web_cert_name)/fullchain.pem"
   key="/etc/letsencrypt/live/$(web_cert_name)/privkey.pem"
@@ -2459,6 +2392,24 @@ xui_api_token(){
   fail "3x-ui API token compatibility layer is not loaded. Expected: ${KIT_DIR}/scripts/lib/xpam-xui.sh"
 }
 
+xui_reassert_panel_settings(){
+  # Repair-safe re-assert of XPAM panel settings after a 3x-ui upgrade may have reset them.
+  # 3x-ui keeps admin user/password in the `users` table and webBasePath/webListen/webPort/
+  # webCert in `settings`, so `x-ui setting` with ONLY the web flags leaves credentials intact
+  # (verified) -> repair never needs the admin password (which is not persisted in config).
+  local cert key
+  cert="/etc/letsencrypt/live/$(web_cert_name)/fullchain.pem"
+  key="/etc/letsencrypt/live/$(web_cert_name)/privkey.pem"
+  say "Re-asserting XPAM panel settings (port/webBasePath/listenIP)"
+  /usr/local/x-ui/x-ui setting -port "$XUI_PANEL_PORT" -webBasePath "/${PANEL_PATH}/" -listenIP "127.0.0.1" \
+    || { warn "x-ui setting panel re-assert failed"; return 1; }
+  if [[ -f "$cert" && -f "$key" ]]; then
+    /usr/local/x-ui/x-ui cert -webCert "$cert" -webCertKey "$key" || warn "x-ui cert re-assert failed"
+  else
+    warn "panel cert/key not found for $(web_cert_name); skipping cert re-assert"
+  fi
+}
+
 xui_disable_subscription(){
   local db="/etc/x-ui/x-ui.db" backup_dir backup
   say "Disabling 3x-ui subscription server"
@@ -2538,19 +2489,10 @@ SQL
 }
 
 xui_enforce_vless_inbound_policy(){
-  local db="/etc/x-ui/x-ui.db" ip4 expected_port expected_listen expected_remark mode backup_dir backup
+  local db="/etc/x-ui/x-ui.db" expected_port expected_listen expected_remark backup_dir backup
   expected_port="$(expected_xray_port)"
-  if uses_haproxy; then
-    mode="local"
-    expected_listen="127.0.0.1"
-    expected_remark="${SERVER_PREFIX}-vless"
-  else
-    mode="direct"
-    ip4="$(server_public_ipv4)"
-    [[ "$ip4" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || fail "Could not detect public IPv4 for direct VLESS bind"
-    expected_listen="$ip4"
-    expected_remark="${SERVER_PREFIX}-vless"
-  fi
+  expected_listen="127.0.0.1"
+  expected_remark="${SERVER_PREFIX}-vless"
   [[ -s "$db" ]] || fail "3x-ui DB missing: $db"
 
   backup_dir="/root/manual-backups/xui-vless-policy"
@@ -2568,7 +2510,6 @@ xui_enforce_vless_inbound_policy(){
   XPAM_EXPECTED_REMARK="$expected_remark" \
   XPAM_PRIMARY_DOMAIN="$PRIMARY_DOMAIN" \
   XPAM_PUBLIC_PORT="$XRAY_PUBLIC_PORT" \
-  XPAM_MODE="$mode" \
   python3 <<'PY_XUI_VLESS_POLICY'
 import json, os, sqlite3, sys
 
@@ -2579,7 +2520,6 @@ expected_listen=os.environ['XPAM_EXPECTED_LISTEN']
 expected_remark=os.environ['XPAM_EXPECTED_REMARK']
 primary=os.environ['XPAM_PRIMARY_DOMAIN']
 public_port=int(os.environ['XPAM_PUBLIC_PORT'])
-mode=os.environ['XPAM_MODE']
 expected_proxy={
     'forceTls': 'same',
     'dest': primary,
@@ -2642,17 +2582,11 @@ elif old_remark and old_remark != expected_remark:
     ok(f'VLESS inbound custom name preserved: {old_remark}')
 old_listen=str(row.get('listen') or '')
 if old_listen == expected_listen:
-    if mode == 'direct':
-        ok(f'direct VLESS inbound already binds public IPv4 {expected_listen}:{port}')
-    else:
-        ok(f'HAProxy-mode VLESS inbound already binds local listener {expected_listen}:{port}')
+    ok(f'HAProxy-mode VLESS inbound already binds local listener {expected_listen}:{port}')
 else:
     cur.execute('UPDATE inbounds SET listen=? WHERE id=?', (expected_listen, row['id']))
     changed=True
-    if mode == 'direct':
-        ok(f'direct VLESS inbound listen updated from {old_listen or "<empty>"} to {expected_listen}:{port}')
-    else:
-        ok(f'HAProxy-mode VLESS inbound listen updated from {old_listen or "<empty>"} to {expected_listen}:{port}')
+    ok(f'HAProxy-mode VLESS inbound listen updated from {old_listen or "<empty>"} to {expected_listen}:{port}')
 
 stream=load_json(row.get(stream_col), {})
 if not isinstance(stream, dict):
@@ -2680,11 +2614,7 @@ xui_add_vless_inbound_auto(){
   panel_path_clean="${panel_path_clean%/}"
   base="https://127.0.0.1:${XUI_PANEL_PORT}/${panel_path_clean}"
   payload="$(mktemp /tmp/xpam-script-xui-inbound.XXXXXX.json)"
-  if uses_haproxy; then
-    expected_listen="127.0.0.1"
-  else
-    expected_listen="$(server_public_ipv4)"
-  fi
+  expected_listen="127.0.0.1"
 
   say "Checking local 3x-ui API token in XPAM root-only storage"
   xui_ensure_api_token || fail "Could not obtain usable 3x-ui API token"
@@ -2956,7 +2886,7 @@ verify_xui_manual_setup(){
 write_nginx_final(){ export_vars; cleanup_legacy_nginx_files; if uses_mtproto; then ensure_telegram_relay_nginx_snippet; render_template "$KIT_DIR/templates/nginx-mtproto.conf.tpl" /etc/nginx/sites-available/xpam-script-final.conf; else render_template "$KIT_DIR/templates/nginx-direct.conf.tpl" /etc/nginx/sites-available/xpam-script-final.conf; fi; rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/xpam-script-certonly.conf; ln -sf /etc/nginx/sites-available/xpam-script-final.conf /etc/nginx/sites-enabled/xpam-script-final.conf; ensure_htpasswd; nginx -t; systemctl reload nginx || systemctl restart nginx; }
 
 write_haproxy(){ uses_mtproto || return 0; export_vars; render_template "$KIT_DIR/templates/haproxy.cfg.tpl" /etc/haproxy/haproxy.cfg; haproxy -c -f /etc/haproxy/haproxy.cfg; mkdir -p /etc/systemd/system/haproxy.service.d; render_template "$KIT_DIR/templates/backend-order.conf.tpl" /etc/systemd/system/haproxy.service.d/backend-order.conf; systemctl daemon-reload; systemctl enable haproxy; systemctl restart haproxy; }
-write_health_weekly(){ say "Writing health and weekly scripts"; write_common_library; bash -c '. /usr/local/sbin/xpam-maint-common.sh; xpam_apply_small_vm_policies' || true; xpam_xui_cleanup_legacy_warp_workers || true; write_dns_policy_script; write_network_tuning_policy_script; write_telegram_https_relay_worker; migrate_legacy_system_file_names || true; export_vars; render_template "$KIT_DIR/templates/health.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-health"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-health"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-health"; write_health_launcher || true; write_links_launcher || true; write_vless_launcher || true; write_tg_launcher || true; write_repair_launcher || true; write_netdiag_launcher || true; render_template "$KIT_DIR/templates/weekly.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; write_weekly_launcher || true; local cron_min=35; [[ "$SERVER_PREFIX" == "se" ]] && cron_min=30; [[ "$SERVER_PREFIX" == "lt" ]] && cron_min=40; cat > "/etc/cron.d/${SERVER_PREFIX}-weekly-maintenance" <<EOF
+write_health_weekly(){ say "Writing health and weekly scripts"; write_common_library; bash -c '. /usr/local/sbin/xpam-maint-common.sh; xpam_apply_small_vm_policies' || true; xpam_xui_cleanup_legacy_warp_workers || true; write_dns_policy_script; write_network_tuning_policy_script; write_telegram_https_relay_worker; migrate_legacy_system_file_names || true; export_vars; render_template "$KIT_DIR/templates/health.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-health"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-health"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-health"; write_health_launcher || true; write_links_launcher || true; remove_legacy_vless_launcher || true; remove_legacy_tg_launcher || true; write_repair_launcher || true; write_netdiag_launcher || true; render_template "$KIT_DIR/templates/weekly.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; write_weekly_launcher || true; local cron_min=35; [[ "$SERVER_PREFIX" == "se" ]] && cron_min=30; [[ "$SERVER_PREFIX" == "lt" ]] && cron_min=40; cat > "/etc/cron.d/${SERVER_PREFIX}-weekly-maintenance" <<EOF
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ${cron_min} 4 * * 0 root /usr/bin/nice -n 19 /usr/bin/ionice -c3 /usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh >/dev/null 2>&1
@@ -2996,7 +2926,7 @@ ask_layout(){
   ask CERT_EMAIL "Email for Let's Encrypt; empty = no email" ""
   ask_default_label PANEL_PATH "3x-ui panel path" "$PANEL_PATH"
   ask XUI_PANEL_PORT "3x-ui local panel port" "$XUI_PANEL_PORT"
-  uses_haproxy && ask XRAY_LOCAL_PORT "Local Xray/VLESS port behind HAProxy" "$XRAY_LOCAL_PORT"
+  ask XRAY_LOCAL_PORT "Local Xray/VLESS port behind HAProxy" "$XRAY_LOCAL_PORT"
   ask SITE_BACKEND_PORT "Local nginx fallback site port" "$SITE_BACKEND_PORT"
   uses_mtproto && ask SYNC_BACKEND_PORT "Local nginx Telegram TLS fallback port" "$SYNC_BACKEND_PORT" && ask MTPROTO_PORT "Local Telegram backend port" "$MTPROTO_PORT"
   echo "External ports are fixed by XPAM Script: SSH 22, HTTP 80, TLS 443. They are not asked interactively."
@@ -3018,7 +2948,7 @@ ask_layout(){
   echo "  Cert name: $(web_cert_name)"
   echo "  Public ports: SSH ${SSH_PUBLIC_PORT}, HTTP ${HTTP_PUBLIC_PORT}, TLS ${XRAY_PUBLIC_PORT}"
   echo "  3x-ui panel: 127.0.0.1:${XUI_PANEL_PORT}, public path https://${PRIMARY_DOMAIN}/${PANEL_PATH}/"
-  echo "  VLESS/Xray inbound: $(uses_haproxy && echo 127.0.0.1 || server_public_ipv4):$(expected_xray_port)"
+  echo "  VLESS/Xray inbound: 127.0.0.1:$(expected_xray_port)"
   echo "  3x-ui automation: ${XUI_AUTO_SETUP}"
   confirm "Продолжить?" yes || fail "Cancelled"
 }
@@ -3460,9 +3390,6 @@ print_connection_summary(){
   [[ -f "$basic_note" ]] && echo "  Basic Auth:           $basic_note"
   [[ -f "$auto_note" ]] && echo "  3x-ui данные:         $auto_note"
   echo "  VLESS/Telegram links: формируются из актуальной базы 3x-ui"
-  if uses_mtproto && mtproto_backend_is_alexbers; then
-    [[ -f "$mt_users_note" ]] && echo "  MTProto users:        $mt_users_note"
-  fi
   echo
   echo "Показать секреты:"
   echo "  Все данные подключения: sudo ${SERVER_PREFIX}-links --show-secrets"
@@ -3520,17 +3447,11 @@ print_connection_secrets_summary(){
   echo "ФАЙЛЫ С ДАННЫМИ НА СЕРВЕРЕ:"
   [[ -f "$basic_note" ]] && echo "  $basic_note"
   [[ -f "$auto_note" ]] && echo "  $auto_note"
-  if uses_mtproto && mtproto_backend_is_alexbers; then
-    [[ -f "$mt_users_note" ]] && echo "  $mt_users_note"
-  fi
   echo
   echo "ПОЛЕЗНЫЕ КОМАНДЫ:"
   echo "  Открыть меню XPAM Script:          sudo ${SERVER_PREFIX}-xpam"
   echo "  Показать безопасную сводку:     sudo ${SERVER_PREFIX}-links"
-  echo "  Показать VLESS-ссылки:           sudo ${SERVER_PREFIX}-vless"
-  if uses_mtproto && mtproto_backend_is_alexbers; then
-    echo "  Управление MTProto пользователями: sudo ${SERVER_PREFIX}-tg"
-  fi
+  echo "  Показать все ссылки и секреты:  sudo ${SERVER_PREFIX}-links --show-secrets"
   echo "  Проверить состояние сервера:     sudo ${SERVER_PREFIX}-health"
   echo
   echo "============================================================"
@@ -3977,72 +3898,12 @@ stage_warp_3xui_youtube(){
 }
 
 
-stage_warp_menu(){
-  need_root
-  if [[ ! -f "$CONFIG_FILE" ]]; then
-    fail "Сначала выполните установку сервера через пункт 1. WARP настраивается после установки 3x-ui."
-  fi
-  load_config
-  validate_inputs
-  echo "WARP через 3x-ui / Xray"
-  echo "1) Настроить или проверить WARP outbound"
-  echo "2) Выйти"
-  local choice
-  read -r -p "Выберите пункт [1-2]: " choice || true
-  case "$choice" in
-    1) stage_warp_3xui_youtube ;;
-    2) return 0 ;;
-    *) fail "Неизвестный пункт меню" ;;
-  esac
-}
+# stage_warp_menu is defined in scripts/lib/xpam-xui.sh (sourced last; it is the
+# canonical WARP menu with enable/disable). The older core duplicate was removed in P2 cleanup.
 
-print_vless_summary(){
-  local auto_note
-  auto_note="/root/secure-notes/${SERVER_PREFIX}-3x-ui-auto.txt"
-
-  echo
-  echo "============================================================"
-  echo "VLESS-подключение"
-  echo "============================================================"
-  echo
-  echo "Эта команда по умолчанию НЕ печатает VLESS-ссылку, чтобы случайно не раскрыть доступ."
-  echo "Добавлять, удалять и менять VLESS-пользователей нужно в панели 3x-ui."
-  echo
-  echo "Панель 3x-ui:"
-  echo "  https://${PRIMARY_DOMAIN}/${PANEL_PATH}/"
-  echo
-  echo "VLESS-ссылки формируются из актуальной базы 3x-ui при каждом выводе."
-  echo
-  echo "Показать VLESS-ссылки на экран:"
-  echo "  sudo ${SERVER_PREFIX}-vless --show"
-  echo
-  echo "Все данные подключения:"
-  echo "  sudo ${SERVER_PREFIX}-links"
-  echo "============================================================"
-}
-
-stage_vless_direct(){
-  need_root
-  load_config
-  validate_inputs
-  case "${1:-}" in
-    --show)
-      warn "Ниже будут показаны приватные VLESS-ссылки из 3x-ui. Не отправляйте их в публичные чаты, тикеты, скриншоты и логи."
-      if ! print_vless_links_from_xui "/root/secure-notes/${SERVER_PREFIX}-3x-ui-auto.txt"; then
-        fail "VLESS-ссылки не найдены. Проверьте 3x-ui или выполните: sudo ${SERVER_PREFIX}-health --deep"
-      fi
-      ;;
-    --file)
-      warn "VLESS-ссылки больше не хранятся как source-of-truth файл. Используйте: sudo ${SERVER_PREFIX}-vless --show"
-      ;;
-    ""|--help|-h)
-      print_vless_summary
-      ;;
-    *)
-      fail "Неизвестный параметр. Используйте: sudo ${SERVER_PREFIX}-vless или sudo ${SERVER_PREFIX}-vless --show"
-      ;;
-  esac
-}
+# The separate <prefix>-vless command (stage_vless_direct/print_vless_summary) was removed in
+# P2 cleanup: VLESS links are shown by `<prefix>-links --show-secrets` together with the
+# Telegram link, so a VLESS-only command is redundant.
 
 stage_links_direct(){
   need_root
@@ -4050,14 +3911,10 @@ stage_links_direct(){
   validate_inputs
   case "${1:-}" in
     --show-secrets)
-      warn "Сейчас будут показаны пароли, VLESS/Telegram ссылки и другие секреты."
-      warn "Не отправляйте этот вывод в чаты, тикеты, скриншоты или публичные логи."
-      if confirm "Показать секреты на экран?" no; then
-        print_connection_secrets_summary
-      else
-        echo "Отменено. Безопасная сводка:"
-        print_connection_summary
-      fi
+      # The --show-secrets flag is itself the explicit opt-in; the caller is already root with
+      # server access, so no extra yes/no prompt (it only added friction and broke non-interactive use).
+      warn "Ниже — пароли, VLESS/Telegram ссылки и другие секреты. Не отправляйте этот вывод в чаты, тикеты, скриншоты или публичные логи."
+      print_connection_secrets_summary
       ;;
     ""|--safe|--help|-h)
       print_connection_summary
@@ -4076,29 +3933,15 @@ stage_show_details(){
   echo "Данные для подключения"
   echo "1) Показать безопасную сводку без секретов"
   echo "2) Показать секреты на экран"
-  if uses_mtproto && mtproto_backend_is_alexbers; then
-    echo "3) MTProto-пользователи"
-    echo "4) Выйти"
-    local choice
-    read -r -p "Выберите пункт [1-4]: " choice || true
-    case "$choice" in
-      1) print_connection_summary ;;
-      2) stage_links_direct --show-secrets ;;
-      3) stage_mtproto_users_menu ;;
-      4) return 0 ;;
-      *) fail "Неизвестный пункт меню" ;;
-    esac
-  else
-    echo "3) Выйти"
-    local choice
-    read -r -p "Выберите пункт [1-3]: " choice || true
-    case "$choice" in
-      1) print_connection_summary ;;
-      2) stage_links_direct --show-secrets ;;
-      3) return 0 ;;
-      *) fail "Неизвестный пункт меню" ;;
-    esac
-  fi
+  echo "3) Выйти"
+  local choice
+  read -r -p "Выберите пункт [1-3]: " choice || true
+  case "$choice" in
+    1) print_connection_summary ;;
+    2) stage_links_direct --show-secrets ;;
+    3) return 0 ;;
+    *) fail "Неизвестный пункт меню" ;;
+  esac
 }
 
 
@@ -4142,7 +3985,8 @@ stage_repair(){
   echo "============================================================"
   echo
   echo "Что делает repair: восстанавливает команды XPAM, health/weekly, service limits,"
-  echo "startup order, fail2ban policy, certbot hook и service hygiene."
+  echo "startup order, fail2ban policy, certbot hook, panel settings (webBasePath/cert),"
+  echo "subscription state и service hygiene."
   echo
   echo "Что repair НЕ делает: не меняет домены, VLESS UUID, Telegram secret,"
   echo "не удаляет пользователей и не переписывает /etc/network/interfaces."
@@ -4162,6 +4006,8 @@ stage_repair(){
   xpam_xui_cleanup_legacy_warp_workers || true
   xui_ensure_api_token || true
   xui_enforce_direct_ipv4_bind || true
+  xui_reassert_panel_settings || true
+  xui_disable_subscription || true
   apply_service_hygiene || true
   nginx -t >/dev/null 2>&1 && systemctl reload nginx || systemctl restart nginx || true
   systemctl try-restart x-ui || true

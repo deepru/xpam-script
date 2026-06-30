@@ -2,22 +2,28 @@
 set -u
 
 FAIL=0
+NET_LOCKED=0   # set to 1 on container/locked-sysctl hosts where net.* is provider-controlled
 
 ok() { echo "OK: $*"; }
 warn() { echo "WARNING: $*"; }
 bad() { echo "FAIL: $*"; FAIL=1; }
+note() { echo "INFO: $*"; }
+# On a locked/container kernel a net.* RUNTIME mismatch is environmental: not breakage and not
+# fixable from inside the box, so it must not FAIL a healthy server -> report INFO. The XPAM
+# persistent policy FILE (which we DO control) is still held to FAIL separately.
+runtime_miss() { if [ "$NET_LOCKED" -eq 1 ]; then note "$*"; else bad "$*"; fi; }
 
 expect_sysctl() {
   local key="$1" expected="$2" actual
   actual="$(sysctl -n "$key" 2>/dev/null | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//')" || {
-    bad "missing sysctl: $key"
+    runtime_miss "missing sysctl: $key"
     return
   }
 
   if [ "$actual" = "$expected" ]; then
     ok "$key = $actual"
   else
-    bad "$key expected '$expected', got '$actual'"
+    runtime_miss "$key expected '$expected', got '$actual'"
   fi
 }
 
@@ -43,7 +49,7 @@ check_qdisc_dev() {
   if tc qdisc show dev "$dev" 2>/dev/null | grep -q 'fq'; then
     ok "fq qdisc is present on $dev"
   else
-    bad "fq qdisc not found on $dev"
+    runtime_miss "fq qdisc not found on $dev"
     tc qdisc show dev "$dev" 2>/dev/null || true
   fi
 }
@@ -80,9 +86,27 @@ diagnose_tcp_syncookies() {
   fi
 
   if [ "$actual" != "1" ]; then
-    bad "tcp_syncookies runtime drift/override detected: expected 1, got ${actual:-missing}. Run sudo <prefix>-repair to restore XPAM runtime policy; if it returns to 0, provider/kernel or a later sysctl file is overriding it."
+    runtime_miss "tcp_syncookies runtime drift/override detected: expected 1, got ${actual:-missing}. Run sudo <prefix>-repair to restore XPAM runtime policy; if it returns to 0, provider/kernel or a later sysctl file is overriding it."
   fi
 }
+
+detect_net_locked() {
+  local virt cur
+  virt="$(systemd-detect-virt 2>/dev/null || true)"
+  case "$virt" in
+    openvz|lxc|lxc-libvirt|docker|podman|rkt|systemd-nspawn|container-other) NET_LOCKED=1 ;;
+  esac
+  # Probe: writing a net.* key back its own current value is a harmless no-op on a writable
+  # kernel, but is denied on container/locked-sysctl hosts -> treat the box as net-locked.
+  cur="$(sysctl -n net.ipv4.tcp_syncookies 2>/dev/null || true)"
+  if [ -n "$cur" ] && ! sysctl -w "net.ipv4.tcp_syncookies=$cur" >/dev/null 2>&1; then
+    NET_LOCKED=1
+  fi
+  if [ "$NET_LOCKED" -eq 1 ]; then
+    note "container/locked-sysctl environment (systemd-detect-virt='${virt:-unknown}'); net.* tunables are provider-controlled, so runtime sysctl mismatches below are informational, not failures"
+  fi
+}
+detect_net_locked
 
 echo "===== NETWORK TUNING POLICY CHECK ====="
 
@@ -149,9 +173,6 @@ echo
 echo "===== SERVICE NOFILE LIMIT CHECK ====="
 
 SERVICES_TO_CHECK="nginx x-ui haproxy"
-if [ "{{MTPROTO_BACKEND}}" != "3xui-mtg" ]; then
-  SERVICES_TO_CHECK="$SERVICES_TO_CHECK mtprotoproxy"
-fi
 
 for svc in $SERVICES_TO_CHECK; do
   if systemctl cat "$svc.service" >/dev/null 2>&1; then
@@ -160,11 +181,9 @@ for svc in $SERVICES_TO_CHECK; do
 
     if [ "$state" = "active" ]; then
       ok "$svc is active"
-    elif [ "$svc" = "haproxy" ] || [ "$svc" = "mtprotoproxy" ]; then
-      warn "$svc is installed but not active: $state; this is normal for direct VLESS profile"
-      continue
     else
       bad "$svc is installed but not active: $state"
+      continue
     fi
 
     case "$limit" in

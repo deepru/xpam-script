@@ -119,11 +119,9 @@ check_http "{{PRIMARY_DOMAIN}} panel path" 401 "https://{{PRIMARY_DOMAIN}}/{{PAN
 sshd -T -C user=root,host=localhost,addr=127.0.0.1 2>/dev/null | grep -q '^passwordauthentication no$' && echo "OK: SSH password auth disabled" || warn_fail "SSH password auth not disabled"
 if journalctl -u mtprotoproxy.service --no-pager -n 100 2>/dev/null | grep -Eiq 'tg://proxy|secret='; then warn_fail "possible MTProto secret in recent journal"; else echo "OK: no MTProto secret in recent journal"; fi
 if ! xpam_startup_order_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-startup-order-fail" "[$(xpam_server_label $XPAM_PREFIX)] HAProxy/MTProto startup order check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi
-if [[ "${PROFILE:-}" != "vless_direct" ]]; then
-  if ! xpam_mtproto_config_invariant_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-mtproto-invariants-fail" "[$(xpam_server_label $XPAM_PREFIX)] MTProto config invariant check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi
-  if ! xpam_mtproto_public_fallback_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-mtproto-public-fallback-fail" "[$(xpam_server_label $XPAM_PREFIX)] MTProto public fallback check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi
-  if ! xpam_mtproto_local_tls_backend_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-mtproto-local-tls-fail" "[$(xpam_server_label $XPAM_PREFIX)] MTProto local TLS backend check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi
-fi
+if ! xpam_mtproto_config_invariant_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-mtproto-invariants-fail" "[$(xpam_server_label $XPAM_PREFIX)] MTProto config invariant check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi
+if ! xpam_mtproto_public_fallback_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-mtproto-public-fallback-fail" "[$(xpam_server_label $XPAM_PREFIX)] MTProto public fallback check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi
+if ! xpam_mtproto_local_tls_backend_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-mtproto-local-tls-fail" "[$(xpam_server_label $XPAM_PREFIX)] MTProto local TLS backend check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi
 if ! xpam_xui_xray_config_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-xui-xray-config-fail" "[$(xpam_server_label $XPAM_PREFIX)] 3x-ui/Xray config check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi
 if ! xpam_xui_api_token_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-xui-api-token-fail" "[$(xpam_server_label $XPAM_PREFIX)] 3x-ui API token check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi
 xpam_xui_version_compat_check || true

@@ -390,7 +390,7 @@ xpam_update_link_hashes_capture(){
     return 0
   fi
   out="$(mktemp /tmp/xpam-update-links.XXXXXX)"
-  if echo "yes" | "/usr/local/sbin/${prefix}-links" --show-secrets > "$out" 2>/dev/null; then
+  if "/usr/local/sbin/${prefix}-links" --show-secrets > "$out" 2>/dev/null; then
     v="$(grep -Eo 'vless://[^[:space:]]+' "$out" | head -n1 | sha256sum | awk '{print $1}' || true)"
     tg="$(grep -Eo 'tg://proxy\?[^[:space:]]+' "$out" | head -n1 | sha256sum | awk '{print $1}' || true)"
     [[ -n "$v" ]] && printf 'XPAM_UPDATE_VLESS_HASH=%s\n' "$v" >> "$dest/link-hashes.env"
@@ -427,7 +427,7 @@ xpam_update_snapshot_create(){
   for p in \
     "/usr/local/sbin/${prefix}-xpam" "/usr/local/bin/${prefix}-xpam" \
     "/usr/local/sbin/${prefix}-health" "/usr/local/sbin/${prefix}-links" \
-    "/usr/local/sbin/${prefix}-vless" "/usr/local/sbin/${prefix}-repair" \
+    "/usr/local/sbin/${prefix}-repair" \
     "/usr/local/sbin/${prefix}-netdiag" "/usr/local/sbin/${prefix}-weekly-maintenance.sh" \
     "/usr/local/sbin/xpam-maint-common.sh" \
     "/usr/local/sbin/${prefix}-install" "/usr/local/bin/${prefix}-install"
@@ -478,7 +478,7 @@ xpam_update_rollback(){
     for p in \
       "/usr/local/sbin/${prefix}-xpam" "/usr/local/bin/${prefix}-xpam" \
       "/usr/local/sbin/${prefix}-health" "/usr/local/sbin/${prefix}-links" \
-      "/usr/local/sbin/${prefix}-vless" "/usr/local/sbin/${prefix}-repair" \
+      "/usr/local/sbin/${prefix}-repair" \
       "/usr/local/sbin/${prefix}-netdiag" "/usr/local/sbin/${prefix}-weekly-maintenance.sh" \
       "/usr/local/sbin/xpam-maint-common.sh" \
       "/usr/local/sbin/${prefix}-install" "/usr/local/bin/${prefix}-install"

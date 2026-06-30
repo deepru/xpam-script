@@ -444,8 +444,8 @@ dh_materialize_xray_template_if_missing(){
   # Some current/clean 3x-ui installs can run Xray normally while the
   # persistent settings.xrayTemplateConfig row is still absent. DoubleHop
   # mutates that persistent template, so materialize a safe template from the
-  # generated config before DH mutation.  Keep only the API/tunnel inbound in
-  # the template; proxy inbounds remain managed by the 3x-ui inbounds table and
+  # generated config before DH mutation.  Keep only the API inbound (identified by
+  # tag 'api', any protocol) in the template; proxy inbounds remain managed by the 3x-ui inbounds table and
   # will be re-rendered by 3x-ui. Preserve outbounds/routing/policy/log/stats.
   XPAM_DH_EXIT_TAG="$DH_EXIT_TAG" python3 - <<'PY_DH_MATERIALIZE'
 import json, os, sqlite3, sys
@@ -497,13 +497,13 @@ try:
     for ib in generated_inbounds:
         if not isinstance(ib, dict):
             continue
-        if ib.get('protocol') == 'tunnel' and ib.get('tag') == 'api':
+        if ib.get('tag') == 'api':  # 3x-ui API inbound; protocol varies by version (tunnel/dokodemo-door)
             api_inbounds.append(ib)
         else:
             non_api_inbounds.append(ib)
 
     if len(api_inbounds) != 1:
-        fail(f'expected exactly one api/tunnel inbound in generated config, got {len(api_inbounds)}')
+        fail(f"expected exactly one api inbound (tag=='api') in generated config, got {len(api_inbounds)}")
 
     # Safety: every non-api generated inbound must correspond to a 3x-ui DB inbound.
     # If a user manually injected a raw inbound only into generated config, automatic

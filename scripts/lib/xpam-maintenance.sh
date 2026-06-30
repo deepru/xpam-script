@@ -104,8 +104,8 @@ final_production_cleanup(){
   write_health_launcher || true
   write_weekly_launcher || true
   write_links_launcher || true
-  write_vless_launcher || true
-  write_tg_launcher || true
+  remove_legacy_vless_launcher || true
+  remove_legacy_tg_launcher || true
   write_repair_launcher || true
   write_netdiag_launcher || true
   write_health_weekly || true

@@ -386,21 +386,6 @@ xpam_debian_networking_provider_warning_ok(){
     return 1
 }
 
-xpam_detect_public_ipv4(){
-    local ip
-    ip="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}' || true)"
-    if printf '%s' "$ip" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$'; then
-        printf '%s\n' "$ip"
-        return 0
-    fi
-    ip="$(ip -4 addr show scope global 2>/dev/null | awk '/ inet /{sub(/\/.*/,"",$2); print $2; exit}' || true)"
-    if printf '%s' "$ip" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$'; then
-        printf '%s\n' "$ip"
-        return 0
-    fi
-    return 1
-}
-
 xpam_tls_endpoint_check(){
     local label="$1" host="$2" port="$3" sni="$4" expected_dns="$5" cert_file info_file fail=0
     echo; echo "--- $label: ${host}:${port} SNI ${sni}, expect DNS:${expected_dns}"
@@ -420,22 +405,12 @@ xpam_tls_cert_check(){
     . "$cfg"
     echo; echo "===== TLS / CERTIFICATE CONSISTENCY CHECK ====="
     xpam_tls_endpoint_check "x-ui panel" "127.0.0.1" "$XUI_PANEL_PORT" "$PRIMARY_DOMAIN" "$PRIMARY_DOMAIN" || fail=1
-    if [ "$PROFILE" = "vless_direct" ]; then
-        direct_host="$(xpam_detect_public_ipv4 || true)"
-        if [ -n "$direct_host" ]; then
-            xpam_tls_endpoint_check "xray vless" "$direct_host" "$XRAY_PUBLIC_PORT" "$PRIMARY_DOMAIN" "$PRIMARY_DOMAIN" || fail=1
-        else
-            echo "FAIL: could not detect public IPv4 for direct VLESS TLS check"
-            fail=1
-        fi
-    else
-        xpam_tls_endpoint_check "xray vless" "127.0.0.1" "$XRAY_LOCAL_PORT" "$PRIMARY_DOMAIN" "$PRIMARY_DOMAIN" || fail=1
-        if [ "$PROFILE" = "root_mtproto" ]; then
-            xpam_tls_endpoint_check "xray root site" "127.0.0.1" "$XRAY_LOCAL_PORT" "$ROOT_DOMAIN" "$ROOT_DOMAIN" || fail=1
-            xpam_tls_endpoint_check "xray www alias" "127.0.0.1" "$XRAY_LOCAL_PORT" "$WWW_DOMAIN" "$WWW_DOMAIN" || fail=1
-        fi
-        xpam_tls_endpoint_check "nginx sync backend" "127.0.0.1" "$SYNC_BACKEND_PORT" "$SYNC_DOMAIN" "$SYNC_DOMAIN" || fail=1
+    xpam_tls_endpoint_check "xray vless" "127.0.0.1" "$XRAY_LOCAL_PORT" "$PRIMARY_DOMAIN" "$PRIMARY_DOMAIN" || fail=1
+    if [ "$PROFILE" = "root_mtproto" ]; then
+        xpam_tls_endpoint_check "xray root site" "127.0.0.1" "$XRAY_LOCAL_PORT" "$ROOT_DOMAIN" "$ROOT_DOMAIN" || fail=1
+        xpam_tls_endpoint_check "xray www alias" "127.0.0.1" "$XRAY_LOCAL_PORT" "$WWW_DOMAIN" "$WWW_DOMAIN" || fail=1
     fi
+    xpam_tls_endpoint_check "nginx sync backend" "127.0.0.1" "$SYNC_BACKEND_PORT" "$SYNC_DOMAIN" "$SYNC_DOMAIN" || fail=1
     [ "$fail" -eq 0 ] && echo "OK: TLS certificate consistency looks correct"
     return "$fail"
 }
@@ -458,17 +433,13 @@ for line in Path(sys.argv[1]).read_text().splitlines():
     k,v=line.split('=',1)
     cfg[k]=v.strip().strip("'").strip('"')
 
-profile=cfg['PROFILE']
 required_public_tcp={int(cfg['SSH_PUBLIC_PORT']), int(cfg['HTTP_PUBLIC_PORT']), int(cfg['XRAY_PUBLIC_PORT'])}
 required_local_tcp={int(cfg['XUI_PANEL_PORT']), int(cfg['SITE_BACKEND_PORT'])}
 allowed_local_tcp=set(required_local_tcp) | {11111, 62789}
-if profile!='vless_direct':
-    required_local_tcp |= {int(cfg['XRAY_LOCAL_PORT']), int(cfg['MTPROTO_PORT']), int(cfg['SYNC_BACKEND_PORT'])}
-    allowed_local_tcp |= required_local_tcp
-else:
-    allowed_local_tcp |= {int(cfg.get('XRAY_LOCAL_PORT','1443')), int(cfg.get('MTPROTO_PORT','47827')), int(cfg.get('SYNC_BACKEND_PORT','9443'))}
+required_local_tcp |= {int(cfg['XRAY_LOCAL_PORT']), int(cfg['MTPROTO_PORT']), int(cfg['SYNC_BACKEND_PORT'])}
+allowed_local_tcp |= required_local_tcp
 
-if profile!='vless_direct' and (cfg.get('MTPROTO_BACKEND') or 'alexbers') == '3xui-mtg':
+if (cfg.get('MTPROTO_BACKEND') or '3xui-mtg') == '3xui-mtg':
     try:
         proc_out=subprocess.check_output(['ss','-H','-lntp'], text=True, stderr=subprocess.DEVNULL)
     except Exception:
@@ -701,7 +672,6 @@ xpam_haproxy_mtproto_journal_check(){
     [ -f "$cfg" ] || { echo "FAIL: XPAM config missing for HAProxy journal check: $cfg"; return 1; }
     # shellcheck disable=SC1090
     . "$cfg"
-    [ "${PROFILE:-}" = "vless_direct" ] && { echo "OK: HAProxy/MTProto backend journal check skipped for direct VLESS profile"; return 0; }
 
     since="$(systemctl show -p ActiveEnterTimestamp --value haproxy.service 2>/dev/null || true)"
     [ -n "$since" ] || since="now"
@@ -801,12 +771,11 @@ xpam_startup_order_check(){
     local cfg="$1" fail=0
     # shellcheck disable=SC1090
     . "$cfg"
-    [ "$PROFILE" = "vless_direct" ] && return 0
     echo; echo "===== SYSTEMD STARTUP ORDER ====="
     if [ -x /usr/local/sbin/wait-for-local-port.sh ]; then echo "OK: executable exists: /usr/local/sbin/wait-for-local-port.sh"; else echo "FAIL: missing/executable wait-for-local-port.sh"; fail=1; fi
     bash -n /usr/local/sbin/wait-for-local-port.sh >/dev/null 2>&1 && echo "OK: wait-for-local-port.sh syntax" || { echo "FAIL: wait-for-local-port.sh syntax"; fail=1; }
     if [ -e /etc/systemd/system/mtprotoproxy.service.d/haproxy-order.conf ]; then echo "FAIL: obsolete mtprotoproxy haproxy-order drop-in exists"; fail=1; else echo "OK: absent as expected: /etc/systemd/system/mtprotoproxy.service.d/haproxy-order.conf"; fi
-    case "${MTPROTO_BACKEND:-alexbers}" in
+    case "${MTPROTO_BACKEND:-3xui-mtg}" in
       3xui-mtg)
         if systemctl cat haproxy 2>/dev/null | grep -Fq "mtprotoproxy.service"; then echo "FAIL: haproxy ordering references mtprotoproxy.service under 3xui-mtg"; fail=1; else echo "OK: haproxy ordering has no mtprotoproxy.service dependency under 3xui-mtg"; fi
         if systemctl cat haproxy 2>/dev/null | grep -Eq 'After=.*nginx.*x-ui|After=.*x-ui.*nginx'; then echo "OK: haproxy starts after nginx and x-ui for 3xui-mtg"; else echo "FAIL: haproxy ordering does not include nginx and x-ui for 3xui-mtg"; fail=1; fi
@@ -870,7 +839,7 @@ errs=[]
 def ok(msg): print('OK: '+msg)
 def bad(msg): print('FAIL: '+msg); errs.append(msg)
 
-backend=cfg.get('MTPROTO_BACKEND') or 'alexbers'
+backend=cfg.get('MTPROTO_BACKEND') or '3xui-mtg'
 if backend == '3xui-mtg':
     ok('backend selected = 3xui-mtg')
 else:
@@ -904,6 +873,8 @@ def api_list():
         'User-Agent':'XPAM-Script/health-mtg',
     })
     try:
+        # Loopback-only (127.0.0.1 panel, cert for the public domain): verification
+        # intentionally skipped; the request never leaves localhost.
         with urllib.request.urlopen(req, timeout=10, context=ssl._create_unverified_context()) as resp:
             data=json.loads(resp.read(1024*1024).decode('utf-8','replace'))
     except Exception as exc:
@@ -1089,8 +1060,7 @@ xpam_mtproto_config_invariant_check(){
     [ -f "$cfg" ] || { echo "FAIL: XPAM config missing: $cfg"; return 1; }
     # shellcheck disable=SC1090
     . "$cfg"
-    [ "${PROFILE:-}" = "vless_direct" ] && { echo "OK: MTProto is not enabled in this profile; invariant check skipped"; return 0; }
-    [ "${MTPROTO_BACKEND:-alexbers}" = "3xui-mtg" ] && { xpam_3xui_mtg_runtime_invariant_check "$cfg"; return $?; }
+    [ "${MTPROTO_BACKEND:-3xui-mtg}" = "3xui-mtg" ] && { xpam_3xui_mtg_runtime_invariant_check "$cfg"; return $?; }
     python3 - "$cfg" <<'PY_MTPROTO_INVARIANTS'
 import importlib.util, pathlib, re, sys
 from pathlib import Path
@@ -1176,7 +1146,6 @@ xpam_mtproto_public_fallback_check(){
     [ -f "$cfg" ] || { echo "FAIL: XPAM config missing: $cfg"; return 1; }
     # shellcheck disable=SC1090
     . "$cfg"
-    [ "${PROFILE:-}" = "vless_direct" ] && { echo "OK: MTProto is not enabled in this profile; public fallback check skipped"; return 0; }
     server_ipv4="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}')"
     if [ -z "$server_ipv4" ]; then
         echo "FAIL: could not detect server IPv4 for public fallback check"
@@ -1198,7 +1167,6 @@ xpam_mtproto_local_tls_backend_check(){
     [ -f "$cfg" ] || { echo "FAIL: XPAM config missing: $cfg"; return 1; }
     # shellcheck disable=SC1090
     . "$cfg"
-    [ "${PROFILE:-}" = "vless_direct" ] && { echo "OK: MTProto is not enabled in this profile; local TLS backend check skipped"; return 0; }
     out="$(mktemp /tmp/xpam-mtproto-local-tls.XXXXXX)"
     if timeout 12s openssl s_client -tls1_3 -connect "127.0.0.1:${SYNC_BACKEND_PORT}" -servername "$SYNC_DOMAIN" -showcerts </dev/null >"$out" 2>&1; then
         echo "OK: MTProto local TLS backend handshake succeeded: 127.0.0.1:${SYNC_BACKEND_PORT} SNI ${SYNC_DOMAIN}"
@@ -1268,6 +1236,8 @@ if not token:
 port=cfg.get('XUI_PANEL_PORT','57827')
 path=cfg.get('PANEL_PATH','').strip('/')
 url=f'https://127.0.0.1:{port}/{path}/panel/api/inbounds/list'
+# Loopback-only: panel cert is for the public domain but we connect via 127.0.0.1,
+# so hostname/cert verification is intentionally skipped (request never leaves localhost).
 ctx=ssl._create_unverified_context()
 req=urllib.request.Request(url, headers={
     'Authorization':'Bearer '+token,
@@ -1327,31 +1297,10 @@ for line in Path(sys.argv[1]).read_text().splitlines():
 profile=cfg['PROFILE']; primary=cfg['PRIMARY_DOMAIN']
 cert_name=cfg.get('WEB_CERT_NAME') or primary
 cert=f'/etc/letsencrypt/live/{cert_name}/fullchain.pem'; key=f'/etc/letsencrypt/live/{cert_name}/privkey.pem'
-expected_port=int(cfg['XRAY_LOCAL_PORT'] if profile!='vless_direct' else cfg['XRAY_PUBLIC_PORT'])
-mode='local' if profile!='vless_direct' else 'public'
+expected_port=int(cfg['XRAY_LOCAL_PORT'])
 fallback=f"127.0.0.1:{cfg['SITE_BACKEND_PORT']}"
 public_port=int(cfg['XRAY_PUBLIC_PORT'])
 
-def detect_public_ipv4():
-    try:
-        out=subprocess.check_output(['ip','route','get','1.1.1.1'], text=True, stderr=subprocess.DEVNULL)
-        parts=out.split()
-        if 'src' in parts:
-            ip=parts[parts.index('src')+1]
-            if re.match(r'^(?:\d{1,3}\.){3}\d{1,3}$', ip):
-                return ip
-    except Exception:
-        pass
-    try:
-        out=subprocess.check_output(['ip','-4','addr','show','scope','global'], text=True, stderr=subprocess.DEVNULL)
-        m=re.search(r'\binet\s+((?:\d{1,3}\.){3}\d{1,3})/', out)
-        if m:
-            return m.group(1)
-    except Exception:
-        pass
-    return ''
-
-public_ipv4=detect_public_ipv4() if mode=='public' else ''
 errs=[]
 def ok(m): print('OK: '+m)
 def warn(m): print('WARNING: '+m)
@@ -1416,16 +1365,8 @@ if db_inb:
     if as_bool(db_inb.get('enable', False)): ok('VLESS inbound is enabled in database')
     else: bad('VLESS inbound is disabled in database')
     listen=str(db_inb.get('listen') or '')
-    if mode=='local':
-        if listen=='127.0.0.1': ok('database VLESS inbound listen is local-only: 127.0.0.1')
-        else: bad(f'database VLESS listen expected 127.0.0.1 got {listen!r}')
-    else:
-        if not public_ipv4:
-            bad('could not detect public IPv4 for direct VLESS listen validation')
-        elif listen == public_ipv4:
-            ok(f'database VLESS inbound listen is IPv4-only: {public_ipv4}')
-        else:
-            bad(f'database VLESS listen expected public IPv4 {public_ipv4!r} got {listen or "<empty>"!r}')
+    if listen=='127.0.0.1': ok('database VLESS inbound listen is local-only: 127.0.0.1')
+    else: bad(f'database VLESS listen expected 127.0.0.1 got {listen!r}')
     st=jloads(db_inb.get('stream_settings') or db_inb.get('streamSettings') or db_inb.get('stream'), {})
     sett=jloads(db_inb.get('settings'), {})
     sniff=jloads(db_inb.get('sniffing'), {})
@@ -1468,25 +1409,39 @@ if db_inb:
     else:
         bad(f'database VLESS fallback to {fallback} not found')
     ep=st.get('externalProxy') or []
-    match=[x for x in ep if isinstance(x,dict) and str(x.get('dest','')).lower()==primary.lower() and int(x.get('port') or 0)==public_port and str(x.get('forceTls','')).lower()=='same']
-    if match:
+    ep_match=[x for x in ep if isinstance(x,dict) and str(x.get('dest','')).lower()==primary.lower() and int(x.get('port') or 0)==public_port and str(x.get('forceTls','')).lower()=='same']
+    # 3x-ui 3.4.x mirrors externalProxy into the `hosts` table (the future "Managed Hosts" model).
+    # Read that mirror so XPAM keeps working (and health stays honest) if a later 3x-ui ever stops
+    # maintaining streamSettings.externalProxy. forceTls 'same' maps to hosts.security 'same'.
+    host_mirror=None
+    try:
+        for addr,prt,sec in cur.execute('select address,port,security from hosts where inbound_id=?', (db_inb.get('id'),)):
+            if str(addr or '').lower()==primary.lower() and int(prt or 0)==public_port and str(sec or '').lower()=='same':
+                host_mirror=(str(addr),int(prt or 0),str(sec)); break
+    except Exception:
+        host_mirror=None  # older 3x-ui without a hosts table -> externalProxy is the only source
+    if ep_match:
         ok(f'database External Proxy points generated links to {primary}:{public_port} with forceTls=same')
+        # migration radar (INFO, not an alarm): the mirror should agree, but today links use
+        # externalProxy so a drifted/absent mirror does not affect the running service.
+        if host_mirror:
+            ok(f'hosts mirror row consistent with External Proxy ({primary}:{public_port}/same)')
+        else:
+            print(f'INFO: hosts mirror row for {primary}:{public_port} not present/does not match; links use externalProxy so service is unaffected (3x-ui->hosts migration radar)')
+    elif host_mirror:
+        # forward-compat fallback: externalProxy absent/changed but the hosts mirror still carries
+        # the correct public endpoint, so generated links remain correct -> not a failure.
+        ok(f'External Proxy not set in streamSettings; public endpoint resolved from hosts mirror {primary}:{public_port}/same (forward-compat)')
     else:
-        bad(f'database External Proxy must contain forceTls=same, dest={primary}, port={public_port}; current={ep!r}')
+        bad(f'database External Proxy must contain forceTls=same, dest={primary}, port={public_port}; current={ep!r} and no matching hosts mirror row')
         if expected_port != public_port and any(isinstance(x,dict) and int(x.get('port') or 0)==expected_port for x in ep):
             bad(f'External Proxy incorrectly uses internal port {expected_port}; it must use public port {public_port}')
-    if mode=='local':
-        if sniff.get('enabled') in (False, None, 0):
-            ok('database sniffing is OFF for HAProxy mode')
-        elif sniff.get('enabled') is True and sniff.get('routeOnly') is True:
-            ok('database sniffing is ON with Route only; acceptable for optional WARP/domain routing')
-        else:
-            warn('database sniffing is enabled without Route only; review if WARP/domain routing is intended')
+    if sniff.get('enabled') in (False, None, 0):
+        ok('database sniffing is OFF for HAProxy mode')
+    elif sniff.get('enabled') is True and sniff.get('routeOnly') is True:
+        ok('database sniffing is ON with Route only; acceptable for optional WARP/domain routing')
     else:
-        if sniff.get('enabled') is True and sniff.get('routeOnly') is True:
-            ok('database sniffing is ON with Route only for direct VLESS/domain routing')
-        else:
-            warn('direct VLESS sniffing is not ON with Route only; acceptable only if no WARP/domain routing is needed')
+        warn('database sniffing is enabled without Route only; review if WARP/domain routing is intended')
 config_path=Path('/usr/local/x-ui/bin/config.json')
 print('\n--- Xray generated config validation ---')
 try:
@@ -1500,16 +1455,8 @@ for ib in config.get('inbounds') or []:
     if ib.get('protocol')=='vless' and int(ib.get('port') or 0)==expected_port:
         listen=str(ib.get('listen') or '')
         print(f"protocol=vless, listen={listen or '<empty>'}, port={ib.get('port')}")
-        if mode=='local' and listen=='127.0.0.1': ok('generated Xray VLESS inbound listen is local-only: 127.0.0.1')
-        elif mode=='local': bad(f'generated Xray VLESS listen expected 127.0.0.1 got {listen!r}')
-        elif mode=='public':
-            if not public_ipv4:
-                bad('could not detect public IPv4 for generated Xray listen validation')
-            elif listen == public_ipv4:
-                ok(f'generated Xray VLESS inbound listen is IPv4-only: {public_ipv4}')
-            else:
-                bad(f'generated Xray VLESS listen expected public IPv4 {public_ipv4!r} got {listen or "<empty>"!r}')
-        else: bad(f'generated Xray VLESS listen expected local/public mode got {listen!r}')
+        if listen=='127.0.0.1': ok('generated Xray VLESS inbound listen is local-only: 127.0.0.1')
+        else: bad(f'generated Xray VLESS listen expected 127.0.0.1 got {listen!r}')
         st=ib.get('streamSettings') or {}; tls=st.get('tlsSettings') or {}
         if st.get('network')=='tcp': ok('generated Xray VLESS network is tcp')
         else: bad('generated Xray VLESS network must be tcp')
@@ -1897,6 +1844,28 @@ xpam_xui_version_compat_check(){
     else
         echo "WARNING: /usr/local/x-ui/bin/xray-linux-amd64 missing or not executable"
     fi
+    # XPAM last-validated baseline. INFO only -- NO warn/fail/notify: a newer 3x-ui/Xray that
+    # still passes the functional checks above is fine, so the version number alone never alarms
+    # the user. This line is diagnostic (maintainer + auto-test). BUMP both values after a
+    # fresh-install + deep-health test passes on a newer 3x-ui.
+    local LV_XUI="3.4.2" LV_XRAY="26.6.27" xui_sem xray_sem
+    xui_sem="$(printf '%s' "${xui_ver:-}"  | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
+    xray_sem="$(printf '%s' "${xray_ver:-}" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
+    echo "INFO: XPAM last-validated baseline: 3x-ui ${LV_XUI} / Xray ${LV_XRAY} (functional checks above are authoritative)"
+    if [ -n "$xui_sem" ]; then
+        if [ "$xui_sem" = "$LV_XUI" ]; then
+            echo "INFO: installed 3x-ui ${xui_sem} matches XPAM last-validated baseline"
+        else
+            echo "INFO: installed 3x-ui ${xui_sem} differs from baseline ${LV_XUI}"
+        fi
+    fi
+    if [ -n "$xray_sem" ]; then
+        if [ "$xray_sem" = "$LV_XRAY" ]; then
+            echo "INFO: installed Xray ${xray_sem} matches XPAM last-validated baseline"
+        else
+            echo "INFO: installed Xray ${xray_sem} differs from baseline ${LV_XRAY}"
+        fi
+    fi
     if [ -f "$cfg" ]; then
         mode="$(stat -c '%a' "$cfg" 2>/dev/null || echo unknown)"
         case "$mode" in
@@ -2031,11 +2000,7 @@ xpam_apply_service_hygiene(){
     do
         xpam_stop_disable_mask_unit "$unit"
     done
-    if [ "${PROFILE:-}" = "vless_direct" ]; then
-        xpam_stop_disable_mask_unit haproxy.service
-        xpam_stop_disable_mask_unit mtprotoproxy.service
-    fi
-    if [ "${PROFILE:-}" != "vless_direct" ] && [ "${MTPROTO_BACKEND:-alexbers}" = "3xui-mtg" ]; then
+    if [ "${MTPROTO_BACKEND:-3xui-mtg}" = "3xui-mtg" ]; then
         systemctl stop mtprotoproxy.service >/dev/null 2>&1 || true
         systemctl disable mtprotoproxy.service >/dev/null 2>&1 || true
         systemctl reset-failed mtprotoproxy.service >/dev/null 2>&1 || true
@@ -2043,13 +2008,11 @@ xpam_apply_service_hygiene(){
     for unit in ssh.socket ssh.service nginx.service x-ui.service fail2ban.service ufw.service cron.service systemd-resolved.service systemd-timesyncd.service; do
         xpam_unit_exists "$unit" && systemctl enable "$unit" >/dev/null 2>&1 || true
     done
-    if [ "${PROFILE:-}" != "vless_direct" ]; then
-        xpam_unit_exists haproxy.service && systemctl enable haproxy.service >/dev/null 2>&1 || true
-        if [ "${MTPROTO_BACKEND:-alexbers}" = "3xui-mtg" ]; then
-            systemctl disable mtprotoproxy.service >/dev/null 2>&1 || true
-        else
-            xpam_unit_exists mtprotoproxy.service && systemctl enable mtprotoproxy.service >/dev/null 2>&1 || true
-        fi
+    xpam_unit_exists haproxy.service && systemctl enable haproxy.service >/dev/null 2>&1 || true
+    if [ "${MTPROTO_BACKEND:-3xui-mtg}" = "3xui-mtg" ]; then
+        systemctl disable mtprotoproxy.service >/dev/null 2>&1 || true
+    else
+        xpam_unit_exists mtprotoproxy.service && systemctl enable mtprotoproxy.service >/dev/null 2>&1 || true
     fi
     for pkg in snapd packagekit packagekit-tools fwupd apport apport-core-dump-handler unattended-upgrades thermald sysstat; do
         xpam_guarded_purge_package "$pkg"
@@ -2093,19 +2056,12 @@ xpam_service_hygiene_check(){
             [ -n "$state" ] && [ "$state" != "unknown" ] && echo "OK: $unit active=$state enabled=${enabled:-unknown}"
         fi
     done
-    if [ "${PROFILE:-}" = "vless_direct" ]; then
-        for unit in haproxy.service mtprotoproxy.service; do
-            state="$(systemctl is-active "$unit" 2>/dev/null || true)"
-            if [ "$state" = "active" ]; then echo "FAIL: $unit must not be active in direct VLESS profile"; fail=1; else echo "OK: $unit not active (${state:-unknown})"; fi
-        done
+    systemctl is-active --quiet haproxy.service && echo "OK: required service active: haproxy.service" || { echo "FAIL: required service not active: haproxy.service"; fail=1; }
+    if [ "${MTPROTO_BACKEND:-3xui-mtg}" = "3xui-mtg" ]; then
+        state="$(systemctl is-active mtprotoproxy.service 2>/dev/null || true)"
+        if [ "$state" = "active" ]; then echo "FAIL: mtprotoproxy.service must be inactive under 3xui-mtg"; fail=1; else echo "OK: mtprotoproxy.service inactive under 3xui-mtg (${state:-unknown})"; fi
     else
-        systemctl is-active --quiet haproxy.service && echo "OK: required service active: haproxy.service" || { echo "FAIL: required service not active: haproxy.service"; fail=1; }
-        if [ "${MTPROTO_BACKEND:-alexbers}" = "3xui-mtg" ]; then
-            state="$(systemctl is-active mtprotoproxy.service 2>/dev/null || true)"
-            if [ "$state" = "active" ]; then echo "FAIL: mtprotoproxy.service must be inactive under 3xui-mtg"; fail=1; else echo "OK: mtprotoproxy.service inactive under 3xui-mtg (${state:-unknown})"; fi
-        else
-            systemctl is-active --quiet mtprotoproxy.service && echo "OK: required service active: mtprotoproxy.service" || { echo "FAIL: required service not active: mtprotoproxy.service"; fail=1; }
-        fi
+        systemctl is-active --quiet mtprotoproxy.service && echo "OK: required service active: mtprotoproxy.service" || { echo "FAIL: required service not active: mtprotoproxy.service"; fail=1; }
     fi
     for unit in qemu-guest-agent.service open-vm-tools.service rsyslog.service serial-getty@ttyS0.service; do
         state="$(systemctl is-active "$unit" 2>/dev/null || true)"

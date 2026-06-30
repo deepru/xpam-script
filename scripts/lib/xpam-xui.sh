@@ -121,6 +121,9 @@ xpam_xui_api_token_usable(){
 import json, os, ssl, sys, urllib.error, urllib.request
 url=os.environ['XPAM_XUI_API_URL']
 token=os.environ['XPAM_XUI_API_TOKEN']
+# Loopback-only: the 3x-ui panel listens on 127.0.0.1 with a cert issued for the
+# public domain, so connecting by IP intentionally mismatches hostname/cert. The
+# request never leaves localhost; panel cert validity is asserted by the TLS checks.
 ctx=ssl._create_unverified_context()
 req=urllib.request.Request(url, headers={
     'Authorization': 'Bearer '+token,
@@ -163,6 +166,9 @@ from urllib.request import HTTPCookieProcessor, build_opener
 base=os.environ['XPAM_XUI_BASE_URL'].rstrip('/')
 username=os.environ['XPAM_XUI_ADMIN_USER']
 password=os.environ['XPAM_XUI_ADMIN_PASS']
+# Loopback-only: the 3x-ui panel listens on 127.0.0.1 with a cert issued for the
+# public domain, so connecting by IP intentionally mismatches hostname/cert. The
+# request never leaves localhost; panel cert validity is asserted by the TLS checks.
 ctx=ssl._create_unverified_context()
 cj=CookieJar()
 opener=build_opener(HTTPCookieProcessor(cj), urllib.request.HTTPSHandler(context=ctx))
@@ -354,6 +360,9 @@ payload=os.environ['XPAM_XUI_API_PAYLOAD']
 out_path=os.environ['XPAM_XUI_API_OUT']
 err_path=os.environ['XPAM_XUI_API_ERR']
 token=os.environ['XPAM_XUI_API_TOKEN']
+# Loopback-only: the 3x-ui panel listens on 127.0.0.1 with a cert issued for the
+# public domain, so connecting by IP intentionally mismatches hostname/cert. The
+# request never leaves localhost; panel cert validity is asserted by the TLS checks.
 ctx=ssl._create_unverified_context()
 try:
     data=open(payload, 'rb').read()
@@ -389,6 +398,9 @@ url=os.environ['XPAM_XUI_API_URL']
 out_path=os.environ['XPAM_XUI_API_OUT']
 err_path=os.environ['XPAM_XUI_API_ERR']
 token=os.environ['XPAM_XUI_API_TOKEN']
+# Loopback-only: the 3x-ui panel listens on 127.0.0.1 with a cert issued for the
+# public domain, so connecting by IP intentionally mismatches hostname/cert. The
+# request never leaves localhost; panel cert validity is asserted by the TLS checks.
 ctx=ssl._create_unverified_context()
 try:
     req=urllib.request.Request(url, method='GET', headers={
@@ -531,13 +543,11 @@ xpam_xui_run_installer_sanitized(){
 }
 
 xpam_xui_warp_disable_reset(){
-  local db backup_dir backup expected_port restore_mode
+  local db backup_dir backup expected_port
   db="/etc/x-ui/x-ui.db"
   xui_assert_sqlite_backend
   [[ -s "$db" ]] || fail "3x-ui DB не найден: $db"
   expected_port="$(expected_xray_port)"
-  restore_mode="haproxy"
-  uses_haproxy || restore_mode="direct"
 
   backup_dir="/root/manual-backups/xui-warp-disable"
   mkdir -p "$backup_dir"
@@ -548,14 +558,13 @@ xpam_xui_warp_disable_reset(){
   ok "Backup 3x-ui DB создан: $backup"
   prune_keep_latest "$backup_dir" "x-ui.db.*" 4
 
-  export XPAM_XUI_DB="$db" XPAM_EXPECTED_XRAY_PORT="$expected_port" XPAM_WARP_RESTORE_MODE="$restore_mode"
+  export XPAM_XUI_DB="$db" XPAM_EXPECTED_XRAY_PORT="$expected_port"
   python3 <<'PY_XPAM_XUI_WARP_DISABLE'
 import json, os, sqlite3, sys
 from pathlib import Path
 
 db=Path(os.environ['XPAM_XUI_DB'])
 expected_port=int(os.environ['XPAM_EXPECTED_XRAY_PORT'])
-restore_mode=os.environ.get('XPAM_WARP_RESTORE_MODE','haproxy')
 
 def ok(msg):
     print('OK:', msg)
@@ -640,12 +649,8 @@ try:
     cols=[r[1] for r in cur.execute('PRAGMA table_info(inbounds)').fetchall()]
     if {'id','port','protocol','sniffing'} <= set(cols):
         rows=cur.execute("SELECT id, remark, sniffing FROM inbounds WHERE protocol='vless' AND port=?", (expected_port,)).fetchall()
-        if restore_mode == 'haproxy':
-            sniff={"enabled": False, "destOverride": [], "metadataOnly": False, "routeOnly": False}
-            sniff_msg="sniffing выключен"
-        else:
-            sniff={"enabled": True, "destOverride": ["http","tls","quic"], "metadataOnly": False, "routeOnly": True}
-            sniff_msg="sniffing восстановлен в direct-profile состояние Route only"
+        sniff={"enabled": False, "destOverride": [], "metadataOnly": False, "routeOnly": False}
+        sniff_msg="sniffing выключен"
         for inbound_id, remark, old in rows:
             cur.execute("UPDATE inbounds SET sniffing=? WHERE id=?", (json.dumps(sniff, separators=(',',':')), inbound_id))
             changed=True
@@ -691,11 +696,7 @@ stage_warp_3xui_disable(){
   echo "Будет отключён только XPAM-managed WARP state:"
   echo "  - outbound tag=warp protocol=wireguard;"
   echo "  - routing rules с outboundTag=warp;"
-  if uses_haproxy; then
-    echo "  - sniffing у XPAM-managed VLESS inbound будет выключен."
-  else
-    echo "  - sniffing у XPAM-managed VLESS inbound будет возвращён в direct-profile режим Route only."
-  fi
+  echo "  - sniffing у XPAM-managed VLESS inbound будет выключен."
   echo
   echo "Пользовательские WireGuard/WARP outbound с другими tag не удаляются."
   echo "Перед изменением будет создан backup /etc/x-ui/x-ui.db."

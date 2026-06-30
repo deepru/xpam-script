@@ -124,6 +124,9 @@ site_verify_index_files(){
 
 site_http_code(){
   local url="$1"
+  # -k is intentional: this is an HTTP status/reachability probe, not a security check.
+  # Certificate validity is asserted separately by the TLS cert checks, so the probe
+  # must not fail on transient cert state (e.g. mid-renewal) and mask a real status code.
   curl -k -sS -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 25 "$url" 2>/dev/null || true
 }
 

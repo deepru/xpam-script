@@ -98,7 +98,6 @@ sudo <prefix>-health
 sudo <prefix>-health --deep
 sudo <prefix>-links
 sudo <prefix>-links --show-secrets
-sudo <prefix>-vless
 sudo <prefix>-repair
 sudo <prefix>-netdiag
 ```
