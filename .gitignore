@@ -14,6 +14,7 @@ config-backups/
 manual-backups/
 
 # Local install/build/test directories
+dist/
 xpam-install/
 xpam-v*/
 xpam-*-build/

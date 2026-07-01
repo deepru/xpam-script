@@ -185,6 +185,7 @@ def jloads(x, default):
     except Exception:
         return default
 
+cur=None  # stays None if the DB connect fails; later cur.execute calls are try-guarded
 try:
     conn=sqlite3.connect('/etc/x-ui/x-ui.db')
     cur=conn.cursor()

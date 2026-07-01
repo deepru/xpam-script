@@ -414,7 +414,7 @@ validate_panel_path(){
   esac
 }
 
-require_os(){ source /etc/os-release || true; case "${ID:-}" in ubuntu|debian) ok "OS supported: ${PRETTY_NAME:-$ID}" ;; *) fail "Unsupported OS: ${PRETTY_NAME:-unknown}. Use Ubuntu 24.04 or Debian 12." ;; esac; }
+require_os(){ source /etc/os-release || true; case "${ID:-}" in ubuntu|debian) ok "OS supported: ${PRETTY_NAME:-$ID}" ;; *) fail "Unsupported OS: ${PRETTY_NAME:-unknown}. Use a recent Ubuntu or Debian (e.g. Ubuntu 24.04/26.04, Debian 12/13)." ;; esac; }
 # Reject configs from removed profiles/backends. vless_direct and the alexbers/
 # teleproxy MTProto backends were dropped; only subdomains_mtproto/root_mtproto with
 # the 3xui-mtg backend remain. Empty is allowed so install-wizard flows (which set
@@ -3975,11 +3975,62 @@ stage_install_continue(){
 
 
 
+xpam_repair_restore_db_from_snapshot(){
+  # Restore /etc/x-ui/x-ui.db from the latest golden config snapshot. This recovers
+  # panel DATA (clients/inbounds/MTProto secret) that repair cannot regenerate. Sets
+  # XPAM_RESTORE_PRE_BACKUP to a copy of the pre-restore db so the caller can roll
+  # back if health fails afterwards. Hard-fails on any unrecoverable error.
+  local db="/etc/x-ui/x-ui.db" backup_dir snapshot tmp restored pre_dir label confirm
+  backup_dir="/root/config-backups"
+  snapshot="$(ls -1t "${backup_dir}/${SERVER_PREFIX}-config-"*.tar.gz 2>/dev/null | head -1 || true)"
+  [[ -n "$snapshot" && -f "$snapshot" ]] || fail "No golden config snapshot found in ${backup_dir}"
+  label="$(basename "$snapshot")"
+  say "Latest golden snapshot: $label"
+
+  tmp="$(mktemp -d /tmp/xpam-restore-db.XXXXXX)"
+  # Snapshot tar stores absolute paths; extract only the x-ui.db entry.
+  tar -xzf "$snapshot" -C "$tmp" etc/x-ui/x-ui.db 2>/dev/null \
+    || tar -xzf "$snapshot" -C "$tmp" /etc/x-ui/x-ui.db 2>/dev/null || true
+  restored="$tmp/etc/x-ui/x-ui.db"
+  [[ -s "$restored" ]] || { rm -rf "$tmp"; fail "Snapshot has no /etc/x-ui/x-ui.db: $label"; }
+  if ! sqlite3 "$restored" "PRAGMA integrity_check;" 2>/dev/null | grep -qi '^ok$'; then
+    rm -rf "$tmp"; fail "Restored x-ui.db failed integrity_check: $label"
+  fi
+
+  warn "Full restore will REPLACE the current 3x-ui database with snapshot: $label"
+  warn "Clients / inbounds / secrets created AFTER that snapshot will be LOST."
+  read -r -p "Type restore-full to confirm: " confirm || true
+  [[ "$confirm" == "restore-full" ]] || { rm -rf "$tmp"; fail "Full restore cancelled"; }
+
+  pre_dir="/root/manual-backups/xui-pre-restore"
+  mkdir -p "$pre_dir"; chmod 700 "$pre_dir"
+  XPAM_RESTORE_PRE_BACKUP="${pre_dir}/x-ui.db.$(date +%Y%m%d-%H%M%S)"
+  cp -a "$db" "$XPAM_RESTORE_PRE_BACKUP" 2>/dev/null || true
+  chmod 600 "$XPAM_RESTORE_PRE_BACKUP" 2>/dev/null || true
+  prune_keep_latest "$pre_dir" "x-ui.db.*" 4
+
+  systemctl stop x-ui 2>/dev/null || true
+  if ! install -m 600 "$restored" "$db"; then
+    systemctl start x-ui 2>/dev/null || true; rm -rf "$tmp"; fail "Failed to install restored x-ui.db"
+  fi
+  rm -f /etc/x-ui/x-ui.db-wal /etc/x-ui/x-ui.db-shm 2>/dev/null || true
+  rm -rf "$tmp"
+  systemctl start x-ui || fail "x-ui failed to start after restoring db from snapshot"
+  sleep 4
+  ok "x-ui.db restored from snapshot: $label (pre-restore backup: $XPAM_RESTORE_PRE_BACKUP)"
+}
+
 stage_repair(){
   need_root
   ensure_sudo_hostname_resolution
   load_config
   validate_inputs
+  local repair_full=0
+  case "${1:-}" in
+    ""|--) : ;;
+    --full) repair_full=1 ;;
+    *) fail "Unknown repair option: ${1}. Supported: --full" ;;
+  esac
   echo "============================================================"
   echo "Repair: восстановление XPAM-обвязки"
   echo "============================================================"
@@ -3990,6 +4041,9 @@ stage_repair(){
   echo
   echo "Что repair НЕ делает: не меняет домены, VLESS UUID, Telegram secret,"
   echo "не удаляет пользователей и не переписывает /etc/network/interfaces."
+  echo
+  echo "Опция --full дополнительно ВОССТАНАВЛИВАЕТ базу 3x-ui (клиенты/inbound'ы/секреты)"
+  echo "из последнего golden-снапшота, с откатом при неудачной проверке health."
   echo
   say "Repair XPAM service policy"
   install_runtime_kit || true
@@ -4002,6 +4056,9 @@ stage_repair(){
   write_wait_for_port || true
   write_certbot_hook || true
   write_health_weekly || true
+  if [[ "$repair_full" == "1" ]]; then
+    xpam_repair_restore_db_from_snapshot
+  fi
   xui_assert_sqlite_backend
   xpam_xui_cleanup_legacy_warp_workers || true
   xui_ensure_api_token || true
@@ -4009,13 +4066,28 @@ stage_repair(){
   xui_reassert_panel_settings || true
   xui_disable_subscription || true
   apply_service_hygiene || true
-  nginx -t >/dev/null 2>&1 && systemctl reload nginx || systemctl restart nginx || true
+  write_nginx_final || true
   systemctl try-restart x-ui || true
   if uses_mtproto; then
     mtproto_backend_repair_after_update || true
     write_haproxy || systemctl try-reload-or-restart haproxy || true
   fi
-  run_health_quiet "repair" || fail "Repair завершён, но health-check всё ещё показывает проблемы"
+  if ! run_health_quiet "repair"; then
+    if [[ "$repair_full" == "1" && -n "${XPAM_RESTORE_PRE_BACKUP:-}" && -s "${XPAM_RESTORE_PRE_BACKUP:-/nonexistent}" ]]; then
+      warn "Health failed after --full restore; rolling back to the pre-restore database"
+      systemctl stop x-ui 2>/dev/null || true
+      install -m 600 "$XPAM_RESTORE_PRE_BACKUP" /etc/x-ui/x-ui.db || true
+      rm -f /etc/x-ui/x-ui.db-wal /etc/x-ui/x-ui.db-shm 2>/dev/null || true
+      systemctl start x-ui || true
+      sleep 4
+      xui_enforce_direct_ipv4_bind || true
+      xui_reassert_panel_settings || true
+      xui_disable_subscription || true
+      run_health_quiet "repair-rollback" || true
+      fail "Full restore was rolled back after a health failure; server returned to the pre-restore state"
+    fi
+    fail "Repair завершён, но health-check всё ещё показывает проблемы"
+  fi
   ok "Repair завершён"
 }
 

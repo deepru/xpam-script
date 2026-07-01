@@ -85,7 +85,7 @@ fi
 export XPAM_SCRIPT_QUIET_LOAD_CONFIG=1
 # shellcheck source=/dev/null
 source "\$KIT_DIR/scripts/xpam-core.sh"
-stage_repair
+stage_repair "\$@"
 EOF_REPAIR_LAUNCHER
   chmod 755 "$launcher"
   ln -sf "$launcher" "$bin_link" 2>/dev/null || true

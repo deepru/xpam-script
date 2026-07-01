@@ -127,7 +127,6 @@ xpam_config_snapshot(){
       /etc/fail2ban \
       /etc/ufw \
       /usr/local/sbin \
-      /opt/mtprotoproxy/config.py \
       /etc/x-ui/x-ui.db \
       /usr/local/x-ui/bin/config.json
     do
@@ -333,6 +332,46 @@ xpam_disk_inode_check(){
     journalctl --disk-usage 2>/dev/null || true
     return "$fail"
 }
+xpam_memory_pressure_check(){
+    echo; echo "===== MEMORY PRESSURE CHECK ====="
+    local mem_total mem_avail swap_total swap_free avail_pct swap_used swap_used_pct fail=0
+    mem_total="$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+    mem_avail="$(awk '/^MemAvailable:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+    swap_total="$(awk '/^SwapTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+    swap_free="$(awk '/^SwapFree:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+    if [ "${mem_total:-0}" -le 0 ] || [ "${mem_avail:-0}" -le 0 ]; then
+        echo "WARNING: could not read memory info from /proc/meminfo"
+        return 0
+    fi
+    avail_pct=$(( mem_avail * 100 / mem_total ))
+    echo "RAM available: $(( mem_avail / 1024 )) MB of $(( mem_total / 1024 )) MB (${avail_pct}%)"
+    swap_used_pct=0
+    if [ "${swap_total:-0}" -gt 0 ]; then
+        swap_used=$(( swap_total - swap_free ))
+        swap_used_pct=$(( swap_used * 100 / swap_total ))
+        echo "Swap used: $(( swap_used / 1024 )) MB of $(( swap_total / 1024 )) MB (${swap_used_pct}%)"
+    else
+        echo "Swap: none configured"
+    fi
+    # Strongest signal of REAL pressure: an OOM kill this boot (dmesg is cleared on
+    # reboot, so a hit here is recent). Only counts when the kernel log is readable.
+    if dmesg 2>/dev/null | grep -qiE 'out of memory|oom-kill|killed process [0-9]'; then
+        echo "WARNING: kernel log shows an out-of-memory (OOM) kill this boot; memory pressure is real"
+        fail=1
+    fi
+    # MemAvailable already discounts reclaimable cache, so a low value is genuine
+    # pressure, not just Linux using RAM for cache. Corroborate with heavy swap use.
+    if [ "$avail_pct" -lt 5 ]; then
+        echo "WARNING: only ${avail_pct}% RAM available; server is under memory pressure"
+        fail=1
+    elif [ "$avail_pct" -lt 10 ] && [ "$swap_used_pct" -ge 80 ]; then
+        echo "WARNING: ${avail_pct}% RAM available and swap ${swap_used_pct}% used; memory pressure building"
+        fail=1
+    else
+        echo "OK: memory pressure is normal (${avail_pct}% RAM available)"
+    fi
+    return "$fail"
+}
 xpam_kernel_reboot_check(){
     echo; echo "===== KERNEL / REBOOT CHECK ====="
     local running newest marker marker_boot current_boot
@@ -369,7 +408,11 @@ xpam_debian_networking_provider_warning_ok(){
     [ -r /etc/os-release ] || return 1
     # shellcheck disable=SC1091
     . /etc/os-release
-    [ "${ID:-}" = "debian" ] && [ "${VERSION_ID:-}" = "12" ] || return 1
+    # Any Debian release: this softens the known provider-image quirk where
+    # networking.service reports failed while the network actually works. Not
+    # pinned to a VERSION_ID so new Debian releases (13+) don't false-FAIL; the
+    # real safety is the active-network checks below, not the version.
+    [ "${ID:-}" = "debian" ] || return 1
     systemctl is-failed --quiet networking.service || return 1
 
     ip -4 route show default 2>/dev/null | grep -q . || fail=1
@@ -379,7 +422,7 @@ xpam_debian_networking_provider_warning_ok(){
 
     j="$(journalctl -u networking -b --no-pager -n 240 2>/dev/null || true)"
     if printf '%s\n' "$j" | grep -Eiq 'RTNETLINK answers: File exists|File exists|already exists|Failed to bring up|resolvconf|dns-nameservers|dns \{'; then
-        echo "WARN: Debian 12 provider networking.service issue detected; active network works"
+        echo "WARN: Debian provider networking.service issue detected; active network works"
         echo "INFO: XPAM не переписывает /etc/network/interfaces автоматически. Для деталей: sudo ${XPAM_PREFIX:-<prefix>}-netdiag"
         return 0
     fi
@@ -775,17 +818,9 @@ xpam_startup_order_check(){
     if [ -x /usr/local/sbin/wait-for-local-port.sh ]; then echo "OK: executable exists: /usr/local/sbin/wait-for-local-port.sh"; else echo "FAIL: missing/executable wait-for-local-port.sh"; fail=1; fi
     bash -n /usr/local/sbin/wait-for-local-port.sh >/dev/null 2>&1 && echo "OK: wait-for-local-port.sh syntax" || { echo "FAIL: wait-for-local-port.sh syntax"; fail=1; }
     if [ -e /etc/systemd/system/mtprotoproxy.service.d/haproxy-order.conf ]; then echo "FAIL: obsolete mtprotoproxy haproxy-order drop-in exists"; fail=1; else echo "OK: absent as expected: /etc/systemd/system/mtprotoproxy.service.d/haproxy-order.conf"; fi
-    case "${MTPROTO_BACKEND:-3xui-mtg}" in
-      3xui-mtg)
-        if systemctl cat haproxy 2>/dev/null | grep -Fq "mtprotoproxy.service"; then echo "FAIL: haproxy ordering references mtprotoproxy.service under 3xui-mtg"; fail=1; else echo "OK: haproxy ordering has no mtprotoproxy.service dependency under 3xui-mtg"; fi
-        if systemctl cat haproxy 2>/dev/null | grep -Eq 'After=.*nginx.*x-ui|After=.*x-ui.*nginx'; then echo "OK: haproxy starts after nginx and x-ui for 3xui-mtg"; else echo "FAIL: haproxy ordering does not include nginx and x-ui for 3xui-mtg"; fail=1; fi
-        if systemctl is-active --quiet mtprotoproxy.service; then echo "FAIL: mtprotoproxy must be inactive under 3xui-mtg"; fail=1; else echo "OK: mtprotoproxy inactive under 3xui-mtg"; fi
-        ;;
-      *)
-        if systemctl cat mtprotoproxy 2>/dev/null | grep -Fq "wait-for-local-port.sh 127.0.0.1 ${SYNC_BACKEND_PORT}"; then echo "OK: mtprotoproxy waits for nginx sync backend 127.0.0.1:${SYNC_BACKEND_PORT}"; else echo "FAIL: mtprotoproxy does not wait for nginx sync backend 127.0.0.1:${SYNC_BACKEND_PORT}"; fail=1; fi
-        if systemctl cat haproxy 2>/dev/null | grep -Eq 'After=.*nginx.*x-ui.*mtprotoproxy|After=.*nginx.*mtprotoproxy.*x-ui|After=.*x-ui.*nginx.*mtprotoproxy|After=.*x-ui.*mtprotoproxy.*nginx|After=.*mtprotoproxy.*nginx.*x-ui|After=.*mtprotoproxy.*x-ui.*nginx'; then echo "OK: haproxy starts after nginx, x-ui, mtprotoproxy"; else echo "FAIL: haproxy ordering does not include nginx, x-ui and mtprotoproxy"; fail=1; fi
-        ;;
-    esac
+    if systemctl cat haproxy 2>/dev/null | grep -Fq "mtprotoproxy.service"; then echo "FAIL: haproxy ordering references mtprotoproxy.service under 3xui-mtg"; fail=1; else echo "OK: haproxy ordering has no mtprotoproxy.service dependency under 3xui-mtg"; fi
+    if systemctl cat haproxy 2>/dev/null | grep -Eq 'After=.*nginx.*x-ui|After=.*x-ui.*nginx'; then echo "OK: haproxy starts after nginx and x-ui for 3xui-mtg"; else echo "FAIL: haproxy ordering does not include nginx and x-ui for 3xui-mtg"; fail=1; fi
+    if systemctl is-active --quiet mtprotoproxy.service; then echo "FAIL: mtprotoproxy must be inactive under 3xui-mtg"; fail=1; else echo "OK: mtprotoproxy inactive under 3xui-mtg"; fi
     if systemctl cat haproxy 2>/dev/null | grep -Fq "wait-for-local-port.sh 127.0.0.1 ${XRAY_LOCAL_PORT}"; then echo "OK: haproxy waits for xray local 127.0.0.1:${XRAY_LOCAL_PORT}"; else echo "FAIL: haproxy does not wait for xray local 127.0.0.1:${XRAY_LOCAL_PORT}"; fail=1; fi
     if systemctl cat haproxy 2>/dev/null | grep -Fq "wait-for-local-port.sh 127.0.0.1 ${MTPROTO_PORT}"; then echo "OK: haproxy waits for mtproto local 127.0.0.1:${MTPROTO_PORT}"; else echo "FAIL: haproxy does not wait for mtproto local 127.0.0.1:${MTPROTO_PORT}"; fail=1; fi
     /usr/local/sbin/wait-for-local-port.sh 127.0.0.1 "$SYNC_BACKEND_PORT" 3 sync-backend >/dev/null 2>&1 && echo "OK: local ${SYNC_BACKEND_PORT} reachable" || { echo "FAIL: local ${SYNC_BACKEND_PORT} not reachable"; fail=1; }
@@ -1055,89 +1090,12 @@ PY_3XUI_MTG_RUNTIME
 }
 
 xpam_mtproto_config_invariant_check(){
-    local cfg="$1" fail=0
+    local cfg="$1"
     echo; echo "===== MTPROTO CONFIG INVARIANT CHECK ====="
     [ -f "$cfg" ] || { echo "FAIL: XPAM config missing: $cfg"; return 1; }
-    # shellcheck disable=SC1090
-    . "$cfg"
-    [ "${MTPROTO_BACKEND:-3xui-mtg}" = "3xui-mtg" ] && { xpam_3xui_mtg_runtime_invariant_check "$cfg"; return $?; }
-    python3 - "$cfg" <<'PY_MTPROTO_INVARIANTS'
-import importlib.util, pathlib, re, sys
-from pathlib import Path
-cfg={}
-for line in Path(sys.argv[1]).read_text(errors='ignore').splitlines():
-    if not line or line.startswith('#') or '=' not in line:
-        continue
-    k,v=line.split('=',1)
-    cfg[k]=v.strip().strip("'").strip('"')
-path=pathlib.Path('/opt/mtprotoproxy/config.py')
-errs=[]
-def ok(msg): print('OK: '+msg)
-def bad(msg): print('FAIL: '+msg); errs.append(msg)
-if not path.exists():
-    bad('MTProto config missing: /opt/mtprotoproxy/config.py')
-    raise SystemExit(1)
-try:
-    spec=importlib.util.spec_from_file_location('mtproto_config_health', str(path))
-    mod=importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-except Exception as exc:
-    bad(f'cannot import MTProto config.py: {exc}')
-    raise SystemExit(1)
-
-def check(name, got, exp):
-    if got == exp:
-        ok(f'MTProto {name} = {exp!r}')
-    else:
-        bad(f'MTProto {name} expected {exp!r}, got {got!r}')
-try:
-    check('PORT', int(getattr(mod,'PORT',None)), int(cfg['MTPROTO_PORT']))
-except Exception:
-    bad('MTProto PORT is missing or not integer')
-check('TLS_DOMAIN', getattr(mod,'TLS_DOMAIN',None), cfg.get('SYNC_DOMAIN',''))
-modes=getattr(mod,'MODES',{})
-if isinstance(modes, dict) and modes.get('classic') is False and modes.get('secure') is False and modes.get('tls') is True:
-    ok('MTProto MODES classic=False secure=False tls=True')
-else:
-    bad(f'MTProto MODES expected classic=False secure=False tls=True, got {modes!r}')
-check('LISTEN_ADDR_IPV4', getattr(mod,'LISTEN_ADDR_IPV4',None), '127.0.0.1')
-if getattr(mod,'LISTEN_ADDR_IPV6',None) in (None, ''):
-    ok('MTProto LISTEN_ADDR_IPV6 is None/empty')
-else:
-    bad(f'MTProto LISTEN_ADDR_IPV6 expected None/empty, got {getattr(mod,"LISTEN_ADDR_IPV6",None)!r}')
-if getattr(mod,'MASK',None) is True:
-    ok('MTProto MASK=True')
-else:
-    bad(f'MTProto MASK expected True, got {getattr(mod,"MASK",None)!r}')
-check('MASK_HOST', getattr(mod,'MASK_HOST',None), '127.0.0.1')
-try:
-    check('MASK_PORT', int(getattr(mod,'MASK_PORT',None)), int(cfg['SYNC_BACKEND_PORT']))
-except Exception:
-    bad('MTProto MASK_PORT is missing or not integer')
-if getattr(mod,'PREFER_IPV6',None) is False:
-    ok('MTProto PREFER_IPV6=False')
-else:
-    bad(f'MTProto PREFER_IPV6 expected False, got {getattr(mod,"PREFER_IPV6",None)!r}')
-users=getattr(mod,'USERS',{})
-if isinstance(users, dict) and users:
-    bad_users=[]
-    for name, sec in users.items():
-        if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,32}', name):
-            bad_users.append(name)
-        if not isinstance(sec, str) or not re.fullmatch(r'[0-9a-fA-F]{32}', sec):
-            bad_users.append(name)
-    if bad_users:
-        bad('MTProto USERS contains invalid user name or secret format')
-    else:
-        ok(f'MTProto USERS count = {len(users)}')
-else:
-    bad('MTProto USERS is empty or not a dict')
-if errs:
-    raise SystemExit(1)
-print('OK: MTProto config invariants look correct')
-PY_MTPROTO_INVARIANTS
-    fail=$?
-    return "$fail"
+    # MTProto runs only via 3x-ui MTG (the legacy alexbers backend was removed), so
+    # the invariant check is always the 3xui-mtg runtime check.
+    xpam_3xui_mtg_runtime_invariant_check "$cfg"
 }
 
 xpam_mtproto_public_fallback_check(){
@@ -2000,20 +1958,15 @@ xpam_apply_service_hygiene(){
     do
         xpam_stop_disable_mask_unit "$unit"
     done
-    if [ "${MTPROTO_BACKEND:-3xui-mtg}" = "3xui-mtg" ]; then
-        systemctl stop mtprotoproxy.service >/dev/null 2>&1 || true
-        systemctl disable mtprotoproxy.service >/dev/null 2>&1 || true
-        systemctl reset-failed mtprotoproxy.service >/dev/null 2>&1 || true
-    fi
+    # The legacy alexbers backend was removed; mtprotoproxy must never run under
+    # 3x-ui MTG. Ensure any leftover mtprotoproxy service is stopped and disabled.
+    systemctl stop mtprotoproxy.service >/dev/null 2>&1 || true
+    systemctl disable mtprotoproxy.service >/dev/null 2>&1 || true
+    systemctl reset-failed mtprotoproxy.service >/dev/null 2>&1 || true
     for unit in ssh.socket ssh.service nginx.service x-ui.service fail2ban.service ufw.service cron.service systemd-resolved.service systemd-timesyncd.service; do
         xpam_unit_exists "$unit" && systemctl enable "$unit" >/dev/null 2>&1 || true
     done
     xpam_unit_exists haproxy.service && systemctl enable haproxy.service >/dev/null 2>&1 || true
-    if [ "${MTPROTO_BACKEND:-3xui-mtg}" = "3xui-mtg" ]; then
-        systemctl disable mtprotoproxy.service >/dev/null 2>&1 || true
-    else
-        xpam_unit_exists mtprotoproxy.service && systemctl enable mtprotoproxy.service >/dev/null 2>&1 || true
-    fi
     for pkg in snapd packagekit packagekit-tools fwupd apport apport-core-dump-handler unattended-upgrades thermald sysstat; do
         xpam_guarded_purge_package "$pkg"
     done
@@ -2057,12 +2010,8 @@ xpam_service_hygiene_check(){
         fi
     done
     systemctl is-active --quiet haproxy.service && echo "OK: required service active: haproxy.service" || { echo "FAIL: required service not active: haproxy.service"; fail=1; }
-    if [ "${MTPROTO_BACKEND:-3xui-mtg}" = "3xui-mtg" ]; then
-        state="$(systemctl is-active mtprotoproxy.service 2>/dev/null || true)"
-        if [ "$state" = "active" ]; then echo "FAIL: mtprotoproxy.service must be inactive under 3xui-mtg"; fail=1; else echo "OK: mtprotoproxy.service inactive under 3xui-mtg (${state:-unknown})"; fi
-    else
-        systemctl is-active --quiet mtprotoproxy.service && echo "OK: required service active: mtprotoproxy.service" || { echo "FAIL: required service not active: mtprotoproxy.service"; fail=1; }
-    fi
+    state="$(systemctl is-active mtprotoproxy.service 2>/dev/null || true)"
+    if [ "$state" = "active" ]; then echo "FAIL: mtprotoproxy.service must be inactive under 3xui-mtg"; fail=1; else echo "OK: mtprotoproxy.service inactive under 3xui-mtg (${state:-unknown})"; fi
     for unit in qemu-guest-agent.service open-vm-tools.service rsyslog.service serial-getty@ttyS0.service; do
         state="$(systemctl is-active "$unit" 2>/dev/null || true)"
         [ "$state" = "active" ] && echo "OK: provider/system service allowed: $unit active"

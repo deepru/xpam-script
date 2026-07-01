@@ -489,7 +489,7 @@ EOF_RELAY_SERVICE
   cat > /etc/nginx/snippets/xpam-script-telegram-relay.conf <<EOF_RELAY_NGINX
 location = /${relay_path} { return 308 /${relay_path}/; }
 location ^~ /${relay_path}/ {
-    client_max_body_size 8k;
+    client_max_body_size 4k;
     access_log off;
     proxy_http_version 1.1;
     proxy_set_header Host \$host;

@@ -1,0 +1,27 @@
+name: CI
+
+# Minimal regression guard: on every push / PR, prove the release can be built
+# with the mandatory top-level wrapper dir and that it passes the same gates the
+# self-updater applies (required files, bash -n, render-smoke, root_count==1,
+# sha256). This catches the packaging-regression class and shell syntax breakage
+# before anything is published.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Build + verify release (bash -n, render-smoke, root_count, sha256)
+        run: bash make-release.sh build
+
+      - name: shellcheck (advisory — errors only)
+        run: shellcheck -S error install.sh bootstrap.sh scripts/xpam-core.sh scripts/lib/*.sh || true

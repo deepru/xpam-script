@@ -133,6 +133,7 @@ if ! xpam_port_exposure_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${X
 if ! xpam_service_hygiene_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-service-hygiene-fail" "[$(xpam_server_label $XPAM_PREFIX)] service hygiene check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi
 if ! xpam_snapshot_freshness_check "$XPAM_PREFIX" 8; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-snapshot-stale" "[$(xpam_server_label $XPAM_PREFIX)] config snapshot freshness check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi
 if ! xpam_disk_inode_check 75 85; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-disk-inode-fail" "[$(xpam_server_label $XPAM_PREFIX)] disk/inode check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi
+xpam_memory_pressure_check || true
 
 echo "===== SWAP POLICY CHECK ====="
 mem_kb="$(awk '/MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
