@@ -1,10 +1,10 @@
 # Maintainer notes
 
-This file describes public maintainer rules for XPAM Script v1.3.6.
+This file describes public maintainer rules for XPAM Script.
 
 ## Public architecture
 
-XPAM Script v1.3.6 is documented as a VPS automation project for:
+XPAM Script is documented as a VPS automation project for:
 
 - VLESS through 3x-ui/Xray;
 - Telegram proxy / MTG through 3x-ui;
@@ -71,4 +71,4 @@ tg.example.com
 
 ## Release documentation
 
-For v1.3.6 public testing wording, use the public user-facing statement that the release was tested on Ubuntu 24.04 LTS and Debian 12. Do not expose internal stage names or validation stage matrices as the public testing story.
+For public testing wording, state that the release was tested on Ubuntu and Debian, including Debian 13 and Ubuntu 26.04. Do not expose internal stage names or validation stage matrices as the public testing story.

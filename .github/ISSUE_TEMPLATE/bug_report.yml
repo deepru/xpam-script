@@ -28,7 +28,7 @@ body:
     attributes:
       label: XPAM version
       description: Run `cat /opt/xpam-script/VERSION` if XPAM is installed.
-      placeholder: "1.3.6"
+      placeholder: "1.3.7"
     validations:
       required: true
 
@@ -37,8 +37,8 @@ body:
     attributes:
       label: Operating system
       options:
-        - Ubuntu 24.04 LTS
-        - Debian 12
+        - Ubuntu
+        - Debian
         - Other / unknown
     validations:
       required: true

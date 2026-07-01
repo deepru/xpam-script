@@ -1,6 +1,6 @@
 # Architecture
 
-XPAM Script v1.3.6 prepares a clean VPS as a managed HTTPS/TLS stack with VLESS, Telegram proxy / MTG, 3x-ui/Xray, nginx, HAProxy, health checks, maintenance and safe self-update.
+XPAM Script prepares a clean VPS as a managed HTTPS/TLS stack with VLESS, Telegram proxy / MTG, 3x-ui/Xray, nginx, HAProxy, health checks, maintenance and safe self-update.
 
 ## High-level model
 
@@ -69,7 +69,7 @@ Entry-side VLESS and Telegram links must remain unchanged when DoubleHop is enab
 
 ## Safe self-update model
 
-XPAM v1.3.6 includes manual safe self-update:
+XPAM includes manual safe self-update:
 
 ```text
 release metadata -> archive + sha256 download -> SHA256 verification -> staging extract -> preflight -> backup -> apply -> postcheck -> rollback if needed

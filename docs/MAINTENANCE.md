@@ -1,6 +1,6 @@
 # Maintenance
 
-XPAM Script v1.3.6 installs maintenance helpers for repair, diagnostics, weekly checks and safe updates.
+XPAM Script installs maintenance helpers for repair, diagnostics, weekly checks and safe updates.
 
 ## Repair
 
@@ -46,4 +46,4 @@ The updater must:
 
 ## Small-VPS policy
 
-v1.3.6 includes small-VM safeguards such as journald/logrotate policies, resource checks and backup retention.
+XPAM includes small-VM safeguards such as journald/logrotate policies, resource checks and backup retention.

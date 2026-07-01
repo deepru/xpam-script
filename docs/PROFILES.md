@@ -1,10 +1,10 @@
 # Runtime modes
 
-XPAM Script v1.3.6 uses a simplified public model. Installation prepares the server with the current VLESS and Telegram proxy / MTG architecture, and optional features are managed later from the XPAM menu.
+XPAM Script uses a simplified public model. Installation prepares the server with the current VLESS and Telegram proxy / MTG architecture, and optional features are managed later from the XPAM menu.
 
 ## Standard installed state
 
-A normal v1.3.6 installation provides:
+A normal installation provides:
 
 - VLESS through 3x-ui/Xray;
 - Telegram proxy / MTG through 3x-ui;

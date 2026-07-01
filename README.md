@@ -10,7 +10,7 @@ XPAM настраивает **VLESS**, **Telegram proxy / MTG**, 3x-ui/Xray, ngi
 
 Перед запуском подготовьте:
 
-- чистый VPS на **Ubuntu 24.04 LTS** или **Debian 12**;
+- чистый VPS на **Ubuntu** или **Debian**;
 - root-доступ по SSH;
 - домены для VLESS, Telegram proxy / MTG и панели;
 - DNS A-записи на IPv4 вашего сервера.
@@ -58,7 +58,7 @@ sudo srv-xpam
 
 Дополнительные материалы:
 
-- [Release notes v1.3.6](RELEASE_NOTES_v1.3.6_RU.md)
+- [Release notes / changelog](CHANGELOG.md)
 - [GitHub Releases](https://github.com/deepru/xpam-script/releases)
 - [CHANGELOG.md](CHANGELOG.md)
 - [TESTING.md](TESTING.md)
@@ -87,8 +87,8 @@ sudo srv-xpam
 
 Официально протестировано:
 
-- Ubuntu 24.04 LTS
-- Debian 12
+- Ubuntu
+- Debian
 
 Рекомендуется чистый VPS с root-доступом и IPv4. Использование на сервере с уже настроенными сайтами, панелями, VPN, reverse proxy или нестандартным firewall не рекомендуется.
 

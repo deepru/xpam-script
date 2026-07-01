@@ -1,6 +1,6 @@
 # Installation
 
-XPAM Script v1.3.6 is intended for clean VPS installations on Ubuntu 24.04 LTS and Debian 12.
+XPAM Script is intended for clean VPS installations on Ubuntu and Debian.
 
 ## Requirements
 

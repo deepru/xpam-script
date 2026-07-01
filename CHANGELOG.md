@@ -1,5 +1,31 @@
 # Changelog
 
+## v1.3.7
+
+### Compatibility
+
+- Verified full compatibility with **Debian 13** and **Ubuntu 26.04** — fresh install, repair, `repair --full`, weekly maintenance and health checks all pass. OS checks no longer flag newer Ubuntu/Debian releases.
+
+### Architecture cleanup
+
+- Removed the legacy `vless_direct` profile; the server always runs VLESS behind HAProxy.
+- Removed the legacy `alexbers` MTProto backend; MTProto runs only via 3x-ui MTG. The `<prefix>-tg` command was removed — the Telegram link is shown by `<prefix>-links --show-secrets`.
+- Config imports from removed profiles/backends now fail fast with a clear message.
+
+### New features
+
+- `<prefix>-repair --full` restores the 3x-ui database (clients/inbounds/secrets) from the latest golden snapshot, with integrity check, explicit confirmation, pre-restore backup and health-gated auto-rollback.
+- `<prefix>-repair` now also regenerates the nginx configuration (previously only HAProxy).
+- New health check for memory pressure (available RAM / swap usage).
+
+### Security
+
+- Hardened the Telegram relay socket fallback (no world-writable fallback).
+
+### Maintainer / infrastructure
+
+- Added `make-release.sh` and CI to build/verify the release archive with the mandatory wrapper layout, guarding the packaging-regression class.
+
 ## v1.3.6
 
 ### Compatibility and release hardening
@@ -66,11 +92,11 @@
 
 ### Проверка
 
-Проверено на Ubuntu 24.04 LTS и Debian 12: установка, управление сервером, VLESS, Telegram proxy / MTG, DoubleHop Mode, диагностика, восстановление и безопасное обновление.
+Проверено на Ubuntu и Debian: установка, управление сервером, VLESS, Telegram proxy / MTG, DoubleHop Mode, диагностика, восстановление и безопасное обновление.
 
 ## v1.3.0
 
-- Добавлена стабильная IPv4-first установка для Ubuntu 24.04 и Debian 12.
+- Добавлена стабильная IPv4-first установка для Ubuntu и Debian.
 - Улучшена интеграция 3x-ui/Xray, nginx, HAProxy, Certbot, firewall, fail2ban и health-checks.
 - Добавлены production cleanup и базовые maintenance-сценарии.
 

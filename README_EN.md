@@ -10,7 +10,7 @@ It configures **VLESS**, **Telegram proxy / MTG**, 3x-ui/Xray, nginx, HAProxy, C
 
 Prepare:
 
-- a clean **Ubuntu 24.04 LTS** or **Debian 12** VPS;
+- a clean **Ubuntu** or **Debian** VPS;
 - root SSH access;
 - domains for VLESS, Telegram proxy / MTG, and the panel;
 - DNS A records pointing to your server IPv4.
@@ -56,7 +56,7 @@ Before installation, read the full user guide.
 
 Additional documents:
 
-- [Release notes v1.3.6](RELEASE_NOTES_v1.3.6_RU.md)
+- [Release notes / changelog](CHANGELOG.md)
 - [GitHub Releases](https://github.com/deepru/xpam-script/releases)
 - [CHANGELOG.md](CHANGELOG.md)
 - [TESTING.md](TESTING.md)
@@ -85,8 +85,8 @@ After installation, you get:
 
 Officially tested:
 
-- Ubuntu 24.04 LTS
-- Debian 12
+- Ubuntu
+- Debian
 
 A clean VPS with root access and IPv4 is recommended.
 

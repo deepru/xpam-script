@@ -1,6 +1,6 @@
 # Troubleshooting
 
-This guide lists common XPAM Script v1.3.6 troubleshooting steps.
+This guide lists common XPAM Script troubleshooting steps.
 
 ## Main command not found
 
@@ -86,7 +86,7 @@ Do not publish update logs without redacting secrets and environment details.
 
 ## Low disk or low memory warnings
 
-v1.3.6 includes small-VPS safeguards, but very small VPS plans can still fail during package installation, certificate issuance or updates.
+XPAM includes small-VPS safeguards, but very small VPS plans can still fail during package installation, certificate issuance or updates.
 
 Free disk space and make sure the package manager is not in a broken state before retrying.
 

@@ -41,7 +41,7 @@ XPAM uses Telegram proxy / MTG functionality through 3x-ui. Depending on the 3x-
 
 XPAM uses packages from the target operating system repositories, including nginx, HAProxy, Certbot, UFW, fail2ban and supporting utilities.
 
-Supported target systems for v1.3.6 are Ubuntu 24.04 LTS and Debian 12.
+Supported target systems are Ubuntu and Debian.
 
 ## Licenses
 

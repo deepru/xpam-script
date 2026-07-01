@@ -1,11 +1,11 @@
 # Testing
 
-XPAM Script v1.3.6 прошёл полное тестирование на:
+XPAM Script прошёл полное тестирование на:
 
-- Ubuntu 24.04 LTS;
-- Debian 12.
+- Ubuntu;
+- Debian.
 
-Проверено на Ubuntu 24.04 LTS и Debian 12: установка, управление сервером, VLESS, Telegram proxy / MTG, DoubleHop Mode, диагностика, восстановление и безопасное обновление.
+Проверено на Ubuntu и Debian: установка, управление сервером, VLESS, Telegram proxy / MTG, DoubleHop Mode, диагностика, восстановление и безопасное обновление.
 
 ## Проверенные пользовательские сценарии
 
