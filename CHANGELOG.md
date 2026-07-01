@@ -25,6 +25,7 @@
 ### Maintainer / infrastructure
 
 - Added `make-release.sh` and CI to build/verify the release archive with the mandatory wrapper layout, guarding the packaging-regression class.
+- Self-update now prunes old update work directories (keeps the newest 2) to avoid disk clutter over time.
 
 ## v1.3.6
 

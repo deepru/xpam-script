@@ -56,6 +56,9 @@ xpam_update_log_init(){
   XPAM_UPDATE_LOG="${XPAM_UPDATE_WORKDIR}/update.log"
   mkdir -p "$XPAM_UPDATE_WORKDIR" "$XPAM_UPDATE_WORKDIR/download" "$XPAM_UPDATE_WORKDIR/staging" "$XPAM_UPDATE_WORKDIR/backup" "$XPAM_UPDATE_WORKDIR/pre-state" "$XPAM_UPDATE_WORKDIR/post-state"
   chmod 700 "$XPAM_UPDATE_WORKDIR" 2>/dev/null || true
+  # Keep only the newest N self-update work dirs (each holds a download + pre-update
+  # backup, ~3 MB). Without this they accumulate on every update and clutter the disk.
+  prune_keep_latest /root/manual-backups/xpam-update '*' "${XPAM_UPDATE_KEEP:-2}" 2>/dev/null || true
   : > "$XPAM_UPDATE_LOG"
   chmod 600 "$XPAM_UPDATE_LOG" 2>/dev/null || true
 }
