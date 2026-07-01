@@ -1,10 +1,24 @@
 # XPAM Script
 
+[![License: MIT](https://img.shields.io/github/license/deepru/xpam-script?color=blue)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/deepru/xpam-script?sort=semver)](https://github.com/deepru/xpam-script/releases/latest)
+[![CI](https://github.com/deepru/xpam-script/actions/workflows/ci.yml/badge.svg)](https://github.com/deepru/xpam-script/actions/workflows/ci.yml)
+[![Platform](https://img.shields.io/badge/platform-Ubuntu%20%C2%B7%20Debian-informational)](#поддерживаемые-системы)
+
 **XPAM Script** — Bash-автоматизация для быстрого развёртывания приватной HTTPS/TLS-инфраструктуры на чистом VPS.
 
 XPAM настраивает **VLESS**, **Telegram proxy / MTG**, 3x-ui/Xray, nginx, HAProxy, Certbot, firewall, fail2ban, health-checks, maintenance-сценарии, WARP через Xray, **DoubleHop Mode** и безопасное обновление через XPAM.
 
 > XPAM Script меняет SSH, firewall, nginx, HAProxy, 3x-ui/Xray, Certbot, fail2ban, systemd-юниты, health/maintenance-скрипты, DNS-проверки, `/etc/hosts` и сетевые параметры VPS. Используйте его на чистом VPS, а не на сервере, где уже работают важные сервисы.
+
+## ✨ Ключевые возможности
+
+- 🔐 **VLESS** и **Telegram proxy (MTG)** за единым HTTPS-фронтом `443/tcp` через HAProxy
+- 🌐 Автоматическая настройка 3x-ui/Xray, nginx-маскировка и TLS от Let's Encrypt
+- 🛡️ Хардненинг из коробки: SSH по ключу, UFW, fail2ban, безопасные systemd-юниты
+- ❤️ Диагностика и восстановление: `health` / `deep-health`, `repair` и `repair --full` (восстановление базы 3x-ui из golden-снапшота с авто-откатом)
+- 🔁 **DoubleHop Mode** — маршрутизация VLESS и/или Telegram через второй сервер
+- ⚙️ WARP через Xray, еженедельное обслуживание, безопасное self-update с проверкой SHA256
 
 ## Быстрый старт
 
@@ -58,12 +72,11 @@ sudo srv-xpam
 
 Дополнительные материалы:
 
-- [Release notes / changelog](CHANGELOG.md)
-- [GitHub Releases](https://github.com/deepru/xpam-script/releases)
-- [CHANGELOG.md](CHANGELOG.md)
-- [TESTING.md](TESTING.md)
-- [SECURITY.md](SECURITY.md)
-- [THIRD_PARTY.md](THIRD_PARTY.md)
+- [Changelog](CHANGELOG.md) — история версий
+- [GitHub Releases](https://github.com/deepru/xpam-script/releases) — релизы и архивы
+- [Тестирование](TESTING.md)
+- [Безопасность](SECURITY.md)
+- [Сторонние компоненты](THIRD_PARTY.md)
 
 ## Что делает XPAM Script
 
