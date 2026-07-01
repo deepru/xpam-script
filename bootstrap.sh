@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-XPAM_VERSION="${XPAM_VERSION:-v1.3.6}"
-XPAM_ASSET="${XPAM_ASSET:-xpam-script-${XPAM_VERSION}-ubuntu24-debian12.tar.gz}"
+XPAM_VERSION="${XPAM_VERSION:-v1.3.7}"
+XPAM_ASSET="${XPAM_ASSET:-xpam-script-${XPAM_VERSION}.tar.gz}"
 XPAM_INSTALL_DIR="${XPAM_INSTALL_DIR:-/root/xpam-install}"
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -21,7 +21,7 @@ Use:
   sudo XPAM_REPO="deepru/xpam-script" bash xpam-bootstrap.sh
 
 Or set:
-  XPAM_RELEASE_BASE_URL="https://github.com/deepru/xpam-script/releases/download/v1.3.6"
+  XPAM_RELEASE_BASE_URL="https://github.com/deepru/xpam-script/releases/download/v1.3.7"
 EOF
     exit 1
 fi
