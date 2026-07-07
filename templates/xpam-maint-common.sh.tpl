@@ -988,12 +988,31 @@ if len(matches) == 1:
         ok(f'MTG settings.fakeTlsDomain = {sync_domain}')
     else:
         bad(f'MTG settings.fakeTlsDomain expected {sync_domain!r}, got {settings.get("fakeTlsDomain")!r}')
-    secret=str(settings.get('secret') or '')
+    # Dual-read: 3x-ui > 3.4.2 moves MTG secrets to per-client entries in
+    # settings.clients (a one-time seeder migrates the old inbound secret to a
+    # single client); <= 3.4.2 keeps a single settings.secret. Prefer the client.
+    secret=str(settings.get('secret') or '').strip()
+    secret_src='inbound'
+    _clients=settings.get('clients')
+    if isinstance(_clients, list):
+        for _c in _clients:
+            if not isinstance(_c, dict):
+                continue
+            if str(_c.get('enable', True)).lower() in ('false', '0', 'no', 'off'):
+                continue
+            _s=str(_c.get('secret') or '').strip()
+            if _s:
+                secret=_s
+                secret_src='client'
+                break
     expected_suffix=sync_domain.encode('utf-8').hex()
     if secret.startswith('ee') and secret.lower().endswith(expected_suffix.lower()):
-        ok('MTG settings.secret is canonical FULL_EE_SECRET_HEX for SYNC_DOMAIN')
+        if secret_src == 'client':
+            ok('MTG client secret is canonical FULL_EE_SECRET_HEX for SYNC_DOMAIN')
+        else:
+            ok('MTG settings.secret is canonical FULL_EE_SECRET_HEX for SYNC_DOMAIN')
     else:
-        bad('MTG settings.secret is not canonical FULL_EE_SECRET_HEX for SYNC_DOMAIN')
+        bad('MTG secret (inbound-level or client) is not canonical FULL_EE_SECRET_HEX for SYNC_DOMAIN')
     if settings.get('preferIp') == 'prefer-ipv4':
         ok('MTG settings.preferIp = prefer-ipv4')
     else:

@@ -265,6 +265,19 @@ def settings_from(item):
         except Exception:
             return {}
     return {}
+def mtg_secret_from(settings):
+    # 3x-ui > 3.4.2: per-client secrets in settings.clients; <= 3.4.2: settings.secret.
+    clients=settings.get('clients')
+    if isinstance(clients, list):
+        for c in clients:
+            if not isinstance(c, dict):
+                continue
+            if str(c.get('enable', True)).lower() in ('false', '0', 'no', 'off'):
+                continue
+            s=str(c.get('secret') or '').strip()
+            if s:
+                return s
+    return str(settings.get('secret') or '').strip()
 for item in items(data):
     if not isinstance(item, dict):
         continue
@@ -272,7 +285,7 @@ for item in items(data):
         continue
     if str(item.get('remark') or '') != remark:
         continue
-    secret=str(settings_from(item).get('secret') or '').strip()
+    secret=mtg_secret_from(settings_from(item))
     if secret:
         print(secret)
         sys.exit(0)

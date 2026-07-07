@@ -3300,6 +3300,21 @@ except Exception as exc:
     print(f"WARN: cannot read 3x-ui SQLite: {exc}", file=sys.stderr)
     sys.exit(2)
 
+def mtg_secret_from(settings):
+    # 3x-ui > 3.4.2 moves MTG secrets to per-client entries in settings.clients;
+    # <= 3.4.2 keeps a single inbound-level settings.secret. Prefer the new model.
+    clients = settings.get("clients")
+    if isinstance(clients, list):
+        for c in clients:
+            if not isinstance(c, dict):
+                continue
+            if str(c.get("enable", True)).lower() in ("false", "0", "no", "off"):
+                continue
+            s = str(c.get("secret") or "").strip()
+            if s:
+                return s
+    return str(settings.get("secret") or "").strip()
+
 candidates = []
 for row in rows:
     if str(pick(row, "protocol", default="")).lower() != "mtproto":
@@ -3311,7 +3326,7 @@ for row in rows:
     if not isinstance(settings, dict):
         settings = {}
 
-    secret = str(settings.get("secret") or "").strip()
+    secret = mtg_secret_from(settings)
     server = str(settings.get("shareAddr") or settings.get("fakeTlsDomain") or SYNC_DOMAIN or "").strip()
     fake_tls = str(settings.get("fakeTlsDomain") or "").strip()
     share_addr = str(settings.get("shareAddr") or "").strip()
@@ -3345,6 +3360,144 @@ PY_TELEGRAM_LINK
   fi
 
   rm -f "$tmp"
+  return 1
+}
+
+
+print_telegram_links_from_xui(){
+  # Multi-client Telegram link printer (mirror of print_vless_links_from_xui).
+  # Post-3.4.2 3x-ui stores one secret per client in settings.clients; <= 3.4.2
+  # kept a single inbound-level settings.secret. Print one tg:// per enabled
+  # client of the best-matching MTG inbound (fallback: the legacy inbound secret).
+  local db="/etc/x-ui/x-ui.db" tmp rc
+
+  echo "ГОТОВЫЕ TELEGRAM ССЫЛКИ ИЗ 3x-ui:"
+
+  if [[ ! -s "$db" ]]; then
+    echo "  Telegram link не найдена в 3x-ui DB. Проверьте Telegram proxy / MTG inbound."
+    return 1
+  fi
+  tmp="$(mktemp /tmp/xpam-telegram-links.XXXXXX)" || return 1
+  rc=0
+  XPAM_XUI_DB="$db" XPAM_SYNC_DOMAIN="${SYNC_DOMAIN}" XPAM_MTPROTO_PORT="${MTPROTO_PORT}" \
+    python3 - <<'PY_TELEGRAM_LINKS_ALL' >"$tmp" || rc=$?
+import json
+import os
+import sqlite3
+import sys
+
+DB = os.environ.get("XPAM_XUI_DB", "/etc/x-ui/x-ui.db")
+SYNC_DOMAIN = os.environ.get("XPAM_SYNC_DOMAIN", "")
+MTPROTO_PORT = str(os.environ.get("XPAM_MTPROTO_PORT", "") or "")
+PUBLIC_PORT = "443"
+
+
+def parse_json(value, default):
+    if value is None or value == "":
+        return default
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        parsed = json.loads(str(value))
+        if isinstance(parsed, str):
+            try:
+                return json.loads(parsed)
+            except Exception:
+                return default
+        return parsed
+    except Exception:
+        return default
+
+
+def enabled(value):
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
+
+def pick(row, *names, default=None):
+    for name in names:
+        if name in row:
+            return row[name]
+    return default
+
+
+def client_secrets(settings):
+    out = []
+    clients = settings.get("clients")
+    if isinstance(clients, list):
+        for i, c in enumerate(clients, 1):
+            if not isinstance(c, dict):
+                continue
+            if not enabled(c.get("enable", c.get("enabled", True))):
+                continue
+            s = str(c.get("secret") or "").strip()
+            if not s:
+                continue
+            name = str(c.get("email") or c.get("remark") or c.get("name") or "").strip() or "client-{0}".format(i)
+            out.append((name, s))
+    if not out:
+        s = str(settings.get("secret") or "").strip()
+        if s:
+            out.append(("default", s))
+    return out
+
+
+try:
+    conn = sqlite3.connect(DB)
+    conn.row_factory = sqlite3.Row
+    rows = [dict(r) for r in conn.execute("SELECT * FROM inbounds ORDER BY id ASC").fetchall()]
+except Exception as exc:
+    print("WARN: cannot read 3x-ui SQLite: {0}".format(exc), file=sys.stderr)
+    sys.exit(2)
+
+candidates = []
+for row in rows:
+    if str(pick(row, "protocol", default="")).lower() != "mtproto":
+        continue
+    if not enabled(pick(row, "enable", "enabled", default=1)):
+        continue
+    settings = parse_json(pick(row, "settings", default="{}"), {})
+    if not isinstance(settings, dict):
+        settings = {}
+    server = str(settings.get("shareAddr") or settings.get("fakeTlsDomain") or SYNC_DOMAIN or "").strip()
+    secs = client_secrets(settings)
+    if not server or not secs:
+        continue
+    fake_tls = str(settings.get("fakeTlsDomain") or "").strip()
+    share_addr = str(settings.get("shareAddr") or "").strip()
+    row_port = str(pick(row, "port", default="") or "")
+    score = 0
+    if SYNC_DOMAIN and (server == SYNC_DOMAIN or share_addr == SYNC_DOMAIN or fake_tls == SYNC_DOMAIN):
+        score += 100
+    if MTPROTO_PORT and row_port == MTPROTO_PORT:
+        score += 30
+    if str(pick(row, "listen", default="") or "").startswith("127."):
+        score += 10
+    candidates.append((score, int(pick(row, "id", default=0) or 0), server, secs))
+
+if not candidates:
+    sys.exit(3)
+
+candidates.sort(key=lambda item: (-item[0], item[1]))
+_, _, server, secs = candidates[0]
+for name, secret in secs:
+    print("  Client Name: {0}".format(name))
+    print("  Telegram Link: tg://proxy?server={0}&port={1}&secret={2}".format(server, PUBLIC_PORT, secret))
+    print()
+PY_TELEGRAM_LINKS_ALL
+
+  if [[ $rc -eq 0 && -s "$tmp" ]]; then
+    cat "$tmp"
+    rm -f "$tmp"
+    return 0
+  fi
+  rm -f "$tmp"
+  echo "  Telegram link не найдена в 3x-ui DB. Проверьте Telegram proxy / MTG inbound."
   return 1
 }
 
@@ -3403,7 +3556,7 @@ print_connection_summary(){
 }
 
 print_connection_secrets_summary(){
-  local basic_note auto_note mt_users_note basic_user basic_pass xui_user xui_pass mtproto_link
+  local basic_note auto_note mt_users_note basic_user basic_pass xui_user xui_pass
   basic_note="/root/secure-notes/${SERVER_PREFIX}-basic-auth.txt"
   auto_note="/root/secure-notes/${SERVER_PREFIX}-3x-ui-auto.txt"
   mt_users_note="/root/secure-notes/${SERVER_PREFIX}-mtproto-users.txt"
@@ -3412,7 +3565,6 @@ print_connection_secrets_summary(){
   basic_pass="$(note_value "$basic_note" "Password")"
   xui_user="$(note_value "$auto_note" "3x-ui username")"
   xui_pass="$(note_value "$auto_note" "3x-ui password")"
-  mtproto_link="$(current_telegram_link_from_xui 2>/dev/null || true)"
 
   echo
   echo "============================================================"
@@ -3438,12 +3590,7 @@ print_connection_secrets_summary(){
   print_vless_links_from_xui "$auto_note"
   echo
   if uses_mtproto; then
-    echo "ГОТОВАЯ TELEGRAM LINK ИЗ 3x-ui:"
-    if [[ -n "$mtproto_link" ]]; then
-      echo "  $mtproto_link"
-    else
-      echo "  Telegram link не найдена в 3x-ui DB. Проверьте Telegram proxy / MTG inbound."
-    fi
+    print_telegram_links_from_xui
     echo
   fi
   echo "ФАЙЛЫ С ДАННЫМИ НА СЕРВЕРЕ:"
