@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.3.8
+
+### Compatibility
+
+- Verified full compatibility with **3x-ui v3.5.0** (multi-client MTProto/MTG, Xray 26.7.11). MTProto secrets moved from the inbound level to per-client entries; XPAM reads and writes both shapes, so a single build works on 3x-ui 3.4.2 and 3.5.0. Last-validated baseline updated to **3x-ui 3.5.0 / Xray 26.7.11**.
+
+### Fixes
+
+- MTProto (MTG) is now created with a client entry that carries the secret, so the Telegram proxy works on a fresh install under 3x-ui 3.5.0 (which strips inbound-level secrets). Remains backward-compatible with 3.4.2.
+- VLESS inbound creation no longer fails on 3x-ui 3.5.0's stricter client parsing — the client `tgId` is sent as a number instead of a string.
+
+### Improvements
+
+- `<prefix>-links --show-secrets` lists the link of every enabled VLESS and Telegram client (multi-client aware).
+- MTProto clients now carry a subscription id, so the 3x-ui panel shows their link/QR, with a comment pointing to `<prefix>-links --show-secrets` for the authoritative (:443) Telegram link.
+
 ## v1.3.7
 
 ### Compatibility

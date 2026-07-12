@@ -64,12 +64,47 @@ mtproto_3xui_mtg_payload(){
   XPAM_MTG_SYNC_DOMAIN="$SYNC_DOMAIN" \
   XPAM_MTG_SYNC_BACKEND_PORT="$SYNC_BACKEND_PORT" \
   XPAM_MTG_TAG="$tag" \
+  XPAM_MTG_PREFIX="${SERVER_PREFIX:-}" \
   python3 <<'PY_XPAM_3XUI_MTG_PAYLOAD'
-import json, os
+import json, os, uuid, secrets
 payload_path=os.environ['XPAM_MTG_PAYLOAD_PATH']
+secret=os.environ['XPAM_MTG_SECRET']
+# MTProto became multi-client in 3x-ui 3.5.0: mtg reads the secret from
+# settings.clients[], and the add API strips any inbound-level settings.secret.
+# 3x-ui <= 3.4.2 is the opposite — mtg reads the inbound-level settings.secret,
+# and its add API has no mtproto client case, so it rejects a client whose id is
+# empty ("empty client ID"). Emit BOTH shapes so one payload creates a working
+# MTG inbound on either version:
+#   * top-level secret  -> drives mtg on <=3.4.2; harmlessly stripped by 3.5.0.
+#   * clients[0]        -> drives mtg on >=3.5.0; carries an id so 3.4.2's guard
+#                          passes and the same secret so 3.5.0's guard passes.
+# The client secret is already a valid FakeTLS value, so 3.5.0's secret healing
+# rebuilds it byte-identically (no-op).
+#
+# subId: gives the client a subscription id like the VLESS client has, so 3.5.0's
+# Clients page can render its link/QR (the panel builds those from subId via its
+# own API — no public subscription listener needed, which XPAM keeps disabled).
+# comment: the panel's mtproto copy-link/QR hardcodes the inbound's INTERNAL port
+# (genMtprotoLink uses inbound.Port; 3x-ui has no externalProxy for mtproto), so
+# it is display-only and does not connect. Point whoever reads it in the panel at
+# the authoritative :443 link from the XPAM links launcher.
+prefix=os.environ.get('XPAM_MTG_PREFIX','').strip()
+comment=('Рабочая MTG-ссылка (:443): sudo %s-links --show-secrets. '
+         'Панельная copy-ссылка/QR имеют внутренний порт и не подключаются.' % prefix) if prefix \
+        else 'Рабочая MTG-ссылка (:443) — в выводе XPAM links --show-secrets; панельный QR имеет внутренний порт.'
 settings={
     'fakeTlsDomain': os.environ['XPAM_MTG_SYNC_DOMAIN'],
-    'secret': os.environ['XPAM_MTG_SECRET'],
+    'secret': secret,
+    'clients': [
+        {
+            'id': str(uuid.uuid4()),
+            'secret': secret,
+            'email': os.environ['XPAM_MTG_REMARK'],
+            'subId': secrets.token_hex(8),
+            'comment': comment,
+            'enable': True,
+        }
+    ],
     'preferIp': 'prefer-ipv4',
     'domainFronting': {
         'ip': '127.0.0.1',

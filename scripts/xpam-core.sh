@@ -4,7 +4,7 @@ set -Eeuo pipefail
 KIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Derive the displayed version from the VERSION file so it never goes stale between releases.
 KIT_VERSION="v$(head -n1 "${KIT_DIR}/VERSION" 2>/dev/null | tr -d '[:space:]' || true)"
-[[ "$KIT_VERSION" == v?* ]] || KIT_VERSION="v1.3.7"
+[[ "$KIT_VERSION" == v?* ]] || KIT_VERSION="v1.3.8"
 CONFIG_DIR="/etc/xpam-script"
 CONFIG_FILE="${CONFIG_DIR}/config.env"
 PREFIX_BOOTSTRAP_FILE="${CONFIG_DIR}/prefix.env"
@@ -2332,7 +2332,7 @@ settings={
     "totalGB":0,
     "expiryTime":0,
     "enable":True,
-    "tgId":"",
+    "tgId":0,
     "subId":os.environ["XPAM_PAYLOAD_SUBID"],
     "reset":0
   }],

@@ -1825,7 +1825,7 @@ xpam_xui_version_compat_check(){
     # still passes the functional checks above is fine, so the version number alone never alarms
     # the user. This line is diagnostic (maintainer + auto-test). BUMP both values after a
     # fresh-install + deep-health test passes on a newer 3x-ui.
-    local LV_XUI="3.4.2" LV_XRAY="26.6.27" xui_sem xray_sem
+    local LV_XUI="3.5.0" LV_XRAY="26.7.11" xui_sem xray_sem
     xui_sem="$(printf '%s' "${xui_ver:-}"  | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
     xray_sem="$(printf '%s' "${xray_ver:-}" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
     echo "INFO: XPAM last-validated baseline: 3x-ui ${LV_XUI} / Xray ${LV_XRAY} (functional checks above are authoritative)"
