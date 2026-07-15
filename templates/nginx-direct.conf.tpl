@@ -65,8 +65,8 @@ server {
         access_log off;
     }
     location @same_domain_root { return 302 https://$host/; }
-    location = /login {
-        try_files /login.html @same_domain_root;
+    location = /license {
+        try_files /license.html @same_domain_root;
         add_header Cache-Control "no-store" always;
     }
     location = /docs {

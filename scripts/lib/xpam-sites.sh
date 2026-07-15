@@ -2,6 +2,34 @@
 # XPAM Script module. This file is sourced by scripts/xpam-core.sh.
 # Keep functions side-effect free at source time.
 
+mask_render_preset_site(){
+  # Render the deterministic "product landing" decoy for <domain> into <dest>.
+  # Preset + accent are chosen from the domain (see sites/_mask/generate.py + MASKING_IDEAS.md).
+  # Honors the optional MASK_PRESET config override. Echoes "<preset>\t<palette>".
+  local domain="$1" role="${2:-primary}" dest="$3"
+  local gen="${KIT_DIR}/sites/_mask/generate.py"
+  [[ -n "$domain" && -n "$dest" ]] || fail "mask_render_preset_site: требуется domain и dest"
+  [[ -f "$gen" ]] || fail "Генератор сайтов не найден: $gen"
+  # All decoy domains on this box, canonical order (primary, sync, root) — lets the generator hand
+  # each domain a different product so subdomains of one box are not the same preset.
+  local peers="${PRIMARY_DOMAIN:-$domain}"
+  if uses_mtproto && [[ -n "${SYNC_DOMAIN:-}" ]]; then peers="${peers},${SYNC_DOMAIN}"; fi
+  if [[ "${PROFILE:-}" == "root_mtproto" && -n "${ROOT_DOMAIN:-}" ]]; then peers="${peers},${ROOT_DOMAIN}"; fi
+  MASK_DOMAIN="$domain" MASK_DEST="$dest" MASK_ROLE="$role" MASK_PEERS="$peers" \
+    MASK_PRESET="${MASK_PRESET:-}" MASK_DIR="${KIT_DIR}/sites/_mask" \
+    python3 "$gen"
+}
+
+mask_reset_preset_site(){
+  # Force-restore the stock preset site for <domain> (clears the web root first). Used by the
+  # "restore stock sites" menu action; deterministic, so it re-renders the same site every time.
+  local domain="$1" role="${2:-primary}" dst="/var/www/$1"
+  mkdir -p "$dst"
+  find "$dst" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+  mask_render_preset_site "$domain" "$role" "$dst" >/dev/null || fail "Не удалось восстановить сайт для ${domain}"
+  ok "Стандартный сайт восстановлен для ${domain}: ${dst}"
+}
+
 site_webroot_lines(){
   # Prints: ROLE<TAB>DOMAIN<TAB>PATH<TAB>DESCRIPTION
   [[ -n "${PRIMARY_DOMAIN:-}" ]] && printf 'PANEL_VLESS\t%s\t/var/www/%s\t%s\n' "$PRIMARY_DOMAIN" "$PRIMARY_DOMAIN" "Сайт-декорация для VLESS / 3x-ui домена"
@@ -43,8 +71,8 @@ stage_site_instructions(){
 Коротко: можно менять внешний вид сайтов, но нельзя занимать служебные адреса XPAM Script.
 
 Что можно менять в папках сайта:
-  - index.html, login.html, docs.html, 404.html;
-  - favicon.svg, favicon.ico, robots.txt;
+  - index.html, docs.html, license.html, 404.html;
+  - favicon.svg, robots.txt, sitemap.xml;
   - папки assets/, css/, js/, img/, fonts/ и обычные статичные файлы.
 
 Важно:
@@ -68,12 +96,13 @@ EOF_SITE_MTPROTO
   fi
   cat <<'EOF_SITE_HELP_2'
 
-/login, /docs и favicon можно заменять своим дизайном, если они остаются обычными статичными страницами и не конфликтуют со служебными route.
+/docs, /license, favicon и стили можно заменять своим дизайном, если они остаются обычными статичными страницами и не конфликтуют со служебными route.
 
 Роли стандартных сайтов:
-  - panel/VLESS домен: нейтральная маскировка под private storage interface;
-  - MTProto/sync домен: нейтральная маскировка под sync/API endpoint;
-  - root/main домен: универсальная минималистичная заглушка без личной информации.
+  - все домены получают нейтральный лендинг небольшого технического продукта (product landing),
+    сгенерированный автоматически из имени домена — на каждом домене свой продукт и цвет;
+  - никакой личной информации, никаких серверных данных или метрик на странице;
+  - страницы: / (лендинг), /docs, /license, 404, плюс robots.txt и sitemap.xml.
 
 После загрузки файлов вернитесь сюда и выберите:
   2) Я загрузил новый сайт — проверить и применить
@@ -194,20 +223,6 @@ stage_site_check_uploaded(){
 }
 
 
-site_copy_stock_template(){
-  local src="$1" dst="$2" label="$3"
-  [[ -d "$src" ]] || fail "Стандартный шаблон сайта не найден: $src"
-  mkdir -p "$dst"
-  find "$dst" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
-  if command -v rsync >/dev/null 2>&1; then
-    rsync -a --delete "$src"/ "$dst"/
-  else
-    cp -a "$src"/. "$dst"/
-  fi
-  ok "Стандартный сайт восстановлен для ${label}: ${dst}"
-}
-
-
 stage_site_reset_stock(){
   need_root
   load_config
@@ -222,16 +237,12 @@ stage_site_reset_stock(){
   backup_dir="$(site_backup_webroots site-reset)"
   ok "Backup текущих сайтов создан: $backup_dir"
 
-  site_copy_stock_template "$KIT_DIR/sites/panel-vless-mask-site" "/var/www/${PRIMARY_DOMAIN}" "$PRIMARY_DOMAIN"
+  mask_reset_preset_site "${PRIMARY_DOMAIN}" primary
   if uses_mtproto; then
-    if [[ "$PROFILE" == "root_mtproto" ]]; then
-      site_copy_stock_template "$KIT_DIR/sites/mtproto-relay-mask-site" "/var/www/${SYNC_DOMAIN}" "$SYNC_DOMAIN"
-    else
-      site_copy_stock_template "$KIT_DIR/sites/mtproto-mask-site" "/var/www/${SYNC_DOMAIN}" "$SYNC_DOMAIN"
-    fi
+    mask_reset_preset_site "${SYNC_DOMAIN}" sync
   fi
   if [[ "$PROFILE" == "root_mtproto" ]]; then
-    site_copy_stock_template "$KIT_DIR/sites/root-mask-site" "/var/www/${ROOT_DOMAIN}" "$ROOT_DOMAIN"
+    mask_reset_preset_site "${ROOT_DOMAIN}" root
   fi
 
   site_fix_permissions

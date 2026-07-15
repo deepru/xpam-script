@@ -67,8 +67,8 @@ server {
         access_log off;
     }
     location @same_domain_root { return 302 https://$host/; }
-    location = /login {
-        try_files /login.html @same_domain_root;
+    location = /license {
+        try_files /license.html @same_domain_root;
         add_header Cache-Control "no-store" always;
     }
     location = /docs {
@@ -102,11 +102,12 @@ server {
     location = / { try_files /index.html @sync_service_index; }
     location = /health { default_type application/json; return 200 "{\"status\":\"ok\"}\n"; }
     location = /status { default_type application/json; return 200 "{\"service\":\"sync\",\"status\":\"operational\"}\n"; }
-    location = /login { try_files /login.html @sync_domain_root; }
+    location = /license { try_files /license.html @sync_domain_root; }
     location = /docs { try_files /docs.html @sync_domain_root; }
     location = /favicon.ico { try_files /favicon.ico =204; log_not_found off; access_log off; }
     location = /v1 { default_type application/json; add_header WWW-Authenticate 'Bearer realm="api"' always; return 401 "{\"error\":\"unauthorized\",\"message\":\"missing bearer token\"}\n"; }
     location ^~ /v1/ { default_type application/json; add_header WWW-Authenticate 'Bearer realm="api"' always; return 401 "{\"error\":\"unauthorized\",\"message\":\"missing bearer token\"}\n"; }
     include /etc/nginx/snippets/xpam-script-telegram-relay.conf;
-    location / { try_files $uri $uri/ /index.html @sync_not_found; }
+    error_page 404 /404.html;
+    location / { try_files $uri $uri/ =404; }
 }

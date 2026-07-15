@@ -48,11 +48,7 @@ sudo srv-xpam
 
 Before installation, read the full user guide.
 
-**Primary guide format:** [USER_GUIDE_RU.docx](docs/USER_GUIDE_RU.docx)
-
-**Downloadable PDF:** [USER_GUIDE_RU.pdf](https://github.com/deepru/xpam-script/raw/main/docs/USER_GUIDE_RU.pdf)
-
-> If a browser PDF preview distorts Cyrillic text, use the DOCX guide or download the PDF and open it in Chrome, Adobe Reader, SumatraPDF, or another local PDF viewer.
+**Full guide:** [User guide (Russian)](docs/USER_GUIDE_RU.md) — from VPS prep to operation, updates, and diagnostics. Opens right on GitHub.
 
 Additional documents:
 

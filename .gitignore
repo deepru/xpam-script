@@ -13,6 +13,9 @@ secure-notes/
 config-backups/
 manual-backups/
 
+# Handoff: operator-private notes (real fleet data — never commit)
+handoff/OPERATOR_PRIVATE.md
+
 # Local install/build/test directories
 dist/
 xpam-install/

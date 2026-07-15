@@ -1,5 +1,30 @@
 # Changelog
 
+## v1.3.9
+
+### Masking
+
+- New decoy mask-site system. Instead of static placeholder pages, XPAM generates a plausible
+  product-landing site (home, docs, license, 404, `robots.txt`, `sitemap.xml`) for each domain,
+  chosen deterministically from the domain name — so every domain, and every server, looks
+  different. Per-server anti-collision keeps two subdomains of one box from getting the same site.
+  Fully self-contained; nothing to configure.
+- Bring-your-own-site preserved: a custom site placed in a domain's web root is never overwritten
+  on install or repair. "Restore stock sites" regenerates the default pages on demand.
+
+### Documentation
+
+- The full Russian user guide was reformatted from DOCX/PDF into GitHub-native Markdown
+  (`docs/USER_GUIDE_RU.md`) — table of contents, tables, code highlighting, alerts; it opens
+  directly on GitHub. The old `.docx`/`.pdf` were removed.
+- `THIRD_PARTY.md` / `NOTICE.md` updated: dropped the stale standalone `mtg` reference (Telegram
+  proxy / MTG is bundled and maintained by 3x-ui). `docs/SITES.md` documents the new site system.
+
+### Compatibility
+
+- No user-facing changes — same commands and menu. Validated on Ubuntu and Debian with
+  3x-ui 3.5.0 / Xray 26.7.11 (last-validated baseline unchanged).
+
 ## v1.3.8
 
 ### Compatibility

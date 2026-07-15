@@ -4,7 +4,7 @@ set -Eeuo pipefail
 KIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Derive the displayed version from the VERSION file so it never goes stale between releases.
 KIT_VERSION="v$(head -n1 "${KIT_DIR}/VERSION" 2>/dev/null | tr -d '[:space:]' || true)"
-[[ "$KIT_VERSION" == v?* ]] || KIT_VERSION="v1.3.8"
+[[ "$KIT_VERSION" == v?* ]] || KIT_VERSION="v1.3.9"
 CONFIG_DIR="/etc/xpam-script"
 CONFIG_FILE="${CONFIG_DIR}/config.env"
 PREFIX_BOOTSTRAP_FILE="${CONFIG_DIR}/prefix.env"
@@ -283,7 +283,7 @@ ensure_xui_ready_for_finalize(){
 }
 
 PROFILE=""; SERVER_PREFIX=""; ROOT_DOMAIN=""; WWW_DOMAIN=""; PRIMARY_DOMAIN=""; SYNC_DOMAIN=""; WEB_CERT_NAME=""; CERT_EMAIL=""
-PANEL_PATH="api/internal/storage"; XUI_PANEL_PORT="57827"; XUI_AUTO_SETUP="yes"; XUI_ADMIN_USER="vlessuser"; XUI_ADMIN_PASS="${XUI_ADMIN_PASS:-}"; XUI_INSTALLED_TAG=""; XRAY_PUBLIC_PORT="443"; XRAY_LOCAL_PORT="1443"; SSH_PUBLIC_PORT="22"; HTTP_PUBLIC_PORT="80"; SITE_BACKEND_PORT="8080"; SYNC_BACKEND_PORT="9443"; MTPROTO_PORT="47827"; MTPROTO_BACKEND="3xui-mtg"; ALLOW_IPV6_443="no"; BASIC_USER="admin"
+PANEL_PATH="api/internal/storage"; XUI_PANEL_PORT="57827"; XUI_AUTO_SETUP="yes"; XUI_ADMIN_USER="vlessuser"; XUI_ADMIN_PASS="${XUI_ADMIN_PASS:-}"; XUI_INSTALLED_TAG=""; XRAY_PUBLIC_PORT="443"; XRAY_LOCAL_PORT="1443"; SSH_PUBLIC_PORT="22"; HTTP_PUBLIC_PORT="80"; SITE_BACKEND_PORT="8080"; SYNC_BACKEND_PORT="9443"; MTPROTO_PORT="47827"; MTPROTO_BACKEND="3xui-mtg"; ALLOW_IPV6_443="no"; BASIC_USER="admin"; MASK_PRESET="${MASK_PRESET:-}"
 TELEGRAM_RELAY_PATH="api/internal/notify-relay"; TELEGRAM_RELAY_SOCKET="/run/xpam-script-telegram-relay.sock"
 
 # XPAM Auto internal policy defaults. These are intentionally hidden from the normal user menu.
@@ -626,7 +626,7 @@ maybe_import_existing_config(){
     chmod 700 "$CONFIG_DIR"
     {
       echo "# Managed by xpam-script ${KIT_VERSION}"
-      for v in PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY; do
+      for v in PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER MASK_PRESET TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY; do
         printf '%s=%q\n' "$v" "${!v:-}"
       done
     } > "$CONFIG_FILE"
@@ -711,7 +711,7 @@ save_config(){
   validate_server_prefix
   {
     echo "# Managed by xpam-script ${KIT_VERSION}"
-    for v in PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY; do
+    for v in PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER MASK_PRESET TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY; do
       printf '%s=%q\n' "$v" "${!v}"
     done
   } > "$CONFIG_FILE"
@@ -754,7 +754,7 @@ open(dst,'w').write(s)
 PY
 }
 export_vars(){
-  export PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY
+  export PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER MASK_PRESET TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY
   export WEB_SERVER_NAMES="$(web_domains)" CERTONLY_SERVER_NAMES="$(web_domains)${SYNC_DOMAIN:+ $SYNC_DOMAIN}" SERVICE_SITE_DIR="$(service_site_dir)" ROOT_SITE_DIR="$(root_site_dir)" SERVER_PREFIX_UP="$(printf '%s' "$SERVER_PREFIX" | tr '[:lower:]' '[:upper:]')"
   export HAPROXY_BACKEND_ORDER_UNITS="network-online.target nginx.service x-ui.service"
   if [[ "$PROFILE" == "root_mtproto" ]]; then
@@ -795,7 +795,7 @@ server {
         access_log off;
     }
     location @same_domain_root { return 302 https://\$host/; }
-    location = /login { try_files /login.html @same_domain_root; add_header Cache-Control "no-store" always; }
+    location = /license { try_files /license.html @same_domain_root; add_header Cache-Control "no-store" always; }
     location = /docs { try_files /docs.html @same_domain_root; add_header Cache-Control "no-store" always; }
     location = /favicon.ico { try_files /favicon.ico =204; log_not_found off; access_log off; }
     location / { add_header Cache-Control "no-cache" always; try_files \$uri \$uri/ =404; }
@@ -1524,18 +1524,19 @@ setup_sites(){
   chmod 755 /var/www /var/www/letsencrypt
   rm -rf /var/www/html 2>/dev/null || true
 
+  # Renders the stock "product landing" decoy for a domain, unless the operator already placed a
+  # custom site there (BYO): if index.html exists, we keep it untouched. The stock site is
+  # generated deterministically from the domain (preset + accent) — see sites/_mask/generate.py.
   install_site_template(){
-    local src="$1"
-    local dst="$2"
-    local label="$3"
+    local domain="$1" role="$2" dst="/var/www/$1"
 
     mkdir -p "$dst"
 
-    if [ ! -e "$dst/index.html" ] && [ -d "$src" ]; then
-      rsync -a --ignore-existing "$src"/ "$dst"/
-      ok "Default masked site installed for ${label}: ${dst}"
+    if [ ! -e "$dst/index.html" ]; then
+      mask_render_preset_site "$domain" "$role" "$dst" >/dev/null || fail "Не удалось сгенерировать сайт-декорацию для ${domain}"
+      ok "Default masked site installed for ${domain}: ${dst}"
     else
-      ok "Keeping existing/custom site for ${label}: ${dst}"
+      ok "Keeping existing/custom site for ${domain}: ${dst}"
     fi
 
     chown -R www-data:www-data "$dst" 2>/dev/null || true
@@ -1543,18 +1544,14 @@ setup_sites(){
     find "$dst" -type f -exec chmod 644 {} \; 2>/dev/null || true
   }
 
-  install_site_template "$KIT_DIR/sites/panel-vless-mask-site" "/var/www/${PRIMARY_DOMAIN}" "$PRIMARY_DOMAIN"
+  install_site_template "${PRIMARY_DOMAIN}" primary
 
   if uses_mtproto; then
-    if [[ "$PROFILE" == "root_mtproto" ]]; then
-    install_site_template "$KIT_DIR/sites/mtproto-relay-mask-site" "/var/www/${SYNC_DOMAIN}" "$SYNC_DOMAIN"
-  else
-    install_site_template "$KIT_DIR/sites/mtproto-mask-site" "/var/www/${SYNC_DOMAIN}" "$SYNC_DOMAIN"
-  fi
+    install_site_template "${SYNC_DOMAIN}" sync
   fi
 
   if [[ "$PROFILE" == "root_mtproto" ]]; then
-    install_site_template "$KIT_DIR/sites/root-mask-site" "/var/www/${ROOT_DOMAIN}" "$ROOT_DOMAIN"
+    install_site_template "${ROOT_DOMAIN}" root
   fi
 }
 

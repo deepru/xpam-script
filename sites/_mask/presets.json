@@ -1,0 +1,292 @@
+[
+  {
+    "id": "halden", "product": "Halden", "glyph": "cube",
+    "category": "Sync & storage infrastructure",
+    "headline": "The data layer for local-first apps.", "headline_em": "local-first apps.",
+    "lede": "Halden keeps data in sync across devices and stores it durably — one engine, a clean API, no moving parts to manage.",
+    "install": "halden serve", "port": "4600",
+    "spec": ["Realtime sync", "Durable storage", "REST & streaming API", "Single binary"],
+    "capabilities": [
+      { "icon": "sync", "title": "Realtime sync", "body": "Changes replicate across every connected client in milliseconds, with deterministic conflict resolution." },
+      { "icon": "db", "title": "Durable storage", "body": "An append-only log with point-in-time recovery keeps every write safe and auditable." },
+      { "icon": "api", "title": "One clean API", "body": "A single REST and streaming interface — no SDK lock-in, no schema migrations to babysit." }
+    ],
+    "how": { "title": "Running in three steps.", "intro": "Point Halden at a directory and connect. That's the whole setup.",
+      "steps": ["Start the engine on any host.", "Open a namespace for your app.", "Read and write through the API — sync is automatic."],
+      "code": "# start the engine\n$ halden serve --data ./store\n\n# create a namespace\n$ halden ns create notes\n→ namespace ready · api · sync\n\n# write through the API\n$ curl -X PUT /v1/notes/today \\\n    -d '{\"body\":\"hello\"}'" },
+    "footer_line": "Halden — an open engine for syncing and storing application data.",
+    "docs": {
+      "sub": "A sync and storage engine for local-first applications.",
+      "overview": ["Halden is a single-binary engine that keeps application data in sync across clients and stores it durably on disk. It exposes one HTTP interface for reads, writes, and a live change stream — no external database, no background services to coordinate.", "Data is organized into namespaces. Each namespace is an independent keyspace with its own change log, so unrelated apps can share one engine without stepping on each other."],
+      "install_code": "# download and start\n$ curl -sSL get.@@domain@@/install | sh\n$ halden serve --data /var/lib/halden\n→ listening on :@@port@@ · api ready · sync ready",
+      "callout": "By default the engine binds to 127.0.0.1:@@port@@. Put it behind your own reverse proxy to expose it over TLS.",
+      "quickstart_code": "# create a namespace\n$ halden ns create notes\n\n# write a record\n$ curl -X PUT :@@port@@/v1/notes/today \\\n    -d '{\"body\":\"hello\"}'\n\n# read it back\n$ curl :@@port@@/v1/notes/today\n{\"body\":\"hello\",\"rev\":1}",
+      "config_yaml": "# halden.yaml\ndata:    /var/lib/halden\nlisten:  127.0.0.1:@@port@@\nlog:     info\nretention:\n  snapshots: 24",
+      "config_items": [["data", "directory for the append-only log and snapshots."], ["listen", "address the HTTP interface binds to."], ["retention.snapshots", "how many point-in-time snapshots to keep."]],
+      "api_intro": "Every route lives under /v1/&lt;namespace&gt;. Requests without a valid token return 401.",
+      "api_rows": [["GET /v1/{ns}/{key}", "Read a single record."], ["PUT /v1/{ns}/{key}", "Create or replace a record."], ["DELETE /v1/{ns}/{key}", "Remove a record."], ["GET /v1/{ns}/_watch", "Server-sent stream of changes in the namespace."], ["GET /health", "Liveness probe. Returns 200 when the engine is ready."]],
+      "cli_rows": [["halden serve", "Start the engine."], ["halden ns create <name>", "Create a namespace."], ["halden ns ls", "List namespaces."], ["halden status", "Show engine health and namespace stats."]]
+    }
+  },
+  {
+    "id": "corvus", "product": "Corvus", "glyph": "hex",
+    "category": "Message queue & event broker",
+    "headline": "A small, fast broker for background work.", "headline_em": "background work.",
+    "lede": "Corvus moves jobs and events between your services with at-least-once delivery, retries, and a live view of every queue — in a single binary.",
+    "install": "corvus start", "port": "5300",
+    "spec": ["At-least-once delivery", "Automatic retries", "Streaming consumers", "REST API"],
+    "capabilities": [
+      { "icon": "queue", "title": "Durable queues", "body": "Jobs are persisted before they're acknowledged, so nothing is lost when a worker restarts." },
+      { "icon": "retry", "title": "Retries & delays", "body": "Failed jobs back off and retry on a schedule you control, with a dead-letter queue for the rest." },
+      { "icon": "stream", "title": "Streaming consumers", "body": "Workers subscribe over a long-lived connection and receive jobs the moment they're enqueued." }
+    ],
+    "how": { "title": "From enqueue to done.", "intro": "Publish a job over HTTP, consume it from a worker. Corvus handles delivery and retries.",
+      "steps": ["Start the broker on any host.", "Publish jobs to a queue over the API.", "Consume them from one or more workers."],
+      "code": "# start the broker\n$ corvus start --data ./queue\n\n# publish a job\n$ curl -X POST /v1/queues/email/jobs \\\n    -d '{\"to\":\"a@b.c\"}'\n→ queued · id job_8f2a\n\n# a worker consumes the stream\n$ corvus consume email" },
+    "footer_line": "Corvus — an open message queue and event broker for background work.",
+    "docs": {
+      "sub": "A message queue and event broker in a single binary.",
+      "overview": ["Corvus is a single-binary broker that moves jobs and events between services. Producers publish over HTTP; consumers subscribe over a long-lived stream and receive work as it arrives, with at-least-once delivery guarantees.", "Work is grouped into queues. Each queue keeps its own durable log, retry policy, and dead-letter queue, so unrelated workloads stay isolated on one broker."],
+      "install_code": "# download and start\n$ curl -sSL get.@@domain@@/install | sh\n$ corvus start --data /var/lib/corvus\n→ listening on :@@port@@ · api ready",
+      "callout": "By default the broker binds to 127.0.0.1:@@port@@. Put it behind your own reverse proxy to expose it over TLS.",
+      "quickstart_code": "# publish a job\n$ curl -X POST :@@port@@/v1/queues/email/jobs \\\n    -d '{\"to\":\"a@b.c\"}'\n→ queued · id job_8f2a\n\n# consume from a worker\n$ corvus consume email\n→ job_8f2a {\"to\":\"a@b.c\"}",
+      "config_yaml": "# corvus.yaml\ndata:    /var/lib/corvus\nlisten:  127.0.0.1:@@port@@\nlog:     info\nretries:\n  max: 5\n  backoff: 30s",
+      "config_items": [["data", "directory for the durable queue log."], ["listen", "address the HTTP interface binds to."], ["retries.max", "how many times a failed job is retried before dead-lettering."]],
+      "api_intro": "Every route lives under /v1/queues/&lt;name&gt;. Requests without a valid token return 401.",
+      "api_rows": [["POST /v1/queues/{q}/jobs", "Publish a job to a queue."], ["GET /v1/queues/{q}/_stream", "Stream jobs to a consumer."], ["POST /v1/queues/{q}/ack/{id}", "Acknowledge a completed job."], ["GET /v1/queues/{q}", "Queue depth and retry stats."], ["GET /health", "Liveness probe. Returns 200 when the broker is ready."]],
+      "cli_rows": [["corvus start", "Start the broker."], ["corvus consume <queue>", "Consume jobs from a queue."], ["corvus queues ls", "List queues."], ["corvus status", "Show broker health and queue depths."]]
+    }
+  },
+  {
+    "id": "slate", "product": "Slate", "glyph": "diamond",
+    "category": "Object storage",
+    "headline": "S3-compatible object storage you run yourself.", "headline_em": "you run yourself.",
+    "lede": "Slate stores files and blobs behind an S3-compatible API, with versioning and integrity checks, on disks you control.",
+    "install": "slate serve", "port": "9000",
+    "spec": ["S3-compatible API", "Versioned objects", "Integrity checks", "Single binary"],
+    "capabilities": [
+      { "icon": "box", "title": "Buckets & objects", "body": "Group objects into buckets with per-bucket policies; the API matches the S3 calls your tools already speak." },
+      { "icon": "layers", "title": "Versioning", "body": "Every overwrite keeps the previous version, so deletes and mistakes are recoverable." },
+      { "icon": "lock", "title": "Integrity by default", "body": "Each object is checksummed on write and verified on read — silent corruption doesn't go unnoticed." }
+    ],
+    "how": { "title": "Store an object in seconds.", "intro": "Create a bucket, put an object, read it back — with any S3 client or plain curl.",
+      "steps": ["Start Slate against a data directory.", "Create a bucket.", "Put and get objects over the S3-compatible API."],
+      "code": "# start the server\n$ slate serve --data ./objects\n\n# create a bucket\n$ slate mb photos\n→ bucket ready\n\n# put an object\n$ curl -T cat.jpg /v1/photos/cat.jpg" },
+    "footer_line": "Slate — open, S3-compatible object storage for your own infrastructure.",
+    "docs": {
+      "sub": "S3-compatible object storage in a single binary.",
+      "overview": ["Slate stores files and blobs behind an S3-compatible HTTP API. Point your existing S3 tooling at it and objects land on disks you control, with no cloud account in the loop.", "Objects live in buckets. Each bucket can keep versions and enforce its own access policy, so different applications can share one server safely."],
+      "install_code": "# download and start\n$ curl -sSL get.@@domain@@/install | sh\n$ slate serve --data /var/lib/slate\n→ listening on :@@port@@ · s3 api ready",
+      "callout": "By default Slate binds to 127.0.0.1:@@port@@. Put it behind your own reverse proxy to expose it over TLS.",
+      "quickstart_code": "# create a bucket\n$ slate mb photos\n\n# upload an object\n$ curl -T cat.jpg :@@port@@/v1/photos/cat.jpg\n→ stored · etag 9f2b1c\n\n# download it\n$ curl :@@port@@/v1/photos/cat.jpg -o cat.jpg",
+      "config_yaml": "# slate.yaml\ndata:    /var/lib/slate\nlisten:  127.0.0.1:@@port@@\nlog:     info\nversioning:\n  enabled: true",
+      "config_items": [["data", "directory where object data is stored."], ["listen", "address the S3-compatible API binds to."], ["versioning.enabled", "keep previous versions of overwritten objects."]],
+      "api_intro": "Routes follow the S3 object model under /v1/&lt;bucket&gt;. Requests without a valid signature return 401.",
+      "api_rows": [["PUT /v1/{bucket}/{key}", "Upload an object."], ["GET /v1/{bucket}/{key}", "Download an object."], ["DELETE /v1/{bucket}/{key}", "Delete an object (keeps prior versions)."], ["GET /v1/{bucket}", "List objects in a bucket."], ["GET /health", "Liveness probe. Returns 200 when storage is ready."]],
+      "cli_rows": [["slate serve", "Start the storage server."], ["slate mb <bucket>", "Make a bucket."], ["slate ls <bucket>", "List objects."], ["slate status", "Show storage health and usage."]]
+    }
+  },
+  {
+    "id": "ember", "product": "Ember", "glyph": "square",
+    "category": "In-memory key-value store",
+    "headline": "A fast key-value store with a durable heart.", "headline_em": "a durable heart.",
+    "lede": "Ember serves reads and writes from memory in microseconds and persists to disk in the background, so a restart never loses your data.",
+    "install": "ember serve", "port": "6100",
+    "spec": ["In-memory speed", "Background persistence", "TTL & eviction", "REST API"],
+    "capabilities": [
+      { "icon": "bolt", "title": "Microsecond reads", "body": "Keys are served straight from memory; a typical GET or SET completes in tens of microseconds." },
+      { "icon": "db", "title": "Durable by design", "body": "Writes are appended to a log and snapshotted, so a crash or restart replays cleanly." },
+      { "icon": "clock", "title": "TTL & eviction", "body": "Set a time-to-live per key and pick an eviction policy when memory runs tight." }
+    ],
+    "how": { "title": "Set a key, get it back.", "intro": "No schema, no setup — start the server and use the API.",
+      "steps": ["Start Ember on any host.", "Set a key with an optional TTL.", "Read it back over the API."],
+      "code": "# start the store\n$ ember serve --data ./ember\n\n# set a key with a 60s ttl\n$ curl -X PUT :6100/v1/kv/session \\\n    -H 'ttl: 60' -d 'abc123'\n→ ok\n\n# read it\n$ curl /v1/kv/session" },
+    "footer_line": "Ember — an open, fast key-value store with durable persistence.",
+    "docs": {
+      "sub": "An in-memory key-value store with durable persistence.",
+      "overview": ["Ember keeps your keys in memory for fast access and persists them to disk in the background. Reads and writes go through a small HTTP API, so any language can use it without a client library.", "Keys can carry a time-to-live and are grouped into logical namespaces. When memory runs low, a configurable eviction policy decides what to drop first."],
+      "install_code": "# download and start\n$ curl -sSL get.@@domain@@/install | sh\n$ ember serve --data /var/lib/ember\n→ listening on :@@port@@ · api ready",
+      "callout": "By default Ember binds to 127.0.0.1:@@port@@. Put it behind your own reverse proxy to expose it over TLS.",
+      "quickstart_code": "# set a key\n$ curl -X PUT :@@port@@/v1/kv/session -d 'abc123'\n→ ok\n\n# read it back\n$ curl :@@port@@/v1/kv/session\nabc123\n\n# delete it\n$ curl -X DELETE :@@port@@/v1/kv/session",
+      "config_yaml": "# ember.yaml\ndata:    /var/lib/ember\nlisten:  127.0.0.1:@@port@@\nlog:     info\nmemory:\n  eviction: lru",
+      "config_items": [["data", "directory for the persistence log and snapshots."], ["listen", "address the HTTP interface binds to."], ["memory.eviction", "policy used when memory is full (lru, lfu, none)."]],
+      "api_intro": "Every route lives under /v1/kv. Requests without a valid token return 401.",
+      "api_rows": [["GET /v1/kv/{key}", "Read a value."], ["PUT /v1/kv/{key}", "Set a value (optional ttl header)."], ["DELETE /v1/kv/{key}", "Delete a key."], ["GET /v1/kv/_scan", "Stream keys matching a prefix."], ["GET /health", "Liveness probe. Returns 200 when the store is ready."]],
+      "cli_rows": [["ember serve", "Start the store."], ["ember get <key>", "Read a value."], ["ember set <key> <value>", "Set a value."], ["ember status", "Show memory use and hit rate."]]
+    }
+  },
+  {
+    "id": "finch", "product": "Finch", "glyph": "ring",
+    "category": "Full-text search",
+    "headline": "Full-text search that fits in one binary.", "headline_em": "one binary.",
+    "lede": "Finch indexes your documents and answers typo-tolerant queries in milliseconds, over a plain HTTP API — no cluster to operate.",
+    "install": "finch serve", "port": "7280",
+    "spec": ["Typo-tolerant", "Millisecond queries", "Faceted filters", "REST API"],
+    "capabilities": [
+      { "icon": "search", "title": "Relevant results", "body": "Ranking blends term frequency and field weights, with typo tolerance so near-misses still match." },
+      { "icon": "bolt", "title": "Fast indexing", "body": "Documents are searchable moments after they're added; incremental updates don't rebuild the world." },
+      { "icon": "filter", "title": "Facets & filters", "body": "Narrow results by tags, ranges, and categories in the same query that runs the search." }
+    ],
+    "how": { "title": "Index, then search.", "intro": "Add documents to an index and query them over HTTP.",
+      "steps": ["Start Finch on any host.", "Add documents to an index.", "Query with filters over the API."],
+      "code": "# start the server\n$ finch serve --data ./index\n\n# add a document\n$ curl -X POST /v1/books/docs \\\n    -d '{\"title\":\"Dune\"}'\n→ indexed · id 1\n\n# search\n$ curl '/v1/books/search?q=dune'" },
+    "footer_line": "Finch — open full-text search you can run anywhere.",
+    "docs": {
+      "sub": "Typo-tolerant full-text search in a single binary.",
+      "overview": ["Finch builds an inverted index over your documents and answers ranked, typo-tolerant queries over a small HTTP API. There's no cluster to manage — one process holds the index and serves searches.", "Documents are grouped into indexes. Each index has its own schema of searchable and filterable fields, so a books index and a users index can live side by side."],
+      "install_code": "# download and start\n$ curl -sSL get.@@domain@@/install | sh\n$ finch serve --data /var/lib/finch\n→ listening on :@@port@@ · api ready",
+      "callout": "By default Finch binds to 127.0.0.1:@@port@@. Put it behind your own reverse proxy to expose it over TLS.",
+      "quickstart_code": "# add a document\n$ curl -X POST :@@port@@/v1/books/docs \\\n    -d '{\"title\":\"Dune\"}'\n→ indexed · id 1\n\n# run a search\n$ curl ':@@port@@/v1/books/search?q=doon'\n{\"hits\":[{\"id\":1,\"title\":\"Dune\"}]}",
+      "config_yaml": "# finch.yaml\ndata:    /var/lib/finch\nlisten:  127.0.0.1:@@port@@\nlog:     info\nsearch:\n  typo_tolerance: true",
+      "config_items": [["data", "directory where indexes are stored."], ["listen", "address the HTTP interface binds to."], ["search.typo_tolerance", "match queries with small spelling differences."]],
+      "api_intro": "Every route lives under /v1/&lt;index&gt;. Requests without a valid token return 401.",
+      "api_rows": [["POST /v1/{index}/docs", "Add or update a document."], ["GET /v1/{index}/search", "Run a search query."], ["DELETE /v1/{index}/docs/{id}", "Remove a document."], ["GET /v1/{index}/settings", "Read the index schema."], ["GET /health", "Liveness probe. Returns 200 when search is ready."]],
+      "cli_rows": [["finch serve", "Start the search server."], ["finch index <name>", "Create an index."], ["finch reindex <name>", "Rebuild an index."], ["finch status", "Show index sizes and query stats."]]
+    }
+  },
+  {
+    "id": "pennant", "product": "Pennant", "glyph": "triangle",
+    "category": "Feature flags & config",
+    "headline": "Feature flags and config, without the SaaS.", "headline_em": "without the SaaS.",
+    "lede": "Pennant serves feature flags and runtime config to your apps over a fast API, with instant updates and per-environment targeting.",
+    "install": "pennant serve", "port": "4800",
+    "spec": ["Instant flag updates", "Per-environment", "Targeting rules", "REST API"],
+    "capabilities": [
+      { "icon": "flag", "title": "Flags & config", "body": "Boolean flags, numbers, and JSON config live in one place and change without a deploy." },
+      { "icon": "sync", "title": "Instant updates", "body": "Clients hold a streaming connection, so a flag flip reaches every instance within a second." },
+      { "icon": "filter", "title": "Targeting rules", "body": "Roll out by percentage, environment, or attributes — the same flag can differ per audience." }
+    ],
+    "how": { "title": "Flip a flag in one call.", "intro": "Define a flag, evaluate it from your app over HTTP.",
+      "steps": ["Start Pennant on any host.", "Create a flag with a rollout rule.", "Evaluate it from your app over the API."],
+      "code": "# start the server\n$ pennant serve --data ./flags\n\n# create a flag at 25%\n$ curl -X PUT /v1/flags/new-ui \\\n    -d '{\"rollout\":25}'\n\n# evaluate for a user\n$ curl '/v1/eval/new-ui?user=42'" },
+    "footer_line": "Pennant — open, self-hosted feature flags and runtime config.",
+    "docs": {
+      "sub": "Self-hosted feature flags and runtime configuration.",
+      "overview": ["Pennant stores feature flags and runtime config and serves them to your applications over a small HTTP API. Flags change instantly — no redeploy — and a streaming endpoint pushes updates to connected clients.", "Flags are scoped to environments. The same flag can be off in production, on in staging, and rolled out to a slice of users, all from one place."],
+      "install_code": "# download and start\n$ curl -sSL get.@@domain@@/install | sh\n$ pennant serve --data /var/lib/pennant\n→ listening on :@@port@@ · api ready",
+      "callout": "By default Pennant binds to 127.0.0.1:@@port@@. Put it behind your own reverse proxy to expose it over TLS.",
+      "quickstart_code": "# create a flag\n$ curl -X PUT :@@port@@/v1/flags/new-ui \\\n    -d '{\"rollout\":25}'\n→ ok\n\n# evaluate it\n$ curl ':@@port@@/v1/eval/new-ui?user=42'\n{\"enabled\":true}",
+      "config_yaml": "# pennant.yaml\ndata:    /var/lib/pennant\nlisten:  127.0.0.1:@@port@@\nlog:     info\nenvironments:\n  - production\n  - staging",
+      "config_items": [["data", "directory where flags and rules are stored."], ["listen", "address the HTTP interface binds to."], ["environments", "the environments flags can be scoped to."]],
+      "api_intro": "Every route lives under /v1. Requests without a valid token return 401.",
+      "api_rows": [["PUT /v1/flags/{name}", "Create or update a flag."], ["GET /v1/eval/{name}", "Evaluate a flag for a context."], ["GET /v1/flags/_stream", "Stream flag changes to a client."], ["DELETE /v1/flags/{name}", "Remove a flag."], ["GET /health", "Liveness probe. Returns 200 when ready."]],
+      "cli_rows": [["pennant serve", "Start the server."], ["pennant flags ls", "List flags."], ["pennant set <flag> <value>", "Set a flag value."], ["pennant status", "Show connected clients and flag counts."]]
+    }
+  },
+  {
+    "id": "pulse", "product": "Pulse", "glyph": "wave",
+    "category": "Metrics & time-series",
+    "headline": "Time-series metrics that stay out of your way.", "headline_em": "out of your way.",
+    "lede": "Pulse ingests metrics over a simple API, stores them compactly with automatic downsampling, and answers range queries fast.",
+    "install": "pulse serve", "port": "8400",
+    "spec": ["Compact storage", "Automatic downsampling", "Range queries", "REST API"],
+    "capabilities": [
+      { "icon": "chart", "title": "Fast range queries", "body": "Ask for any window and Pulse returns points at a sensible resolution without scanning everything." },
+      { "icon": "db", "title": "Compact & rolled up", "body": "Recent data stays high-resolution; older data is downsampled automatically to save space." },
+      { "icon": "api", "title": "Push over HTTP", "body": "Send metrics with a plain POST — no agent to install, no exotic wire format to learn." }
+    ],
+    "how": { "title": "Push a point, query a range.", "intro": "Send metrics over HTTP and read them back by time window.",
+      "steps": ["Start Pulse on any host.", "Push metric points over the API.", "Query a time range for a series."],
+      "code": "# start the server\n$ pulse serve --data ./metrics\n\n# push a point\n$ curl -X POST /v1/ingest \\\n    -d 'cpu,host=web 0.42'\n→ ok\n\n# query the last hour\n$ curl '/v1/query?m=cpu&since=1h'" },
+    "footer_line": "Pulse — open, compact time-series storage for your metrics.",
+    "docs": {
+      "sub": "Compact time-series storage for application metrics.",
+      "overview": ["Pulse ingests metric points over HTTP and stores them in a compact columnar format. Recent points stay at full resolution while older ranges are downsampled automatically, so long retention doesn't blow up disk.", "Metrics are identified by a name and tags. Range queries select by name, tag, and time window, and return points at a resolution that matches the window."],
+      "install_code": "# download and start\n$ curl -sSL get.@@domain@@/install | sh\n$ pulse serve --data /var/lib/pulse\n→ listening on :@@port@@ · api ready",
+      "callout": "By default Pulse binds to 127.0.0.1:@@port@@. Put it behind your own reverse proxy to expose it over TLS.",
+      "quickstart_code": "# push a metric point\n$ curl -X POST :@@port@@/v1/ingest \\\n    -d 'cpu,host=web 0.42'\n→ ok\n\n# query a range\n$ curl ':@@port@@/v1/query?m=cpu&since=1h'\n{\"points\":[[169..,0.42]]}",
+      "config_yaml": "# pulse.yaml\ndata:    /var/lib/pulse\nlisten:  127.0.0.1:@@port@@\nlog:     info\nretention:\n  raw: 7d\n  rollup: 365d",
+      "config_items": [["data", "directory where series data is stored."], ["listen", "address the HTTP interface binds to."], ["retention.raw", "how long full-resolution points are kept."]],
+      "api_intro": "Every route lives under /v1. Requests without a valid token return 401.",
+      "api_rows": [["POST /v1/ingest", "Push one or more metric points."], ["GET /v1/query", "Query a series over a time range."], ["GET /v1/series", "List known series and tags."], ["DELETE /v1/series/{name}", "Drop a series."], ["GET /health", "Liveness probe. Returns 200 when ready."]],
+      "cli_rows": [["pulse serve", "Start the server."], ["pulse query <metric>", "Query a series."], ["pulse series", "List series."], ["pulse status", "Show ingest rate and disk usage."]]
+    }
+  },
+  {
+    "id": "warden", "product": "Warden", "glyph": "orbit",
+    "category": "Authentication & tokens",
+    "headline": "Authentication and sessions, self-hosted.", "headline_em": "self-hosted.",
+    "lede": "Warden issues and verifies session tokens for your apps over a small API, so you keep auth in-house instead of renting it.",
+    "install": "warden serve", "port": "3200",
+    "spec": ["Token issuance", "Session verification", "Revocation", "REST API"],
+    "capabilities": [
+      { "icon": "key", "title": "Issue & verify", "body": "Mint signed session tokens and verify them in one round trip, with short-lived access and refresh tokens." },
+      { "icon": "shield", "title": "Revocation", "body": "Kill a session or a whole user's sessions instantly — verification checks the live revocation list." },
+      { "icon": "api", "title": "Simple integration", "body": "Two endpoints cover most apps: one to sign in, one to verify. No SDK required." }
+    ],
+    "how": { "title": "Sign in, verify, done.", "intro": "Exchange credentials for a token, then verify it on each request.",
+      "steps": ["Start Warden on any host.", "Exchange credentials for a token.", "Verify the token on incoming requests."],
+      "code": "# start the server\n$ warden serve --data ./auth\n\n# sign in\n$ curl -X POST /v1/tokens \\\n    -d '{\"user\":\"stas\"}'\n→ token eyJ...\n\n# verify a token\n$ curl /v1/verify -H 'authorization: Bearer eyJ...'" },
+    "footer_line": "Warden — open, self-hosted authentication and session tokens.",
+    "docs": {
+      "sub": "Self-hosted authentication and session tokens.",
+      "overview": ["Warden issues signed session tokens for your applications and verifies them over a small HTTP API. Access tokens are short-lived and paired with refresh tokens, so a leaked token expires quickly.", "Sessions can be revoked individually or per user. Verification consults a live revocation list, so a sign-out takes effect immediately across every service."],
+      "install_code": "# download and start\n$ curl -sSL get.@@domain@@/install | sh\n$ warden serve --data /var/lib/warden\n→ listening on :@@port@@ · api ready",
+      "callout": "By default Warden binds to 127.0.0.1:@@port@@. Put it behind your own reverse proxy to expose it over TLS.",
+      "quickstart_code": "# issue a token\n$ curl -X POST :@@port@@/v1/tokens \\\n    -d '{\"user\":\"stas\"}'\n→ {\"token\":\"eyJ...\"}\n\n# verify it\n$ curl :@@port@@/v1/verify \\\n    -H 'authorization: Bearer eyJ...'\n{\"user\":\"stas\",\"valid\":true}",
+      "config_yaml": "# warden.yaml\ndata:    /var/lib/warden\nlisten:  127.0.0.1:@@port@@\nlog:     info\ntokens:\n  access_ttl: 15m\n  refresh_ttl: 720h",
+      "config_items": [["data", "directory for keys and the revocation list."], ["listen", "address the HTTP interface binds to."], ["tokens.access_ttl", "lifetime of an access token."]],
+      "api_intro": "Every route lives under /v1. Requests without a valid token return 401.",
+      "api_rows": [["POST /v1/tokens", "Issue a session token."], ["GET /v1/verify", "Verify a token from the Authorization header."], ["POST /v1/tokens/refresh", "Exchange a refresh token for a new one."], ["DELETE /v1/sessions/{id}", "Revoke a session."], ["GET /health", "Liveness probe. Returns 200 when ready."]],
+      "cli_rows": [["warden serve", "Start the server."], ["warden issue <user>", "Issue a token."], ["warden revoke <session>", "Revoke a session."], ["warden status", "Show active session counts."]]
+    }
+  },
+  {
+    "id": "ticker", "product": "Ticker", "glyph": "cube",
+    "category": "Scheduled jobs & cron",
+    "headline": "Scheduled jobs, done right.", "headline_em": "done right.",
+    "lede": "Ticker runs your recurring and one-off jobs on time, retries the ones that fail, and shows you exactly what ran and when.",
+    "install": "ticker serve", "port": "5600",
+    "spec": ["Cron & one-off", "Retries", "Run history", "REST API"],
+    "capabilities": [
+      { "icon": "clock", "title": "Cron & one-off", "body": "Schedule with cron syntax or fire a job once at a future time — both are first-class." },
+      { "icon": "retry", "title": "Retries with backoff", "body": "A job that fails is retried on a policy you set, and lands in a dead-letter list if it keeps failing." },
+      { "icon": "chart", "title": "Run history", "body": "Every run is recorded with its status and duration, so you can see what happened without grepping logs." }
+    ],
+    "how": { "title": "Schedule once, runs forever.", "intro": "Register a job with a schedule; Ticker triggers it and tracks each run.",
+      "steps": ["Start Ticker on any host.", "Register a job with a cron schedule.", "Watch runs and retries over the API."],
+      "code": "# start the scheduler\n$ ticker serve --data ./jobs\n\n# register a nightly job\n$ curl -X POST /v1/jobs \\\n    -d '{\"cron\":\"0 3 * * *\",\"url\":\"...\"}'\n→ scheduled · id job_2\n\n# list recent runs\n$ curl /v1/jobs/job_2/runs" },
+    "footer_line": "Ticker — an open scheduler for recurring and one-off jobs.",
+    "docs": {
+      "sub": "A scheduler for recurring and one-off jobs.",
+      "overview": ["Ticker triggers jobs on a schedule and tracks every run. Jobs can recur on a cron expression or fire once at a future time, and each trigger calls a URL or enqueues work for your services.", "Failed runs retry with backoff and, if they keep failing, move to a dead-letter list. A full run history — status, duration, output — is kept so you can audit what happened."],
+      "install_code": "# download and start\n$ curl -sSL get.@@domain@@/install | sh\n$ ticker serve --data /var/lib/ticker\n→ listening on :@@port@@ · api ready",
+      "callout": "By default Ticker binds to 127.0.0.1:@@port@@. Put it behind your own reverse proxy to expose it over TLS.",
+      "quickstart_code": "# schedule a nightly job\n$ curl -X POST :@@port@@/v1/jobs \\\n    -d '{\"cron\":\"0 3 * * *\",\"url\":\"...\"}'\n→ scheduled · id job_2\n\n# see recent runs\n$ curl :@@port@@/v1/jobs/job_2/runs",
+      "config_yaml": "# ticker.yaml\ndata:    /var/lib/ticker\nlisten:  127.0.0.1:@@port@@\nlog:     info\nretries:\n  max: 3",
+      "config_items": [["data", "directory for the job store and run history."], ["listen", "address the HTTP interface binds to."], ["retries.max", "retry attempts before a run is dead-lettered."]],
+      "api_intro": "Every route lives under /v1. Requests without a valid token return 401.",
+      "api_rows": [["POST /v1/jobs", "Register a scheduled or one-off job."], ["GET /v1/jobs/{id}/runs", "List a job's run history."], ["POST /v1/jobs/{id}/trigger", "Run a job now."], ["DELETE /v1/jobs/{id}", "Remove a job."], ["GET /health", "Liveness probe. Returns 200 when ready."]],
+      "cli_rows": [["ticker serve", "Start the scheduler."], ["ticker jobs ls", "List jobs."], ["ticker trigger <id>", "Run a job now."], ["ticker status", "Show upcoming runs."]]
+    }
+  },
+  {
+    "id": "quill", "product": "Quill", "glyph": "hex",
+    "category": "Transactional email",
+    "headline": "Transactional email over one simple API.", "headline_em": "one simple API.",
+    "lede": "Quill sends your app's transactional email through your own SMTP, with templates, queuing, and delivery events — behind a clean HTTP API.",
+    "install": "quill serve", "port": "2500",
+    "spec": ["Simple send API", "Templates", "Delivery events", "Your own SMTP"],
+    "capabilities": [
+      { "icon": "mail", "title": "One-call send", "body": "POST a message and Quill queues, sends, and retries it through the SMTP relay you configure." },
+      { "icon": "layers", "title": "Templates", "body": "Store reusable templates and render them with per-message variables at send time." },
+      { "icon": "stream", "title": "Delivery events", "body": "Subscribe to a stream of accepted, delivered, and bounced events instead of parsing mail logs." }
+    ],
+    "how": { "title": "Send in one request.", "intro": "POST a message; Quill handles queuing, delivery, and retries.",
+      "steps": ["Start Quill with your SMTP relay.", "POST a message to the send API.", "Track delivery over the events stream."],
+      "code": "# start the sender\n$ quill serve --data ./mail\n\n# send a message\n$ curl -X POST /v1/send \\\n    -d '{\"to\":\"a@b.c\",\"subject\":\"Hi\"}'\n→ queued · id msg_7\n\n# stream delivery events\n$ curl /v1/events" },
+    "footer_line": "Quill — open transactional email through your own SMTP.",
+    "docs": {
+      "sub": "Transactional email through your own SMTP relay.",
+      "overview": ["Quill gives your application one HTTP endpoint to send transactional email. It queues each message, delivers it through the SMTP relay you configure, and retries on temporary failures.", "Messages can render stored templates with per-send variables. A delivery-event stream reports accepted, delivered, and bounced states, so you don't have to read mail server logs."],
+      "install_code": "# download and start\n$ curl -sSL get.@@domain@@/install | sh\n$ quill serve --data /var/lib/quill\n→ listening on :@@port@@ · api ready",
+      "callout": "By default Quill binds to 127.0.0.1:@@port@@. Put it behind your own reverse proxy to expose it over TLS.",
+      "quickstart_code": "# send a message\n$ curl -X POST :@@port@@/v1/send \\\n    -d '{\"to\":\"a@b.c\",\"subject\":\"Hi\"}'\n→ queued · id msg_7\n\n# stream delivery events\n$ curl :@@port@@/v1/events\n{\"id\":\"msg_7\",\"state\":\"delivered\"}",
+      "config_yaml": "# quill.yaml\ndata:    /var/lib/quill\nlisten:  127.0.0.1:@@port@@\nlog:     info\nsmtp:\n  host: smtp.internal\n  port: 587",
+      "config_items": [["data", "directory for the send queue and templates."], ["listen", "address the HTTP interface binds to."], ["smtp.host", "the SMTP relay Quill delivers through."]],
+      "api_intro": "Every route lives under /v1. Requests without a valid token return 401.",
+      "api_rows": [["POST /v1/send", "Queue a message for delivery."], ["GET /v1/messages/{id}", "Check a message's status."], ["GET /v1/events", "Stream delivery events."], ["PUT /v1/templates/{name}", "Create or update a template."], ["GET /health", "Liveness probe. Returns 200 when ready."]],
+      "cli_rows": [["quill serve", "Start the sender."], ["quill send <to>", "Send a test message."], ["quill templates ls", "List templates."], ["quill status", "Show queue depth and delivery rate."]]
+    }
+  }
+]

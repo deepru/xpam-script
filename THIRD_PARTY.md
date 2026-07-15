@@ -19,7 +19,6 @@ of them. Each component keeps its own license, authorship and upstream support.
 | **UFW** | [Uncomplicated Firewall](https://launchpad.net/ufw) | GPL-3.0 | Firewall policy |
 | **systemd** | [systemd/systemd](https://github.com/systemd/systemd) | [LGPL-2.1+](https://github.com/systemd/systemd/blob/main/LICENSE.LGPL2.1) | Service management |
 | **WireGuard / Cloudflare WARP** | [wireguard.com](https://www.wireguard.com/) · [Cloudflare WARP](https://developers.cloudflare.com/warp-client/) | GPL-2.0 / proprietary | Optional WARP outbound through Xray |
-| **mtg** | [9seconds/mtg](https://github.com/9seconds/mtg) | [MIT](https://github.com/9seconds/mtg/blob/master/LICENSE) | Telegram proxy / MTG (indirect, via 3x-ui) |
 
 ## 3x-ui and Xray-core
 
@@ -28,16 +27,15 @@ XPAM installs and configures [3x-ui](https://github.com/MHSanaei/3x-ui) and
 does **not** vendor their source code; both are maintained by their upstream
 projects and are downloaded from their official release channels during install.
 
-## mtg by 9seconds
+## Components bundled by 3x-ui
 
-XPAM Script does not bundle, ship or install [`mtg`](https://github.com/9seconds/mtg)
-directly. Telegram proxy / MTG functionality is provided **through 3x-ui**;
-depending on the 3x-ui version, it may rely on the upstream `mtg` project.
-
-- Project: [9seconds/mtg](https://github.com/9seconds/mtg) (MIT)
-- Role in XPAM: indirect upstream component, used via 3x-ui's Telegram proxy / MTG integration
-- XPAM's responsibility: installation flow, configuration, health/maintenance checks and user-facing integration around 3x-ui
-- 3x-ui's responsibility: runtime integration of Telegram proxy / MTG support
+XPAM installs **3x-ui**, which downloads and manages its own runtime components — notably
+**Xray-core** and a **Telegram proxy / MTG sidecar**. XPAM does **not** vendor, pin or ship these
+directly: their exact set, versions and licenses are chosen and maintained by 3x-ui upstream and
+vary by 3x-ui release. XPAM's responsibility is the installation flow, configuration and
+health/maintenance around 3x-ui; the bundled runtime components are 3x-ui's responsibility. Review
+the upstream [3x-ui](https://github.com/MHSanaei/3x-ui) project for their exact composition and
+licensing in a given release.
 
 ## System packages
 

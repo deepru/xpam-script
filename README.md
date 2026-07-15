@@ -14,7 +14,8 @@ XPAM настраивает **VLESS**, **Telegram proxy / MTG**, 3x-ui/Xray, ngi
 ## ✨ Ключевые возможности
 
 - 🔐 **VLESS** и **Telegram proxy (MTG)** за единым HTTPS-фронтом `443/tcp` через HAProxy
-- 🌐 Автоматическая настройка 3x-ui/Xray, nginx-маскировка и TLS от Let's Encrypt
+- 🌐 Автоматическая настройка 3x-ui/Xray и TLS от Let's Encrypt
+- 🎭 **Умная маскировка**: на каждый домен — свой правдоподобный авто-генерируемый сайт (или ваш собственный), чтобы сервер выглядел как обычный веб-сайт
 - 🛡️ Хардненинг из коробки: SSH по ключу, UFW, fail2ban, безопасные systemd-юниты
 - ❤️ Диагностика и восстановление: `health` / `deep-health`, `repair` и `repair --full` (восстановление базы 3x-ui из golden-снапшота с авто-откатом)
 - 🔁 **DoubleHop Mode** — маршрутизация VLESS и/или Telegram через второй сервер
@@ -64,11 +65,7 @@ sudo srv-xpam
 
 Перед установкой рекомендуется открыть полную инструкцию пользователя.
 
-**Основной вариант инструкции:** [USER_GUIDE_RU.docx](docs/USER_GUIDE_RU.docx)
-
-**PDF-версия для скачивания:** [USER_GUIDE_RU.pdf](https://github.com/deepru/xpam-script/raw/main/docs/USER_GUIDE_RU.pdf)
-
-> Если встроенный PDF-preview в браузере искажает кириллицу, используйте DOCX-версию или скачайте PDF и откройте его в Chrome, Adobe Reader, SumatraPDF или другом локальном PDF viewer.
+**Полное руководство:** [Руководство пользователя](docs/USER_GUIDE_RU.md) — от подготовки VPS до эксплуатации, обновлений и диагностики. Открывается прямо на GitHub.
 
 Дополнительные материалы:
 
