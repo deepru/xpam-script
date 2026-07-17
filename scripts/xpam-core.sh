@@ -727,8 +727,7 @@ save_config(){
   remove_legacy_vless_launcher || true
   remove_legacy_tg_launcher || true
   write_repair_launcher || true
-  write_netdiag_launcher || true
-  write_status_launcher || true
+  remove_legacy_status_netdiag_launchers || true
 }
 
 load_config(){ maybe_import_existing_config || true; [[ -f "$CONFIG_FILE" ]] || fail "Config not found: $CONFIG_FILE. Run menu item 1 first."; source "$CONFIG_FILE"; validate_server_prefix; migrate_legacy_system_file_names || true; [[ "${XPAM_SCRIPT_QUIET_LOAD_CONFIG:-0}" == "1" ]] || ok "Loaded config: $CONFIG_FILE"; }
@@ -2318,7 +2317,10 @@ PYUUID
 )"
   subid="$(openssl rand -hex 8)"
   xray_port="$(expected_xray_port)"
-  client_name="${SERVER_PREFIX}-vless-client"
+  # Client email doubles as the share-link display name (remarkTemplate={{EMAIL}}). Keep it clean and
+  # short; the operator renames it per device in the panel (e.g. "ru-Stas-PC") and the rename survives
+  # repair (existing inbounds are reused by port, never re-asserted).
+  client_name="${SERVER_PREFIX}-client"
   external_proxy_remark="${SERVER_PREFIX}-public-${XRAY_PUBLIC_PORT}"
   external_proxy_json='[{"forceTls":"same","dest":"'"${PRIMARY_DOMAIN}"'","port":'"${XRAY_PUBLIC_PORT}"',"remark":"'"${external_proxy_remark}"'"}]'
 
@@ -2491,6 +2493,16 @@ WHERE key IN (
   'subRoutingRules',
   'subUpdates'
 );
+
+-- Clean share-link names: render the panel/subscription link remark as {{EMAIL}} only, dropping the
+-- stock "{{INBOUND}}-{{EMAIL}}" composition that prepends the inbound remark (e.g. "ru-vless-"). Only
+-- applied when unset or still an inbound-prefixed template, so an operator's custom template is kept.
+UPDATE settings SET value='{{EMAIL}}'
+WHERE key='remarkTemplate' AND (value IS NULL OR value='' OR value LIKE '%{{INBOUND}}%');
+
+INSERT INTO settings (key, value)
+SELECT 'remarkTemplate', '{{EMAIL}}'
+WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key='remarkTemplate');
 
 COMMIT;
 SQL
@@ -2904,7 +2916,7 @@ verify_xui_manual_setup(){
 write_nginx_final(){ export_vars; cleanup_legacy_nginx_files; if uses_mtproto; then ensure_telegram_relay_nginx_snippet; render_template "$KIT_DIR/templates/nginx-mtproto.conf.tpl" /etc/nginx/sites-available/xpam-script-final.conf; else render_template "$KIT_DIR/templates/nginx-direct.conf.tpl" /etc/nginx/sites-available/xpam-script-final.conf; fi; rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/xpam-script-certonly.conf; ln -sf /etc/nginx/sites-available/xpam-script-final.conf /etc/nginx/sites-enabled/xpam-script-final.conf; ensure_htpasswd; nginx -t; systemctl reload nginx || systemctl restart nginx; }
 
 write_haproxy(){ uses_mtproto || return 0; export_vars; render_template "$KIT_DIR/templates/haproxy.cfg.tpl" /etc/haproxy/haproxy.cfg; haproxy -c -f /etc/haproxy/haproxy.cfg; mkdir -p /etc/systemd/system/haproxy.service.d; render_template "$KIT_DIR/templates/backend-order.conf.tpl" /etc/systemd/system/haproxy.service.d/backend-order.conf; systemctl daemon-reload; systemctl enable haproxy; systemctl restart haproxy; }
-write_health_weekly(){ say "Writing health and weekly scripts"; write_common_library; bash -c '. /usr/local/sbin/xpam-maint-common.sh; xpam_apply_small_vm_policies' || true; xpam_xui_cleanup_legacy_warp_workers || true; write_dns_policy_script; write_network_tuning_policy_script; write_telegram_https_relay_worker; migrate_legacy_system_file_names || true; export_vars; render_template "$KIT_DIR/templates/health.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-health"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-health"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-health"; write_health_launcher || true; write_links_launcher || true; remove_legacy_vless_launcher || true; remove_legacy_tg_launcher || true; write_repair_launcher || true; write_netdiag_launcher || true; write_status_launcher || true; render_template "$KIT_DIR/templates/weekly.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; write_weekly_launcher || true; local cron_min=35; [[ "$SERVER_PREFIX" == "se" ]] && cron_min=30; [[ "$SERVER_PREFIX" == "lt" ]] && cron_min=40; cat > "/etc/cron.d/${SERVER_PREFIX}-weekly-maintenance" <<EOF
+write_health_weekly(){ say "Writing health and weekly scripts"; write_common_library; bash -c '. /usr/local/sbin/xpam-maint-common.sh; xpam_apply_small_vm_policies' || true; xpam_xui_cleanup_legacy_warp_workers || true; write_dns_policy_script; write_network_tuning_policy_script; write_telegram_https_relay_worker; migrate_legacy_system_file_names || true; export_vars; render_template "$KIT_DIR/templates/health.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-health"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-health"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-health"; write_health_launcher || true; write_links_launcher || true; remove_legacy_vless_launcher || true; remove_legacy_tg_launcher || true; write_repair_launcher || true; remove_legacy_status_netdiag_launchers || true; render_template "$KIT_DIR/templates/weekly.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; write_weekly_launcher || true; local cron_min=35; [[ "$SERVER_PREFIX" == "se" ]] && cron_min=30; [[ "$SERVER_PREFIX" == "lt" ]] && cron_min=40; cat > "/etc/cron.d/${SERVER_PREFIX}-weekly-maintenance" <<EOF
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ${cron_min} 4 * * 0 root /usr/bin/nice -n 19 /usr/bin/ionice -c3 /usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh >/dev/null 2>&1
@@ -3244,9 +3256,14 @@ for row in rows:
     for idx, client, uuid in enabled_clients:
         name = client_name(client, idx)
         link = build_link(uuid, name, client, stream, inbound_port)
-        print(f"  Inbound Name: {remark}")
-        print(f"  Client Name: {name}")
-        print(f"  VLESS Link: {link}")
+        net = str(stream.get("network") or "tcp")
+        ext = first_external_proxy(stream)
+        h = str((ext.get("dest") if ext else DEFAULT_HOST) or DEFAULT_HOST or "").strip()
+        p = str((ext.get("port") if ext else DEFAULT_PORT) or DEFAULT_PORT or "443").strip()
+        transport = "основной (tcp)" if net == "tcp" else net
+        print(f"  VLESS · {transport} · {h}:{p}")
+        print(f"    клиент: {name}")
+        print(f"    {link}")
         print()
     found += len(enabled_clients)
 
@@ -3520,8 +3537,9 @@ if not candidates:
 candidates.sort(key=lambda item: (-item[0], item[1]))
 _, _, server, secs = candidates[0]
 for name, secret in secs:
-    print("  Client Name: {0}".format(name))
-    print("  Telegram Link: tg://proxy?server={0}&port={1}&secret={2}".format(server, PUBLIC_PORT, secret))
+    print("  Telegram (MTProto) · {0}:{1}".format(server, PUBLIC_PORT))
+    print("    клиент: {0}".format(name))
+    print("    tg://proxy?server={0}&port={1}&secret={2}".format(server, PUBLIC_PORT, secret))
     print()
 PY_TELEGRAM_LINKS_ALL
 
@@ -3602,10 +3620,8 @@ print_connection_secrets_summary(){
 
   echo
   echo "============================================================"
-  echo "Данные для подключения"
-  echo
-  echo "Сохраните эти данные в безопасном месте."
-  echo "Не отправляйте пароли, VLESS/Telegram ссылки и token в чаты или публичные логи."
+  echo "Данные для подключения — сервер ${SERVER_PREFIX}"
+  echo "⚠ Пароли и ссылки ниже. Не пересылайте этот вывод в чаты, тикеты или скриншоты."
   echo "============================================================"
   echo
   echo "АДРЕС ПАНЕЛИ 3x-ui:"
@@ -3632,10 +3648,9 @@ print_connection_secrets_summary(){
   [[ -f "$auto_note" ]] && echo "  $auto_note"
   echo
   echo "ПОЛЕЗНЫЕ КОМАНДЫ:"
-  echo "  Открыть меню XPAM Script:          sudo ${SERVER_PREFIX}-xpam"
-  echo "  Показать безопасную сводку:     sudo ${SERVER_PREFIX}-links"
-  echo "  Показать все ссылки и секреты:  sudo ${SERVER_PREFIX}-links --show-secrets"
-  echo "  Проверить состояние сервера:     sudo ${SERVER_PREFIX}-health"
+  echo "  Меню XPAM:            sudo ${SERVER_PREFIX}-xpam"
+  echo "  Ссылки:               sudo ${SERVER_PREFIX}-links"
+  echo "  Здоровье сервера:     sudo ${SERVER_PREFIX}-health"
   echo
   echo "============================================================"
 }
@@ -3717,7 +3732,13 @@ stage_finalize(){
   fi
   exit 0
 }
-stage_check_only(){ need_root; load_config; validate_inputs; verify_ssh_preflight; [[ -x "/usr/local/sbin/${SERVER_PREFIX}-health" ]] && "/usr/local/sbin/${SERVER_PREFIX}-health" || verify_xui_manual_setup; }
+stage_check_only(){
+  need_root; load_config; validate_inputs
+  xpam_state_overview
+  echo
+  verify_ssh_preflight
+  [[ -x "/usr/local/sbin/${SERVER_PREFIX}-health" ]] && "/usr/local/sbin/${SERVER_PREFIX}-health" || verify_xui_manual_setup
+}
 
 
 xpam_xui_cleanup_legacy_warp_workers(){
@@ -4094,46 +4115,28 @@ stage_links_direct(){
   need_root
   load_config
   validate_inputs
+  # One command shows everything — whoever runs this in a terminal is already root on the box, so the
+  # only gate is the single warning printed by print_connection_secrets_summary. `--show-secrets` is
+  # accepted as a no-op alias for muscle memory; `--safe` still shows the no-secrets summary.
   case "${1:-}" in
-    --show-secrets)
-      # The --show-secrets flag is itself the explicit opt-in; the caller is already root with
-      # server access, so no extra yes/no prompt (it only added friction and broke non-interactive use).
-      warn "Ниже — пароли, VLESS/Telegram ссылки и другие секреты. Не отправляйте этот вывод в чаты, тикеты, скриншоты или публичные логи."
-      print_connection_secrets_summary
-      ;;
-    ""|--safe|--help|-h)
-      print_connection_summary
-      ;;
-    *)
-      fail "Неизвестный параметр. Используйте: sudo ${SERVER_PREFIX}-links или sudo ${SERVER_PREFIX}-links --show-secrets"
-      ;;
+    --safe) print_connection_summary ;;
+    *)      print_connection_secrets_summary ;;
   esac
 }
 
-stage_status(){
-  # Read-only consolidated dashboard: transports, DoubleHop, MTProto/MTG, WARP, services, and where to
-  # find links/health. No mutations. `set +e` so one failing probe never aborts the overview; heavy
-  # per-client links/secrets stay in <prefix>-links (append them here only on --show-secrets).
-  need_root
-  load_config
-  local want_secrets="" gen_cfg="/usr/local/x-ui/bin/config.json"
-  case "${1:-}" in
-    --show-secrets|--links) want_secrets=1 ;;
-    ""|--safe) ;;
-    --help|-h) echo "Использование: sudo ${SERVER_PREFIX}-status [--show-secrets]"; return 0 ;;
-    *) echo "Неизвестный параметр: ${1}. Используйте --show-secrets или без параметров." ;;
-  esac
-
-  # Read-only probes below: tolerate an individual failure (stopped service, missing DB) without
-  # aborting the overview. Restore errexit afterwards so the optional links delegation stays strict.
+# Clean read-only state overview: transports, DoubleHop, MTProto/MTG, WARP, services. No mutations, no
+# secrets, no panel internals (loopback URL / backend ports are omitted on purpose). Shown by menu item 3
+# before the health run. Callers ensure need_root/load_config first. `set +e` so one failing probe
+# (stopped service, missing DB) never aborts the overview.
+xpam_state_overview(){
+  local gen_cfg="/usr/local/x-ui/bin/config.json"
   local _errexit=""; case $- in *e*) _errexit=1 ;; esac
   set +e
 
   echo
-  echo "================ XPAM status: ${SERVER_PREFIX:-<prefix>} ================"
+  echo "============ Состояние сервера: ${SERVER_PREFIX:-<prefix>} ============"
   printf 'Профиль:          %s\n' "${PROFILE:-<не задан>}"
   printf 'Основной домен:   %s (tcp+tls на :%s)\n' "${PRIMARY_DOMAIN:-<не задан>}" "${XRAY_PUBLIC_PORT:-443}"
-  printf 'Панель 3x-ui:     https://127.0.0.1:%s/%s (loopback)\n' "${XUI_PANEL_PORT:-<порт>}" "${PANEL_PATH#/}"
 
   echo
   echo "Сервисы:"
@@ -4160,7 +4163,7 @@ stage_status(){
   if uses_mtproto; then
     local mtg_st="НЕ слушает — проверьте health/repair"
     if ss -H -ltnp 2>/dev/null | grep -E "127\.0\.0\.1:${MTPROTO_PORT}([^0-9]|$)" | grep -q 'mtg-linux'; then
-      mtg_st="слушает 127.0.0.1:${MTPROTO_PORT} (mtg)"
+      mtg_st="активен (mtg)"
     fi
     printf 'MTProto (MTG):    %s\n' "$mtg_st"
     printf 'FakeTLS домен:    %s\n' "${SYNC_DOMAIN:-<не задан>}"
@@ -4168,22 +4171,14 @@ stage_status(){
     printf 'MTProto (MTG):    профиль без MTProto\n'
   fi
 
-  local warp_st="не обнаружен (WARP настраивается вручную в 3x-ui — см. docs/WARP.md)"
+  local warp_st="не настроен (включается вручную в 3x-ui)"
   if [[ -r "$gen_cfg" ]] && grep -Eq '"tag"[[:space:]]*:[[:space:]]*"warp"' "$gen_cfg" 2>/dev/null; then
-    warp_st="outbound 'warp' присутствует в Xray"
+    warp_st="активен (outbound warp в Xray)"
   fi
   printf 'WARP egress:      %s\n' "$warp_st"
-
-  echo
-  echo "Здоровье:         sudo ${SERVER_PREFIX}-health   (полная проверка: --deep)"
-  echo "Все ссылки:       sudo ${SERVER_PREFIX}-links --show-secrets"
-  echo "======================================================================"
+  echo "======================================================"
 
   [[ -n "$_errexit" ]] && set -e
-  if [[ -n "$want_secrets" ]]; then
-    echo
-    stage_links_direct --show-secrets
-  fi
   return 0
 }
 
@@ -4191,19 +4186,9 @@ stage_show_details(){
   need_root
   load_config
   validate_inputs
-  echo
-  echo "Данные для подключения"
-  echo "1) Показать безопасную сводку без секретов"
-  echo "2) Показать секреты на экран"
-  echo "3) Выйти"
-  local choice
-  read -r -p "Выберите пункт [1-3]: " choice || true
-  case "$choice" in
-    1) print_connection_summary ;;
-    2) stage_links_direct --show-secrets ;;
-    3) return 0 ;;
-    *) fail "Неизвестный пункт меню" ;;
-  esac
+  # Menu item 2 shows the connection data directly (no safe/secrets sub-prompt): terminal access is
+  # already root, and print_connection_secrets_summary prints the single "don't share this" warning.
+  print_connection_secrets_summary
 }
 
 
@@ -4406,69 +4391,78 @@ stage_netdiag(){
 }
 
 stage_advanced_menu(){
-  echo
-  echo "Дополнительно"
-  echo "0) SSH-безопасность / создать prefix-команду"
-  echo "1) Подробная health-диагностика"
-  echo "2) Диагностика сети Debian/провайдера"
-  echo "3) Repair: восстановить XPAM service policy"
-  echo "4) Финальная production-очистка"
-  echo "5) Показать текущую конфигурацию"
-  echo "6) Проверить обновления XPAM"
-  echo "7) Дополнительный транспорт VLESS (xhttp, отдельный домен)"
-  echo "8) Выйти"
+  # Looping submenu (see main_menu). "8) Назад" returns to the main menu; invalid input re-prompts.
   local choice
-  read -r -p "Выберите пункт [0-8]: " choice
-  case "$choice" in
-    0) stage_ssh_hardening ;;
-    1) need_root; load_config; "/usr/local/sbin/${SERVER_PREFIX}-health" --deep ;;
-    2) stage_netdiag ;;
-    3) stage_repair ;;
-    4) final_production_cleanup ;;
-    5) show_config ;;
-    6) xpam_update_menu ;;
-    7) stage_alt_transport_menu ;;
-    8) return 0 ;;
-    *) fail "Неизвестный пункт меню" ;;
-  esac
+  while true; do
+    echo
+    echo "Дополнительно"
+    echo "0) SSH-безопасность / создать prefix-команду"
+    echo "1) Подробная health-диагностика"
+    echo "2) Диагностика сети Debian/провайдера"
+    echo "3) Repair: восстановить XPAM service policy"
+    echo "4) Финальная production-очистка"
+    echo "5) Показать текущую конфигурацию"
+    echo "6) Проверить обновления XPAM"
+    echo "7) Транспорты VLESS"
+    echo "8) Назад"
+    read -r -p "Выберите пункт [0-8]: " choice || return 0
+    case "$choice" in
+      0) stage_ssh_hardening || true ;;
+      1) { need_root; load_config; "/usr/local/sbin/${SERVER_PREFIX}-health" --deep; } || true ;;
+      2) stage_netdiag || true ;;
+      3) stage_repair || true ;;
+      4) final_production_cleanup || true ;;
+      5) show_config || true ;;
+      6) xpam_update_menu || true ;;
+      7) stage_alt_transport_menu || true ;;
+      8) return 0 ;;
+      *) warn "Неизвестный пункт меню — выберите из списка." ;;
+    esac
+  done
 }
 
 main_menu(){
   need_root
-  printf '\033[0m'
-  echo "XPAM Script ${KIT_VERSION}"
-  echo "0) SSH-безопасность / создать prefix-команду"
-  echo "1) Установить / продолжить настройку сервера"
-  echo "2) Показать данные для подключения"
-  echo "3) Проверить состояние сервера"
-  echo "4) Telegram-уведомления"
-  echo "5) WARP через 3x-ui/Xray"
-  echo "6) DoubleHop Mode"
-  echo "7) Управление сайтами"
-  echo "8) Дополнительно"
-  echo "9) Выход"
-  echo
-  if [[ ! -s /etc/xpam-script/prefix.env ]]; then
-    echo "Первый запуск? Сначала выберите пункт 0."
-  fi
+  # Loop: every action returns to this menu instead of dropping the operator back to the shell (where
+  # they would have to re-type the launcher). Invalid input re-prompts. Only "9) Выход" (or EOF/Ctrl-D)
+  # leaves. Each stage is called with `|| true` so a stage that returns non-zero does not abort the loop
+  # under `set -e`. (A stage that hard-`fail`s still exits — that is a genuine error path.)
   local choice
-  read -r -p "Выберите пункт [0-9]: " choice
-  case "$choice" in
-    0) stage_ssh_hardening ;;
-    1) stage_install_continue ;;
-    2) stage_show_details ;;
-    3) stage_check_only ;;
-    4) stage_notify ;;
-    5) stage_warp_menu ;;
-    6) stage_doublehop_menu ;;
-    7) stage_site_menu ;;
-    8) stage_advanced_menu ;;
-    9) exit 0 ;;
-    a|A) stage_prepare ;;
-    b|B) stage_finalize ;;
-    *) fail "Неизвестный пункт меню" ;;
-  esac
-  exit 0
+  while true; do
+    printf '\033[0m'
+    echo "XPAM Script ${KIT_VERSION}"
+    echo "0) SSH-безопасность / создать prefix-команду"
+    echo "1) Установить / продолжить настройку сервера"
+    echo "2) Показать данные для подключения"
+    echo "3) Проверить состояние сервера"
+    echo "4) Telegram-уведомления"
+    echo "5) WARP через 3x-ui/Xray"
+    echo "6) DoubleHop Mode"
+    echo "7) Управление сайтами"
+    echo "8) Дополнительно"
+    echo "9) Выход"
+    echo
+    if [[ ! -s /etc/xpam-script/prefix.env ]]; then
+      echo "Первый запуск? Сначала выберите пункт 0."
+    fi
+    read -r -p "Выберите пункт [0-9]: " choice || return 0
+    case "$choice" in
+      0) stage_ssh_hardening || true ;;
+      1) stage_install_continue || true ;;
+      2) stage_show_details || true ;;
+      3) stage_check_only || true ;;
+      4) stage_notify || true ;;
+      5) stage_warp_menu || true ;;
+      6) stage_doublehop_menu || true ;;
+      7) stage_site_menu || true ;;
+      8) stage_advanced_menu || true ;;
+      9) return 0 ;;
+      a|A) stage_prepare || true ;;
+      b|B) stage_finalize || true ;;
+      *) warn "Неизвестный пункт меню — выберите из списка." ;;
+    esac
+    echo
+  done
 }
 
 # Source feature modules after defining base core helpers. Modules must only define

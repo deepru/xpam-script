@@ -102,7 +102,7 @@ alt_build_xhttp_payload(){
   # (ru-links stays authoritative per D-4; it already emits fp=firefox itself.)
   external_proxy_json='[{"forceTls":"tls","dest":"'"${VLESS_ALT_DOMAIN}"'","port":'"${XRAY_PUBLIC_PORT}"',"sni":"'"${VLESS_ALT_DOMAIN}"'","fingerprint":"firefox","remark":"'"${ep_remark}"'"}]'
   XPAM_A_UUID="$uuid" XPAM_A_SUBID="$subid" XPAM_A_PORT="$XRAY_XHTTP_PORT" XPAM_A_PATH="$VLESS_ALT_PATH" \
-  XPAM_A_HOST="$VLESS_ALT_DOMAIN" XPAM_A_EP="$external_proxy_json" XPAM_A_CLIENT="${SERVER_PREFIX}-xhttp-client" \
+  XPAM_A_HOST="$VLESS_ALT_DOMAIN" XPAM_A_EP="$external_proxy_json" XPAM_A_CLIENT="${SERVER_PREFIX}-client-xhttp" \
   XPAM_A_REMARK="${SERVER_PREFIX}-vless-xhttp" python3 - "$payload" <<'PY_ALT_PAYLOAD'
 import json, os, sys
 ep=json.loads(os.environ["XPAM_A_EP"])
@@ -162,11 +162,29 @@ alt_create_xhttp_inbound(){
 }
 
 alt_delete_xhttp_inbound(){
-  local base id body rc=0
-  id="$(sqlite3 /etc/x-ui/x-ui.db "SELECT id FROM inbounds WHERE protocol='vless' AND listen='127.0.0.1' AND port=${XRAY_XHTTP_PORT} ORDER BY id ASC LIMIT 1;" 2>/dev/null || true)"
+  local base id body rc=0 db=/etc/x-ui/x-ui.db emails email cbody
+  id="$(sqlite3 "$db" "SELECT id FROM inbounds WHERE protocol='vless' AND listen='127.0.0.1' AND port=${XRAY_XHTTP_PORT} ORDER BY id ASC LIMIT 1;" 2>/dev/null || true)"
   [[ -n "$id" ]] || { warn "xhttp-инбаунд не найден в БД (уже удалён?)."; return 0; }
   base="$(alt_panel_base_url)"
   xui_ensure_api_token || { warn "Нет API-токена для удаления инбаунда."; return 1; }
+  # 3x-ui 3.x makes a client a first-class many-to-many entity: DelInbound removes the inbound + the
+  # client_inbounds junction but LEAVES the `clients` row + client_traffics (no ON DELETE CASCADE) — by
+  # design, since a client may span inbounds — so our dedicated xhttp client would linger on the panel
+  # Clients page. Capture the client(s) bound to THIS inbound NOW (the junction is dropped once the
+  # inbound is deleted), so cleanup finds them by their link to the inbound — rename-safe: it does not
+  # rely on a hardcoded email the operator may have changed in the panel.
+  emails="$(sqlite3 "$db" "SELECT c.email FROM clients c JOIN client_inbounds ci ON ci.client_id=c.id WHERE ci.inbound_id=${id};" 2>/dev/null || true)"
+  # PRIMARY cleanup: remove each captured client through 3x-ui's OWN client API (drops the client + all
+  # its traffic/IP rows via the ORM, schema-agnostically) BEFORE the inbound, so no orphan is left.
+  while IFS= read -r email; do
+    [[ -n "$email" ]] || continue
+    cbody="$(mktemp /tmp/xpam-alt-cdel.XXXXXX.json)"; printf '{}' > "$cbody"
+    xpam_xui_api_post_json "$base/panel/api/clients/del/${email}" "$cbody" \
+      /tmp/xpam-alt-cdel.out /tmp/xpam-alt-cdel.err >/dev/null 2>&1 \
+      || warn "client-API удаление клиента '${email}' не подтверждено — будет SQL-фолбэк."
+    rm -f "$cbody"
+  done <<< "$emails"
+  # Now delete the inbound itself.
   body="$(mktemp /tmp/xpam-alt-del.XXXXXX.json)"; printf '{}' > "$body"
   xpam_xui_api_post_json "$base/panel/api/inbounds/del/${id}" "$body" \
     /tmp/xpam-alt-del.out /tmp/xpam-alt-del.err || rc=$?
@@ -174,26 +192,18 @@ alt_delete_xhttp_inbound(){
   if [[ $rc -ne 0 ]] || ! grep -Eiq '"success"[[:space:]]*:[[:space:]]*true' /tmp/xpam-alt-del.out 2>/dev/null; then
     warn "Удаление xhttp-инбаунда не подтверждено (id=$id)."; return 1
   fi
-  # 3x-ui 3.x makes a client a first-class many-to-many entity: DelInbound removes the inbound + the
-  # client_inbounds junction but LEAVES the `clients` row + client_traffics (no ON DELETE CASCADE) — by
-  # design, since a client may span inbounds — so our dedicated xhttp client would linger on the panel
-  # Clients page. PRIMARY cleanup: 3x-ui's OWN client API removes the now-orphaned record (found by
-  # email in `clients`) together with all its traffic/IP rows through the ORM, schema-agnostically — so
-  # it keeps working across panel table/column renames. The caller restarts x-ui to re-read the tables.
-  local db=/etc/x-ui/x-ui.db email="${SERVER_PREFIX}-xhttp-client" cbody
-  cbody="$(mktemp /tmp/xpam-alt-cdel.XXXXXX.json)"; printf '{}' > "$cbody"
-  xpam_xui_api_post_json "$base/panel/api/clients/del/${email}" "$cbody" \
-    /tmp/xpam-alt-cdel.out /tmp/xpam-alt-cdel.err >/dev/null 2>&1 \
-    || warn "client-API удаление клиента не подтверждено — полагаюсь на SQL-фолбэк."
-  rm -f "$cbody"
-  # DEFENSIVE FALLBACK (panels without the client API, or if it failed): purge our client by its
-  # deterministic email + inbound id directly. Guarded — a no-op once the API path already cleaned it.
-  sqlite3 "$db" "DELETE FROM client_traffics WHERE inbound_id=${id} OR email='${email}';" 2>/dev/null \
-    || warn "Не удалось подчистить client_traffics (проверьте панель Клиенты)."
-  sqlite3 "$db" "DELETE FROM clients WHERE email='${email}';" 2>/dev/null || true
-  sqlite3 "$db" "DELETE FROM client_global_traffics WHERE email='${email}';" 2>/dev/null || true
-  sqlite3 "$db" "DELETE FROM node_client_traffics WHERE email='${email}';" 2>/dev/null || true
-  sqlite3 "$db" "DELETE FROM inbound_client_ips WHERE client_email='${email}';" 2>/dev/null || true
+  # DEFENSIVE FALLBACK (older panels without the client API, or a failed call): purge each captured
+  # client directly. Guarded — a no-op once the API path already cleaned it. Plus sweep any traffic rows
+  # still bound to the now-deleted inbound id, regardless of email.
+  while IFS= read -r email; do
+    [[ -n "$email" ]] || continue
+    sqlite3 "$db" "DELETE FROM client_traffics WHERE email='${email}';" 2>/dev/null || true
+    sqlite3 "$db" "DELETE FROM clients WHERE email='${email}';" 2>/dev/null || true
+    sqlite3 "$db" "DELETE FROM client_global_traffics WHERE email='${email}';" 2>/dev/null || true
+    sqlite3 "$db" "DELETE FROM node_client_traffics WHERE email='${email}';" 2>/dev/null || true
+    sqlite3 "$db" "DELETE FROM inbound_client_ips WHERE client_email='${email}';" 2>/dev/null || true
+  done <<< "$emails"
+  sqlite3 "$db" "DELETE FROM client_traffics WHERE inbound_id=${id};" 2>/dev/null || true
   return 0
 }
 
@@ -282,7 +292,7 @@ alt_gen_xhttp_path(){
 }
 
 alt_build_link(){
-  local uuid="$1" name="${2:-${SERVER_PREFIX}-xhttp-client}" pe
+  local uuid="$1" name="${2:-${SERVER_PREFIX}-client-xhttp}" pe
   pe="$(python3 - "$VLESS_ALT_PATH" <<'PY'
 import sys, urllib.parse
 print(urllib.parse.quote(sys.argv[1], safe='/'))
@@ -450,17 +460,23 @@ alt_transport_disable(){
 stage_alt_transport_menu(){
   need_root
   load_config
+  # Looping submenu with a generic title — gRPC slots in here later without renaming. Returns to the
+  # advanced menu on "0) Назад" (or EOF); invalid input re-prompts instead of dropping to the shell.
   local choice
-  alt_transport_status
-  echo
-  echo "1) Включить xhttp на отдельном домене"
-  echo "2) Выключить дополнительный транспорт"
-  echo "0) Назад"
-  read -r -p "Выберите пункт [0-2]: " choice || true
-  case "$choice" in
-    1) alt_transport_enable ;;
-    2) alt_transport_disable ;;
-    0) return 0 ;;
-    *) fail "Неизвестный пункт меню" ;;
-  esac
+  while true; do
+    alt_transport_status
+    echo
+    echo "Транспорты VLESS"
+    echo "1) xhttp — включить"
+    echo "2) xhttp — выключить"
+    echo "0) Назад"
+    read -r -p "Выберите пункт [0-2]: " choice || return 0
+    case "$choice" in
+      1) alt_transport_enable || true ;;
+      2) alt_transport_disable || true ;;
+      0) return 0 ;;
+      *) warn "Неизвестный пункт меню — выберите из списка." ;;
+    esac
+    echo
+  done
 }
