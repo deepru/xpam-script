@@ -200,19 +200,20 @@ try:
 except Exception:
     generated={}
 
-for source in (generated,):
-    for inbound in source.get('inbounds') or []:
-        if isinstance(inbound, dict) and inbound.get('protocol') == 'vless' and inbound.get('tag'):
-            state['DH_VLESS_INBOUND_TAG']=str(inbound.get('tag'))
-            break
-    if state['DH_VLESS_INBOUND_TAG']:
-        break
-if not state['DH_VLESS_INBOUND_TAG']:
+# Collect ALL managed enabled VLESS inbound tags (primary tcp + optional alt xhttp). The DoubleHop
+# rule must scope to EVERY VLESS inbound so a second transport (xhttp) is hopped too. For a single
+# inbound this yields the same one-element set as before (no churn on existing DH boxes).
+vtags=set()
+for inbound in (generated.get('inbounds') or []):
+    if isinstance(inbound, dict) and inbound.get('protocol') == 'vless' and inbound.get('tag'):
+        vtags.add(str(inbound.get('tag')))
+if cur is not None:
     try:
-        row=cur.execute("SELECT tag FROM inbounds WHERE protocol='vless' AND enable=1 ORDER BY id ASC LIMIT 1").fetchone()
-        if row and row[0]: state['DH_VLESS_INBOUND_TAG']=str(row[0])
+        for row in cur.execute("SELECT tag FROM inbounds WHERE protocol='vless' AND enable=1"):
+            if row and row[0]: vtags.add(str(row[0]))
     except Exception:
         pass
+state['DH_VLESS_INBOUND_TAG']=','.join(sorted(vtags))
 
 outbounds=cfg.get('outbounds') if isinstance(cfg,dict) else []
 if not isinstance(outbounds, list): outbounds=[]
@@ -237,7 +238,6 @@ for ob in outbounds:
             pass
         break
 
-vtag=state['DH_VLESS_INBOUND_TAG']
 dh_rules=[]
 expected_vless_rules=0
 bad_dh_rules=0
@@ -246,7 +246,7 @@ for r in rules:
         continue
     if r.get('outboundTag') == tag:
         dh_rules.append(r)
-        if r.get('inboundTag') == [vtag] and str(r.get('network') or '') == 'tcp,udp':
+        if vtags and set(r.get('inboundTag') or []) == vtags and str(r.get('network') or '') == 'tcp,udp':
             expected_vless_rules += 1
         else:
             bad_dh_rules += 1
@@ -660,20 +660,24 @@ try:
     if not isinstance(rules,list):
         rules=[]; routing['rules']=rules
 
-    # Detect XPAM-managed VLESS inbound tag from generated config first, then DB.
-    vless_tag=''
+    # Detect ALL XPAM-managed VLESS inbound tags (generated config + DB). The DH rule scopes to the
+    # whole set so both the primary tcp inbound and the optional alt xhttp inbound are hopped.
+    vless_tags=set()
     try:
         generated=json.loads(Path('/usr/local/x-ui/bin/config.json').read_text())
         for inbound in generated.get('inbounds') or []:
             if isinstance(inbound,dict) and inbound.get('protocol')=='vless' and inbound.get('tag'):
-                vless_tag=str(inbound.get('tag')); break
+                vless_tags.add(str(inbound.get('tag')))
     except Exception:
         pass
-    if not vless_tag:
-        row=cur.execute("SELECT tag FROM inbounds WHERE protocol='vless' AND enable=1 ORDER BY id ASC LIMIT 1").fetchone()
-        if row and row[0]: vless_tag=str(row[0])
-    if not vless_tag:
+    try:
+        for row in cur.execute("SELECT tag FROM inbounds WHERE protocol='vless' AND enable=1"):
+            if row and row[0]: vless_tags.add(str(row[0]))
+    except Exception:
+        pass
+    if not vless_tags:
         fail('VLESS inbound tag not detected')
+    vless_tags=sorted(vless_tags)
 
     # Ensure/remove local exit outbound.
     outbounds=[ob for ob in outbounds if not (isinstance(ob,dict) and ob.get('tag')==tag)]
@@ -704,7 +708,7 @@ try:
                 protected_last=max(protected_last,i)
             if r.get('outboundTag')=='blocked' and r.get('protocol')==['bittorrent']:
                 protected_last=max(protected_last,i)
-        dh_rule={'type':'field','inboundTag':[vless_tag],'network':'tcp,udp','outboundTag':tag}
+        dh_rule={'type':'field','inboundTag':vless_tags,'network':'tcp,udp','outboundTag':tag}
         rules.insert(protected_last+1, dh_rule)
     routing['rules']=rules
 
@@ -780,14 +784,16 @@ try:
     gen=json.loads(Path('/usr/local/x-ui/bin/config.json').read_text())
 except Exception:
     gen={}
-vless_tag=''
+vless_tags=set()
 for inbound in gen.get('inbounds') or []:
     if isinstance(inbound,dict) and inbound.get('protocol')=='vless' and inbound.get('tag'):
-        vless_tag=str(inbound.get('tag')); break
-if not vless_tag:
-    row=cur.execute("SELECT tag FROM inbounds WHERE protocol='vless' AND enable=1 ORDER BY id ASC LIMIT 1").fetchone()
-    if row and row[0]: vless_tag=str(row[0])
-if not vless_tag:
+        vless_tags.add(str(inbound.get('tag')))
+try:
+    for row in cur.execute("SELECT tag FROM inbounds WHERE protocol='vless' AND enable=1"):
+        if row and row[0]: vless_tags.add(str(row[0]))
+except Exception:
+    pass
+if not vless_tags:
     fail('VLESS inbound tag not detected')
 
 def is_api_rule(r):
@@ -807,8 +813,8 @@ if dh_rules:
     if len(dh_rules) != 1:
         fail('more than one DH routing rule present')
     i,r=dh_rules[0]
-    if r.get('inboundTag') != [vless_tag]:
-        fail('DH routing rule is not scoped to current VLESS inbound')
+    if set(r.get('inboundTag') or []) != set(vless_tags):
+        fail('DH routing rule is not scoped to current VLESS inbound set')
     if str(r.get('network') or '') != 'tcp,udp':
         fail('DH routing rule network must be tcp,udp')
     vless_route=True

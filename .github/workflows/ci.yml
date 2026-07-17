@@ -23,5 +23,8 @@ jobs:
       - name: Build + verify release (bash -n, render-smoke, root_count, sha256)
         run: bash make-release.sh build
 
+      - name: Payload smoke-harness (VLESS/MTG/xhttp vs 3x-ui model.Client/model.Inbound)
+        run: bash tests/payload-smoke.sh
+
       - name: shellcheck (advisory — errors only)
         run: shellcheck -S error install.sh bootstrap.sh scripts/xpam-core.sh scripts/lib/*.sh || true

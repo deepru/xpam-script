@@ -121,6 +121,35 @@ EOF_NETDIAG_LAUNCHER
 }
 
 
+write_status_launcher(){
+  [[ -n "${SERVER_PREFIX:-}" ]] || return 0
+  local safe_prefix launcher bin_link kit_dir_real
+  safe_prefix="$(printf '%s' "$SERVER_PREFIX" | tr -cd 'A-Za-z0-9_-')"
+  [[ -n "$safe_prefix" && "$safe_prefix" == "$SERVER_PREFIX" ]] || return 0
+  launcher="/usr/local/sbin/${safe_prefix}-status"
+  bin_link="/usr/local/bin/${safe_prefix}-status"
+  kit_dir_real="$RUNTIME_KIT_DIR"
+  cat > "$launcher" <<EOF_STATUS_LAUNCHER
+#!/usr/bin/env bash
+set -euo pipefail
+LAUNCHER="/usr/local/sbin/${safe_prefix}-status"
+KIT_DIR="${kit_dir_real}"
+if [ "\$(id -u)" -ne 0 ]; then exec sudo "\$LAUNCHER" "\$@"; fi
+if [ ! -f "\$KIT_DIR/scripts/xpam-core.sh" ]; then
+  echo "ERROR: XPAM Script runtime missing: \$KIT_DIR/scripts/xpam-core.sh" >&2
+  exit 1
+fi
+export XPAM_SCRIPT_QUIET_LOAD_CONFIG=1
+# shellcheck source=/dev/null
+source "\$KIT_DIR/scripts/xpam-core.sh"
+stage_status "\$@"
+EOF_STATUS_LAUNCHER
+  chmod 755 "$launcher"
+  ln -sf "$launcher" "$bin_link" 2>/dev/null || true
+  ok "Статус-команда доступна: sudo ${safe_prefix}-status"
+}
+
+
 write_weekly_launcher(){
   [[ -n "${SERVER_PREFIX:-}" ]] || return 0
   local safe_prefix weekly bin_link

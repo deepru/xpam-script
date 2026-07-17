@@ -285,6 +285,9 @@ ensure_xui_ready_for_finalize(){
 PROFILE=""; SERVER_PREFIX=""; ROOT_DOMAIN=""; WWW_DOMAIN=""; PRIMARY_DOMAIN=""; SYNC_DOMAIN=""; WEB_CERT_NAME=""; CERT_EMAIL=""
 PANEL_PATH="api/internal/storage"; XUI_PANEL_PORT="57827"; XUI_AUTO_SETUP="yes"; XUI_ADMIN_USER="vlessuser"; XUI_ADMIN_PASS="${XUI_ADMIN_PASS:-}"; XUI_INSTALLED_TAG=""; XRAY_PUBLIC_PORT="443"; XRAY_LOCAL_PORT="1443"; SSH_PUBLIC_PORT="22"; HTTP_PUBLIC_PORT="80"; SITE_BACKEND_PORT="8080"; SYNC_BACKEND_PORT="9443"; MTPROTO_PORT="47827"; MTPROTO_BACKEND="3xui-mtg"; ALLOW_IPV6_443="no"; BASIC_USER="admin"; MASK_PRESET="${MASK_PRESET:-}"
 TELEGRAM_RELAY_PATH="api/internal/notify-relay"; TELEGRAM_RELAY_SOCKET="/run/xpam-script-telegram-relay.sock"
+# Optional secondary VLESS transport (xhttp/grpc) on a SEPARATE on-demand domain, coexisting with
+# the untouched tcp primary. Empty = off; configured later via the menu (see xpam-alt-transport.sh).
+VLESS_ALT_TRANSPORT=""; VLESS_ALT_DOMAIN=""; VLESS_ALT_PATH=""; XRAY_XHTTP_PORT="1444"; NGINX_ALT_TLS_PORT="8443"
 
 # XPAM Auto internal policy defaults. These are intentionally hidden from the normal user menu.
 XPAM_DNS_POLICY_MODE="${XPAM_DNS_POLICY_MODE:-safe}"        # safe|strict
@@ -626,7 +629,7 @@ maybe_import_existing_config(){
     chmod 700 "$CONFIG_DIR"
     {
       echo "# Managed by xpam-script ${KIT_VERSION}"
-      for v in PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER MASK_PRESET TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY; do
+      for v in PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER MASK_PRESET VLESS_ALT_TRANSPORT VLESS_ALT_DOMAIN VLESS_ALT_PATH XRAY_XHTTP_PORT NGINX_ALT_TLS_PORT TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY; do
         printf '%s=%q\n' "$v" "${!v:-}"
       done
     } > "$CONFIG_FILE"
@@ -711,7 +714,7 @@ save_config(){
   validate_server_prefix
   {
     echo "# Managed by xpam-script ${KIT_VERSION}"
-    for v in PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER MASK_PRESET TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY; do
+    for v in PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER MASK_PRESET VLESS_ALT_TRANSPORT VLESS_ALT_DOMAIN VLESS_ALT_PATH XRAY_XHTTP_PORT NGINX_ALT_TLS_PORT TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY; do
       printf '%s=%q\n' "$v" "${!v}"
     done
   } > "$CONFIG_FILE"
@@ -725,6 +728,7 @@ save_config(){
   remove_legacy_tg_launcher || true
   write_repair_launcher || true
   write_netdiag_launcher || true
+  write_status_launcher || true
 }
 
 load_config(){ maybe_import_existing_config || true; [[ -f "$CONFIG_FILE" ]] || fail "Config not found: $CONFIG_FILE. Run menu item 1 first."; source "$CONFIG_FILE"; validate_server_prefix; migrate_legacy_system_file_names || true; [[ "${XPAM_SCRIPT_QUIET_LOAD_CONFIG:-0}" == "1" ]] || ok "Loaded config: $CONFIG_FILE"; }
@@ -754,7 +758,7 @@ open(dst,'w').write(s)
 PY
 }
 export_vars(){
-  export PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER MASK_PRESET TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY
+  export PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER MASK_PRESET VLESS_ALT_TRANSPORT VLESS_ALT_DOMAIN VLESS_ALT_PATH XRAY_XHTTP_PORT NGINX_ALT_TLS_PORT TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY
   export WEB_SERVER_NAMES="$(web_domains)" CERTONLY_SERVER_NAMES="$(web_domains)${SYNC_DOMAIN:+ $SYNC_DOMAIN}" SERVICE_SITE_DIR="$(service_site_dir)" ROOT_SITE_DIR="$(root_site_dir)" SERVER_PREFIX_UP="$(printf '%s' "$SERVER_PREFIX" | tr '[:lower:]' '[:upper:]')"
   export HAPROXY_BACKEND_ORDER_UNITS="network-online.target nginx.service x-ui.service"
   if [[ "$PROFILE" == "root_mtproto" ]]; then
@@ -808,6 +812,18 @@ EOF_ROOT_SITE_BLOCK
     export ROOT_SITE_BLOCK=""
   fi
   if [[ "$ALLOW_IPV6_443" == "yes" ]]; then export HAPROXY_IPV6_BIND="    bind [::]:${XRAY_PUBLIC_PORT} v6only"; else export HAPROXY_IPV6_BIND=""; fi
+  # Optional secondary VLESS xhttp transport (Design 2): route the alt SNI to the nginx TLS front
+  # (be_vless_front). Primary/default routing is left untouched. Empty when the alt transport is off.
+  if [[ -n "${VLESS_ALT_DOMAIN:-}" && -n "${VLESS_ALT_TRANSPORT:-}" ]]; then
+    export HAPROXY_ALT_ACL="    acl sni_alt req.ssl_sni -i ${VLESS_ALT_DOMAIN}"$'\n'"    use_backend be_vless_front if sni_alt"
+    export HAPROXY_ALT_BACKEND="backend be_vless_front"$'\n'"    mode tcp"$'\n'"    server nginx_alt 127.0.0.1:${NGINX_ALT_TLS_PORT} check"
+    # deep-health: the alt domain must serve the decoy (masking acceptance gate for the second transport).
+    export ALT_HEALTH_BLOCK="check_http \"${VLESS_ALT_DOMAIN}/ (xhttp decoy)\" 200 \"https://${VLESS_ALT_DOMAIN}/\""
+  else
+    export HAPROXY_ALT_ACL=""
+    export HAPROXY_ALT_BACKEND=""
+    export ALT_HEALTH_BLOCK=""
+  fi
   if uses_mtproto; then
     if mtproto_backend_is_3xui_mtg; then
       export MTPROTO_HEALTH_BLOCK=$'check_active haproxy
@@ -2282,7 +2298,9 @@ xui_latest_release_tag_any(){
   json="$(curl --http1.1 -fsSL --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 8 --max-time 30 https://api.github.com/repos/MHSanaei/3x-ui/releases 2>/dev/null || true)"
   tag="$(printf '%s' "$json" | jq -r '[.[] | select((.draft|not) and (.prerelease|not))][0].tag_name // empty' 2>/dev/null || true)"
   if [[ -z "$tag" ]]; then
-    warn "Could not query stable releases list; falling back to GitHub /releases/latest"
+    # NOTE: this function's stdout is captured via $(...), so ALL diagnostics MUST go to stderr,
+    # otherwise the warning text pollutes the returned tag (→ malformed installer URL).
+    warn "Could not query stable releases list; falling back to GitHub /releases/latest" >&2
     json="$(curl --http1.1 -fsSL --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 8 --max-time 30 https://api.github.com/repos/MHSanaei/3x-ui/releases/latest 2>/dev/null || true)"
     tag="$(printf '%s' "$json" | jq -r '.tag_name // empty' 2>/dev/null || true)"
   fi
@@ -2373,8 +2391,9 @@ payload={
   "settings":json.dumps(settings,separators=(",",":")),
   "streamSettings":json.dumps(stream,separators=(",",":")),
   "tag":f"inbound-{os.environ['XPAM_XRAY_PORT']}",
-  "sniffing":json.dumps(sniff,separators=(",",":")),
-  "allocate":"{\"strategy\":\"always\",\"refresh\":5,\"concurrency\":3}"
+  # NOTE: no "allocate" key — it is not a field of 3x-ui v3.x model.Inbound (silently dropped), and its
+  # only value here ("strategy":"always") is Xray's default for a fixed-port inbound on every version.
+  "sniffing":json.dumps(sniff,separators=(",",":"))
 }
 
 with open(sys.argv[1], 'w', encoding='utf-8') as f:
@@ -2885,7 +2904,7 @@ verify_xui_manual_setup(){
 write_nginx_final(){ export_vars; cleanup_legacy_nginx_files; if uses_mtproto; then ensure_telegram_relay_nginx_snippet; render_template "$KIT_DIR/templates/nginx-mtproto.conf.tpl" /etc/nginx/sites-available/xpam-script-final.conf; else render_template "$KIT_DIR/templates/nginx-direct.conf.tpl" /etc/nginx/sites-available/xpam-script-final.conf; fi; rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/xpam-script-certonly.conf; ln -sf /etc/nginx/sites-available/xpam-script-final.conf /etc/nginx/sites-enabled/xpam-script-final.conf; ensure_htpasswd; nginx -t; systemctl reload nginx || systemctl restart nginx; }
 
 write_haproxy(){ uses_mtproto || return 0; export_vars; render_template "$KIT_DIR/templates/haproxy.cfg.tpl" /etc/haproxy/haproxy.cfg; haproxy -c -f /etc/haproxy/haproxy.cfg; mkdir -p /etc/systemd/system/haproxy.service.d; render_template "$KIT_DIR/templates/backend-order.conf.tpl" /etc/systemd/system/haproxy.service.d/backend-order.conf; systemctl daemon-reload; systemctl enable haproxy; systemctl restart haproxy; }
-write_health_weekly(){ say "Writing health and weekly scripts"; write_common_library; bash -c '. /usr/local/sbin/xpam-maint-common.sh; xpam_apply_small_vm_policies' || true; xpam_xui_cleanup_legacy_warp_workers || true; write_dns_policy_script; write_network_tuning_policy_script; write_telegram_https_relay_worker; migrate_legacy_system_file_names || true; export_vars; render_template "$KIT_DIR/templates/health.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-health"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-health"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-health"; write_health_launcher || true; write_links_launcher || true; remove_legacy_vless_launcher || true; remove_legacy_tg_launcher || true; write_repair_launcher || true; write_netdiag_launcher || true; render_template "$KIT_DIR/templates/weekly.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; write_weekly_launcher || true; local cron_min=35; [[ "$SERVER_PREFIX" == "se" ]] && cron_min=30; [[ "$SERVER_PREFIX" == "lt" ]] && cron_min=40; cat > "/etc/cron.d/${SERVER_PREFIX}-weekly-maintenance" <<EOF
+write_health_weekly(){ say "Writing health and weekly scripts"; write_common_library; bash -c '. /usr/local/sbin/xpam-maint-common.sh; xpam_apply_small_vm_policies' || true; xpam_xui_cleanup_legacy_warp_workers || true; write_dns_policy_script; write_network_tuning_policy_script; write_telegram_https_relay_worker; migrate_legacy_system_file_names || true; export_vars; render_template "$KIT_DIR/templates/health.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-health"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-health"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-health"; write_health_launcher || true; write_links_launcher || true; remove_legacy_vless_launcher || true; remove_legacy_tg_launcher || true; write_repair_launcher || true; write_netdiag_launcher || true; write_status_launcher || true; render_template "$KIT_DIR/templates/weekly.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; write_weekly_launcher || true; local cron_min=35; [[ "$SERVER_PREFIX" == "se" ]] && cron_min=30; [[ "$SERVER_PREFIX" == "lt" ]] && cron_min=40; cat > "/etc/cron.d/${SERVER_PREFIX}-weekly-maintenance" <<EOF
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ${cron_min} 4 * * 0 root /usr/bin/nice -n 19 /usr/bin/ionice -c3 /usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh >/dev/null 2>&1
@@ -3105,6 +3124,11 @@ def client_name(client, idx):
 
 def build_link(uuid, name, client, stream, inbound_port):
     ext = first_external_proxy(stream)
+    # Public-endpoint advertising: XPAM sets streamSettings.externalProxy so the share-link points at the
+    # public :443 edge. 3x-ui v3.x also mirrors externalProxy into the `hosts` table at AddInbound, but
+    # keeps it in streamSettings too, so this read stays valid. If a future 3x-ui ever stops persisting
+    # externalProxy in streamSettings, this degrades gracefully to DEFAULT_HOST:DEFAULT_PORT
+    # (= PRIMARY_DOMAIN:XRAY_PUBLIC_PORT, the correct primary endpoint); revisit to read `hosts` then.
     host = str(ext.get("dest") if ext else DEFAULT_HOST).strip() if (ext or DEFAULT_HOST) else ""
     port = str(ext.get("port") if ext else DEFAULT_PORT).strip() if (ext or DEFAULT_PORT) else "443"
     if not host:
@@ -3112,6 +3136,10 @@ def build_link(uuid, name, client, stream, inbound_port):
 
     network = str(stream.get("network") or "tcp")
     security = str(stream.get("security") or "tls")
+    # xhttp/grpc behind the nginx TLS front run as security=none inbounds, but the PUBLIC edge is TLS
+    # (nginx terminates it on :443), so the client link MUST advertise security=tls, not the inbound's.
+    if network in ("xhttp", "grpc") and security == "none":
+        security = "tls"
     tls = stream.get("tlsSettings") or stream.get("tls_settings") or stream.get("realitySettings") or {}
     if not isinstance(tls, dict):
         tls = {}
@@ -3135,7 +3163,7 @@ def build_link(uuid, name, client, stream, inbound_port):
         params["fp"] = fp
 
     alpn = alpn_value(tls)
-    if security == "tls" and alpn:
+    if security == "tls" and alpn and network != "xhttp":
         params["alpn"] = alpn
 
     if network == "ws":
@@ -3150,6 +3178,15 @@ def build_link(uuid, name, client, stream, inbound_port):
         grpc = stream.get("grpcSettings") or stream.get("grpc_settings") or {}
         if isinstance(grpc, dict) and grpc.get("serviceName"):
             params["serviceName"] = str(grpc.get("serviceName"))
+    elif network == "xhttp":
+        xh = stream.get("xhttpSettings") or stream.get("xhttp_settings") or {}
+        if isinstance(xh, dict):
+            if xh.get("path"):
+                params["path"] = str(xh.get("path"))
+            if xh.get("host"):
+                params["host"] = str(xh.get("host"))
+            params["mode"] = str(xh.get("mode") or "auto")
+        params["encryption"] = "none"
 
     query = urlencode(params, safe=",")
     return f"vless://{uuid}@{host}:{port}?{query}#{quote(name)}"
@@ -3324,9 +3361,9 @@ for row in rows:
         settings = {}
 
     secret = mtg_secret_from(settings)
-    server = str(settings.get("shareAddr") or settings.get("fakeTlsDomain") or SYNC_DOMAIN or "").strip()
+    server = str(pick(row, "share_addr", "shareAddr", default="") or settings.get("fakeTlsDomain") or SYNC_DOMAIN or "").strip()
     fake_tls = str(settings.get("fakeTlsDomain") or "").strip()
-    share_addr = str(settings.get("shareAddr") or "").strip()
+    share_addr = str(pick(row, "share_addr", "shareAddr", default="") or "").strip()  # inbounds.share_addr COLUMN, not settings JSON
     row_port = str(pick(row, "port", default="") or "")
 
     if not secret or not server:
@@ -3461,12 +3498,12 @@ for row in rows:
     settings = parse_json(pick(row, "settings", default="{}"), {})
     if not isinstance(settings, dict):
         settings = {}
-    server = str(settings.get("shareAddr") or settings.get("fakeTlsDomain") or SYNC_DOMAIN or "").strip()
+    server = str(pick(row, "share_addr", "shareAddr", default="") or settings.get("fakeTlsDomain") or SYNC_DOMAIN or "").strip()
     secs = client_secrets(settings)
     if not server or not secs:
         continue
     fake_tls = str(settings.get("fakeTlsDomain") or "").strip()
-    share_addr = str(settings.get("shareAddr") or "").strip()
+    share_addr = str(pick(row, "share_addr", "shareAddr", default="") or "").strip()  # inbounds.share_addr COLUMN, not settings JSON
     row_port = str(pick(row, "port", default="") or "")
     score = 0
     if SYNC_DOMAIN and (server == SYNC_DOMAIN or share_addr == SYNC_DOMAIN or fake_tls == SYNC_DOMAIN):
@@ -3997,14 +4034,16 @@ ok(f"3x-ui routing is user-managed; after default restore found {warp_route_coun
 try:
     cols=[r[1] for r in cur.execute('PRAGMA table_info(inbounds)').fetchall()]
     if {'id','port','protocol','sniffing'} <= set(cols):
-        rows=cur.execute("SELECT id, sniffing FROM inbounds WHERE protocol='vless' AND port=?", (expected_port,)).fetchall()
+        # ALL managed VLESS inbounds (primary tcp + optional alt xhttp) need sniffing so WARP's
+        # domain-based routing applies to every transport, not just the primary.
+        rows=cur.execute("SELECT id, sniffing FROM inbounds WHERE protocol='vless' AND enable=1").fetchall()
         sniff={"enabled": True, "destOverride": ["http","tls","quic"], "metadataOnly": False, "routeOnly": True}
         for inbound_id, _old in rows:
             cur.execute("UPDATE inbounds SET sniffing=? WHERE id=?", (json.dumps(sniff, separators=(',',':')), inbound_id))
         if rows:
-            ok(f"sniffing Route only включён для VLESS inbound port {expected_port}")
+            ok(f"sniffing Route only включён для VLESS inbounds: {len(rows)}")
         else:
-            print(f"WARNING: VLESS inbound port {expected_port} не найден в 3x-ui DB")
+            print("WARNING: enabled VLESS inbound не найден в 3x-ui DB")
 except Exception as e:
     print(f"WARNING: не удалось обновить sniffing в inbounds: {e}")
 
@@ -4069,6 +4108,83 @@ stage_links_direct(){
       fail "Неизвестный параметр. Используйте: sudo ${SERVER_PREFIX}-links или sudo ${SERVER_PREFIX}-links --show-secrets"
       ;;
   esac
+}
+
+stage_status(){
+  # Read-only consolidated dashboard: transports, DoubleHop, MTProto/MTG, WARP, services, and where to
+  # find links/health. No mutations. `set +e` so one failing probe never aborts the overview; heavy
+  # per-client links/secrets stay in <prefix>-links (append them here only on --show-secrets).
+  need_root
+  load_config
+  local want_secrets="" gen_cfg="/usr/local/x-ui/bin/config.json"
+  case "${1:-}" in
+    --show-secrets|--links) want_secrets=1 ;;
+    ""|--safe) ;;
+    --help|-h) echo "Использование: sudo ${SERVER_PREFIX}-status [--show-secrets]"; return 0 ;;
+    *) echo "Неизвестный параметр: ${1}. Используйте --show-secrets или без параметров." ;;
+  esac
+
+  # Read-only probes below: tolerate an individual failure (stopped service, missing DB) without
+  # aborting the overview. Restore errexit afterwards so the optional links delegation stays strict.
+  local _errexit=""; case $- in *e*) _errexit=1 ;; esac
+  set +e
+
+  echo
+  echo "================ XPAM status: ${SERVER_PREFIX:-<prefix>} ================"
+  printf 'Профиль:          %s\n' "${PROFILE:-<не задан>}"
+  printf 'Основной домен:   %s (tcp+tls на :%s)\n' "${PRIMARY_DOMAIN:-<не задан>}" "${XRAY_PUBLIC_PORT:-443}"
+  printf 'Панель 3x-ui:     https://127.0.0.1:%s/%s (loopback)\n' "${XUI_PANEL_PORT:-<порт>}" "${PANEL_PATH#/}"
+
+  echo
+  echo "Сервисы:"
+  local svc st
+  for svc in x-ui nginx haproxy; do
+    if systemctl is-active --quiet "$svc" 2>/dev/null; then st="active"; else st="НЕ active"; fi
+    printf '  %-8s %s\n' "$svc" "$st"
+  done
+
+  # Transports: reuse the alt-transport printer (prints the primary tcp line + the xhttp status).
+  if declare -f alt_transport_status >/dev/null 2>&1; then
+    alt_transport_status
+  fi
+
+  echo
+  local dh_mode="off"
+  declare -f dh_detect_mode >/dev/null 2>&1 && dh_mode="$(dh_detect_mode 2>/dev/null || echo off)"
+  if declare -f dh_mode_label_ru >/dev/null 2>&1; then
+    printf 'DoubleHop:        %s\n' "$(dh_mode_label_ru "$dh_mode")"
+  else
+    printf 'DoubleHop:        %s\n' "$dh_mode"
+  fi
+
+  if uses_mtproto; then
+    local mtg_st="НЕ слушает — проверьте health/repair"
+    if ss -H -ltnp 2>/dev/null | grep -E "127\.0\.0\.1:${MTPROTO_PORT}([^0-9]|$)" | grep -q 'mtg-linux'; then
+      mtg_st="слушает 127.0.0.1:${MTPROTO_PORT} (mtg)"
+    fi
+    printf 'MTProto (MTG):    %s\n' "$mtg_st"
+    printf 'FakeTLS домен:    %s\n' "${SYNC_DOMAIN:-<не задан>}"
+  else
+    printf 'MTProto (MTG):    профиль без MTProto\n'
+  fi
+
+  local warp_st="не обнаружен (WARP настраивается вручную в 3x-ui — см. docs/WARP.md)"
+  if [[ -r "$gen_cfg" ]] && grep -Eq '"tag"[[:space:]]*:[[:space:]]*"warp"' "$gen_cfg" 2>/dev/null; then
+    warp_st="outbound 'warp' присутствует в Xray"
+  fi
+  printf 'WARP egress:      %s\n' "$warp_st"
+
+  echo
+  echo "Здоровье:         sudo ${SERVER_PREFIX}-health   (полная проверка: --deep)"
+  echo "Все ссылки:       sudo ${SERVER_PREFIX}-links --show-secrets"
+  echo "======================================================================"
+
+  [[ -n "$_errexit" ]] && set -e
+  if [[ -n "$want_secrets" ]]; then
+    echo
+    stage_links_direct --show-secrets
+  fi
+  return 0
 }
 
 stage_show_details(){
@@ -4218,6 +4334,7 @@ stage_repair(){
     mtproto_backend_repair_after_update || true
     write_haproxy || systemctl try-reload-or-restart haproxy || true
   fi
+  alt_transport_reconcile || true
   if ! run_health_quiet "repair"; then
     if [[ "$repair_full" == "1" && -n "${XPAM_RESTORE_PRE_BACKUP:-}" && -s "${XPAM_RESTORE_PRE_BACKUP:-/nonexistent}" ]]; then
       warn "Health failed after --full restore; rolling back to the pre-restore database"
@@ -4298,9 +4415,10 @@ stage_advanced_menu(){
   echo "4) Финальная production-очистка"
   echo "5) Показать текущую конфигурацию"
   echo "6) Проверить обновления XPAM"
-  echo "7) Выйти"
+  echo "7) Дополнительный транспорт VLESS (xhttp, отдельный домен)"
+  echo "8) Выйти"
   local choice
-  read -r -p "Выберите пункт [0-7]: " choice
+  read -r -p "Выберите пункт [0-8]: " choice
   case "$choice" in
     0) stage_ssh_hardening ;;
     1) need_root; load_config; "/usr/local/sbin/${SERVER_PREFIX}-health" --deep ;;
@@ -4309,7 +4427,8 @@ stage_advanced_menu(){
     4) final_production_cleanup ;;
     5) show_config ;;
     6) xpam_update_menu ;;
-    7) return 0 ;;
+    7) stage_alt_transport_menu ;;
+    8) return 0 ;;
     *) fail "Неизвестный пункт меню" ;;
   esac
 }
@@ -4363,6 +4482,7 @@ for _xpam_lib in \
   "$KIT_DIR/scripts/lib/xpam-update.sh" \
   "$KIT_DIR/scripts/lib/xpam-mtproto.sh" \
   "$KIT_DIR/scripts/lib/xpam-doublehop.sh" \
+  "$KIT_DIR/scripts/lib/xpam-alt-transport.sh" \
   "$KIT_DIR/scripts/lib/xpam-sites.sh" \
   "$KIT_DIR/scripts/lib/xpam-xui.sh"
 do

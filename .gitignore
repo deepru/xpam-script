@@ -16,6 +16,10 @@ manual-backups/
 # Handoff: operator-private notes (real fleet data — never commit)
 handoff/OPERATOR_PRIVATE.md
 
+# Local AI-agent context (points at the local handoff/ set — not for the public repo)
+CLAUDE.md
+CLAUDE.local.md
+
 # Local install/build/test directories
 dist/
 xpam-install/

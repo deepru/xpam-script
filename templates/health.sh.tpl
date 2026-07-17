@@ -116,6 +116,7 @@ nginx -t >/dev/null 2>&1 && echo "OK: nginx config" || warn_fail "nginx config f
 check_http "{{PRIMARY_DOMAIN}}/" 200 "https://{{PRIMARY_DOMAIN}}/"
 check_redirect "{{PRIMARY_DOMAIN}} panel path no-slash" "https://{{PRIMARY_DOMAIN}}/{{PANEL_PATH}}" "https://{{PRIMARY_DOMAIN}}/{{PANEL_PATH}}/"
 check_http "{{PRIMARY_DOMAIN}} panel path" 401 "https://{{PRIMARY_DOMAIN}}/{{PANEL_PATH}}/"
+{{ALT_HEALTH_BLOCK}}
 sshd -T -C user=root,host=localhost,addr=127.0.0.1 2>/dev/null | grep -q '^passwordauthentication no$' && echo "OK: SSH password auth disabled" || warn_fail "SSH password auth not disabled"
 if journalctl -u mtprotoproxy.service --no-pager -n 100 2>/dev/null | grep -Eiq 'tg://proxy|secret='; then warn_fail "possible MTProto secret in recent journal"; else echo "OK: no MTProto secret in recent journal"; fi
 if ! xpam_startup_order_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-startup-order-fail" "[$(xpam_server_label $XPAM_PREFIX)] HAProxy/MTProto startup order check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi

@@ -20,6 +20,7 @@ frontend fe_tls_443
     tcp-request content accept if { req_ssl_hello_type 1 }
     acl sni_sync req.ssl_sni -i {{SYNC_DOMAIN}}
     use_backend be_mtproto if sni_sync
+{{HAPROXY_ALT_ACL}}
     default_backend be_xray
 
 backend be_xray
@@ -29,3 +30,4 @@ backend be_xray
 backend be_mtproto
     mode tcp
     server mtproto 127.0.0.1:{{MTPROTO_PORT}} check
+{{HAPROXY_ALT_BACKEND}}

@@ -648,16 +648,18 @@ else:
 try:
     cols=[r[1] for r in cur.execute('PRAGMA table_info(inbounds)').fetchall()]
     if {'id','port','protocol','sniffing'} <= set(cols):
-        rows=cur.execute("SELECT id, remark, sniffing FROM inbounds WHERE protocol='vless' AND port=?", (expected_port,)).fetchall()
+        # Restore all managed VLESS inbounds (primary tcp + optional alt xhttp) to the pre-WARP
+        # sniffing state (off), symmetric with WARP enable which now covers every VLESS inbound.
+        rows=cur.execute("SELECT id, remark, sniffing FROM inbounds WHERE protocol='vless' AND enable=1").fetchall()
         sniff={"enabled": False, "destOverride": [], "metadataOnly": False, "routeOnly": False}
         sniff_msg="sniffing выключен"
         for inbound_id, remark, old in rows:
             cur.execute("UPDATE inbounds SET sniffing=? WHERE id=?", (json.dumps(sniff, separators=(',',':')), inbound_id))
             changed=True
         if rows:
-            ok(f"{sniff_msg} для VLESS inbound port {expected_port}: {len(rows)}")
+            ok(f"{sniff_msg} для VLESS inbounds: {len(rows)}")
         else:
-            warn(f"VLESS inbound port {expected_port} не найден в 3x-ui DB; sniffing не изменён")
+            warn("enabled VLESS inbound не найден в 3x-ui DB; sniffing не изменён")
     else:
         warn("таблица inbounds не содержит ожидаемые columns для обновления sniffing")
 except Exception as e:
