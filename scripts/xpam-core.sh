@@ -4409,12 +4409,15 @@ stage_netdiag(){
 }
 
 stage_advanced_menu(){
-  # Looping submenu (see main_menu). "8) Назад" returns to the main menu; invalid input re-prompts.
+  # One-shot sub-area (1.3.9 behaviour): draw → pick a valid item → run → return to the shell (via the
+  # one-shot operational menu). No looping/gate after a command, so the command output stays as the last
+  # thing on screen. Only invalid input re-prompts; "0) Назад" just returns.
+  # SSH hardening / prefix creation is an install-only action that lives ONLY in the setup menu —
+  # it is intentionally NOT duplicated here (it is irrelevant once the server is installed).
   local choice
   while true; do
     echo
-    echo "Дополнительно"
-    echo "0) SSH-безопасность / создать prefix-команду"
+    echo "Дополнительно / обслуживание"
     echo "1) Подробная health-диагностика"
     echo "2) Диагностика сети Debian/провайдера"
     echo "3) Repair: восстановить XPAM service policy"
@@ -4422,10 +4425,9 @@ stage_advanced_menu(){
     echo "5) Показать текущую конфигурацию"
     echo "6) Проверить обновления XPAM"
     echo "7) Транспорты VLESS"
-    echo "8) Назад"
-    read -r -p "Выберите пункт [0-8]: " choice || return 0
+    echo "0) Назад"
+    read -r -p "Выберите пункт [0-7]: " choice || return 0
     case "$choice" in
-      0) stage_ssh_hardening || true ;;
       1) { need_root; load_config; "/usr/local/sbin/${SERVER_PREFIX}-health" --deep; } || true ;;
       2) stage_netdiag || true ;;
       3) stage_repair || true ;;
@@ -4433,54 +4435,114 @@ stage_advanced_menu(){
       5) show_config || true ;;
       6) xpam_update_menu || true ;;
       7) stage_alt_transport_menu || true ;;
-      8) return 0 ;;
-      *) warn "Неизвестный пункт меню — выберите из списка." ;;
+      0) return 0 ;;
+      *) warn "Неизвестный пункт меню — выберите из списка."; continue ;;
     esac
+    return 0
   done
 }
 
-main_menu(){
-  need_root
-  # Loop: every action returns to this menu instead of dropping the operator back to the shell (where
-  # they would have to re-type the launcher). Invalid input re-prompts. Only "9) Выход" (or EOF/Ctrl-D)
-  # leaves. Each stage is called with `|| true` so a stage that returns non-zero does not abort the loop
-  # under `set -e`. (A stage that hard-`fail`s still exits — that is a genuine error path.)
+# Read SERVER_PREFIX from the prefix/config file WITHOUT side effects (no import, no validate, no
+# output) — safe to call while just drawing a menu. Prefers an already-loaded SERVER_PREFIX.
+xpam_menu_prefix(){
+  local p="${SERVER_PREFIX:-}" f
+  if [[ -z "$p" ]]; then
+    for f in "$CONFIG_FILE" "$PREFIX_BOOTSTRAP_FILE"; do
+      [[ -s "$f" ]] || continue
+      p="$(sed -n 's/^[[:space:]]*SERVER_PREFIX=//p' "$f" | head -n1 | tr -d "\"'" | tr -d '[:space:]')"
+      [[ -n "$p" ]] && break
+    done
+  fi
+  printf '%s' "$p"
+}
+
+# True only when the server is FULLY provisioned. The per-prefix health launcher is written by
+# stage_finalize at the very END of install, so it appears only after finalize completes — NOT after
+# SSH hardening (which creates prefix.env + the <prefix>-xpam launcher) and NOT after stage_prepare
+# (which may still be awaiting a reboot). Using it as the "installed" signal means the setup menu is
+# never hidden while an install is still in progress. This mirrors stage_install_continue's own gate.
+xpam_is_installed(){
+  local p; p="$(xpam_menu_prefix)"
+  [[ -n "$p" && -x "/usr/local/sbin/${p}-health" ]]
+}
+
+# Setup-phase menu: shown until the box is fully installed. It LOOPS on purpose — install is a chain
+# (SSH → install → possibly reboot → continue). SSH hardening / prefix creation and install/continue
+# live ONLY here; once installed they are irrelevant and would only confuse, so the operational menu
+# drops them. (stage_install_continue exits the process at each stage boundary — e.g. after prepare it
+# asks for a reboot — so the operator re-runs the command to continue; the dispatcher then shows the
+# right menu for the new state.)
+xpam_setup_menu(){
   local choice
   while true; do
     printf '\033[0m'
-    echo "XPAM Script ${KIT_VERSION}"
-    echo "0) SSH-безопасность / создать prefix-команду"
-    echo "1) Установить / продолжить настройку сервера"
-    echo "2) Показать данные для подключения"
-    echo "3) Проверить состояние сервера"
-    echo "4) Telegram-уведомления"
-    echo "5) WARP через 3x-ui/Xray"
-    echo "6) DoubleHop Mode"
-    echo "7) Управление сайтами"
-    echo "8) Дополнительно"
-    echo "9) Выход"
+    echo "XPAM Script ${KIT_VERSION} — первичная установка"
+    echo "1) SSH-безопасность и создание команды сервера"
+    echo "2) Установить / продолжить настройку сервера"
+    echo "0) Выход"
     echo
-    if [[ ! -s /etc/xpam-script/prefix.env ]]; then
-      echo "Первый запуск? Сначала выберите пункт 0."
+    if [[ ! -s "$PREFIX_BOOTSTRAP_FILE" ]]; then
+      echo "Первый запуск. Начните с пункта 1, затем 2."
+    else
+      echo "Установка не завершена — продолжите пунктом 2 (при необходимости после reboot)."
     fi
-    read -r -p "Выберите пункт [0-9]: " choice || return 0
+    read -r -p "Выберите пункт [0-2]: " choice || return 0
     case "$choice" in
-      0) stage_ssh_hardening || true ;;
-      1) stage_install_continue || true ;;
-      2) stage_show_details || true ;;
-      3) stage_check_only || true ;;
-      4) stage_notify || true ;;
-      5) stage_warp_menu || true ;;
-      6) stage_doublehop_menu || true ;;
-      7) stage_site_menu || true ;;
-      8) stage_advanced_menu || true ;;
-      9) return 0 ;;
+      1) stage_ssh_hardening || true ;;
+      2) stage_install_continue || true ;;
+      0) return 0 ;;
       a|A) stage_prepare || true ;;
       b|B) stage_finalize || true ;;
       *) warn "Неизвестный пункт меню — выберите из списка." ;;
     esac
     echo
   done
+}
+
+# Operational menu: shown once the server is installed. One valid choice → run it → back to the shell
+# (no mindless top-level loop). Informational items (links/health) are self-contained; the config
+# sub-areas (Telegram, WARP, DoubleHop, sites, advanced→transports) keep their OWN internal loop, which
+# is where "do something, then continue with another item" belongs. Only invalid input re-prompts.
+xpam_operational_menu(){
+  local choice prefix
+  prefix="$(xpam_menu_prefix)"
+  while true; do
+    printf '\033[0m'
+    echo "XPAM Script ${prefix:+$prefix }${KIT_VERSION}"
+    echo "1) Показать данные для подключения"
+    echo "2) Проверить состояние сервера"
+    echo "3) Telegram-уведомления"
+    echo "4) WARP через 3x-ui/Xray"
+    echo "5) DoubleHop Mode"
+    echo "6) Управление сайтами"
+    echo "7) Дополнительно / обслуживание"
+    echo "0) Выход"
+    echo
+    read -r -p "Выберите пункт [0-7]: " choice || return 0
+    case "$choice" in
+      1) stage_show_details || true ;;
+      2) stage_check_only || true ;;
+      3) stage_notify || true ;;
+      4) stage_warp_menu || true ;;
+      5) stage_doublehop_menu || true ;;
+      6) stage_site_menu || true ;;
+      7) stage_advanced_menu || true ;;
+      0) return 0 ;;
+      *) warn "Неизвестный пункт меню — выберите из списка."; continue ;;
+    esac
+    return 0
+  done
+}
+
+main_menu(){
+  need_root
+  # Lifecycle-aware dispatch: a fully-installed box gets the lean operational menu (no install/SSH
+  # clutter, no infinite loop); a bare or mid-install box gets the looping setup menu.
+  if xpam_is_installed; then
+    xpam_operational_menu
+  else
+    xpam_setup_menu
+  fi
 }
 
 # Source feature modules after defining base core helpers. Modules must only define

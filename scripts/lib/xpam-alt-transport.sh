@@ -460,8 +460,8 @@ alt_transport_disable(){
 stage_alt_transport_menu(){
   need_root
   load_config
-  # Looping submenu with a generic title — gRPC slots in here later without renaming. Returns to the
-  # advanced menu on "0) Назад" (or EOF); invalid input re-prompts instead of dropping to the shell.
+  # One-shot sub-area (like the rest of the menus): draw → pick a valid item → run → return to the shell.
+  # gRPC slots in here later without renaming. Only invalid input re-prompts; "0) Назад" just returns.
   local choice
   while true; do
     alt_transport_status
@@ -475,8 +475,8 @@ stage_alt_transport_menu(){
       1) alt_transport_enable || true ;;
       2) alt_transport_disable || true ;;
       0) return 0 ;;
-      *) warn "Неизвестный пункт меню — выберите из списка." ;;
+      *) warn "Неизвестный пункт меню — выберите из списка."; continue ;;
     esac
-    echo
+    return 0
   done
 }
