@@ -345,6 +345,8 @@ xpam_update_static_preflight(){
     "scripts/lib/xpam-update.sh"
     "templates/health.sh.tpl"
     "templates/weekly.sh.tpl"
+    "templates/post-reboot-maint.sh.tpl"
+    "templates/post-reboot-maint.service.tpl"
     "templates/xpam-maint-common.sh.tpl"
     "VERSION"
     "RELEASE"
@@ -432,6 +434,7 @@ xpam_update_snapshot_create(){
     "/usr/local/sbin/${prefix}-health" "/usr/local/sbin/${prefix}-links" \
     "/usr/local/sbin/${prefix}-repair" \
     "/usr/local/sbin/${prefix}-netdiag" "/usr/local/sbin/${prefix}-weekly-maintenance.sh" \
+    "/usr/local/sbin/${prefix}-post-reboot-maint.sh" "/etc/systemd/system/${prefix}-post-reboot-maint.service" \
     "/usr/local/sbin/xpam-maint-common.sh" \
     "/usr/local/sbin/${prefix}-install" "/usr/local/bin/${prefix}-install"
   do
@@ -483,11 +486,16 @@ xpam_update_rollback(){
       "/usr/local/sbin/${prefix}-health" "/usr/local/sbin/${prefix}-links" \
       "/usr/local/sbin/${prefix}-repair" \
       "/usr/local/sbin/${prefix}-netdiag" "/usr/local/sbin/${prefix}-weekly-maintenance.sh" \
+      "/usr/local/sbin/${prefix}-post-reboot-maint.sh" "/etc/systemd/system/${prefix}-post-reboot-maint.service" \
       "/usr/local/sbin/xpam-maint-common.sh" \
       "/usr/local/sbin/${prefix}-install" "/usr/local/bin/${prefix}-install"
     do
       xpam_update_restore_path "$p" "$b"
     done
+    # A rolled-back (pre-1.4.0) runtime has no post-reboot unit; make sure a
+    # leftover armed unit from the new version cannot linger enabled.
+    systemctl disable "${prefix}-post-reboot-maint.service" >/dev/null 2>&1 || true
+    systemctl daemon-reload >/dev/null 2>&1 || true
   fi
 
   # Try to regenerate launchers from restored runtime as an extra safety net.

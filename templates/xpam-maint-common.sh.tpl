@@ -265,6 +265,63 @@ xpam_guarded_security_upgrade(){
     echo "OK: guarded apt upgrade finished for $prefix"
 }
 
+xpam_guarded_auto_upgrade(){
+    # Full autonomous patching for an unattended single-operator VPS: installs
+    # EVERYTHING available, including packages a plain `apt upgrade` holds back
+    # (a new kernel pulls NEW linux-image/-modules/-headers packages, which plain
+    # upgrade refuses to add). Uses `--with-new-pkgs`, NOT `full-upgrade`: it may
+    # install new dependency packages but never removes/replaces existing ones —
+    # the safest way to "install all updates" on a box with no console access.
+    # The caller (weekly) owns the reboot + post-reboot second pass.
+    local prefix="${1:-server}"
+    xpam_apt_dpkg_recovery "$prefix auto-upgrade" || return 1
+    echo
+    echo "===== APT UPDATE ====="
+    xpam_apt_get_safe "$prefix apt update" update || return 1
+    echo
+    echo "===== GUARDED APT UPGRADE (--with-new-pkgs) ====="
+    xpam_apt_get_safe "$prefix apt upgrade" -o Dpkg::Options::=--force-confold upgrade --with-new-pkgs -y || return 1
+    echo "OK: guarded auto-upgrade finished for $prefix"
+}
+
+xpam_reboot_is_needed(){
+    # True (0) when a reboot is required to finish applying updates: an explicit
+    # reboot-required marker exists, OR a newer kernel is installed than the one
+    # currently running. Quiet — this is decision logic, not the reporting path
+    # (xpam_kernel_reboot_check is the noisy reporting variant).
+    [ -f /var/run/reboot-required ] && return 0
+    local running newest
+    running="$(uname -r 2>/dev/null || true)"
+    newest="$(ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's#^/boot/vmlinuz-##' | sort -V | tail -1 || true)"
+    if [ -n "$newest" ] && [ -n "$running" ] && [ "$running" != "$newest" ]; then
+        return 0
+    fi
+    return 1
+}
+
+xpam_arm_post_reboot_maint(){
+    # Enable the one-shot post-reboot maintenance unit so it runs ONCE on the next
+    # boot (it self-disables when done). Called by weekly right before an
+    # auto-upgrade reboot. Idempotent.
+    local prefix="${1:-server}"
+    mkdir -p /var/lib/xpam-script 2>/dev/null || true
+    printf 'armed_at=%s\nboot_id=%s\n' \
+        "$(date -Is 2>/dev/null || true)" \
+        "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)" \
+        > /var/lib/xpam-script/post-reboot-maint.armed 2>/dev/null || true
+    chmod 600 /var/lib/xpam-script/post-reboot-maint.armed 2>/dev/null || true
+    systemctl enable "${prefix}-post-reboot-maint.service" >/dev/null 2>&1 || true
+}
+
+xpam_disarm_post_reboot_maint(){
+    # Disable the one-shot unit so it will NOT run on subsequent boots, and clear
+    # the arm marker. Called by the post-reboot script itself at the very start of
+    # its run (so even a crash cannot turn it into a run-on-every-boot unit).
+    local prefix="${1:-server}"
+    systemctl disable "${prefix}-post-reboot-maint.service" >/dev/null 2>&1 || true
+    rm -f /var/lib/xpam-script/post-reboot-maint.armed 2>/dev/null || true
+}
+
 xpam_guarded_autoremove(){
     local prefix="${1:-server}"
     local sim_log protected_re protected_hits
@@ -1720,8 +1777,23 @@ xpam_ufw_runtime_check(){
     return 1
 }
 
+xpam_ssh_ensure_privsep_dir(){
+    # sshd's privsep runtime dir (/run/sshd) is a systemd RuntimeDirectory tied to
+    # ssh.service's lifecycle (no RuntimeDirectoryPreserve=yes on Ubuntu's unit), so
+    # systemd removes it the moment the service stops. openssh-server's postinst
+    # stops the service to swap binaries during a package upgrade and can take well
+    # over a minute before restarting it (dpkg trigger processing, e.g. initramfs-
+    # tools). Any `sshd -t`/`sshd -T` invoked directly (not via systemd) during that
+    # window fails with "Missing privilege separation directory: /run/sshd" even
+    # though the on-disk config is untouched and valid. Recreate it defensively
+    # before every direct sshd syntax/test-mode call so weekly/health checks can't
+    # false-positive on this package-upgrade race.
+    mkdir -p -m 0755 /run/sshd 2>/dev/null || true
+}
+
 xpam_ssh_runtime_check(){
     local fail=0
+    xpam_ssh_ensure_privsep_dir
     if command -v sshd >/dev/null 2>&1 && sshd -t >/dev/null 2>&1; then
         echo "OK: sshd config syntax"
     else
@@ -2139,6 +2211,24 @@ xpam_weekly_safe_cleanup(){
       -maxdepth 3 -type f \
       \( -name '*.bak' -o -name '*.bak-*' -o -name '*.backup*' -o -name '*.old' -o -name '*.save' -o -name '*.tmp' \) \
       -mtime +14 -print -delete 2>/dev/null || true
+
+    echo; echo "--- stale conffile leftovers (.dpkg-dist/.dpkg-old/.dpkg-new/.ucf-dist/.ucf-old/.ucf-new)"
+    # apt upgrades run with --force-confold (keep our edited config), so dpkg/ucf
+    # stashes the maintainer's new version next to it as *.dpkg-dist / *.ucf-dist
+    # (or *.dpkg-old when the new one was applied). These are inert copies that
+    # accumulate forever and are pure clutter on an unattended box. Conffiles live
+    # under /etc, so scope the sweep there (fast + safe; never touches live config).
+    find /etc -xdev -type f \
+      \( -name '*.dpkg-dist' -o -name '*.dpkg-old' -o -name '*.dpkg-new' \
+         -o -name '*.ucf-dist' -o -name '*.ucf-old' -o -name '*.ucf-new' \) \
+      -print -delete 2>/dev/null || true
+
+    echo; echo "--- remove orphaned packages (guarded autoremove)"
+    # Weekly upgrades leave behind superseded dependencies (most notably OLD
+    # kernels after a new one is installed). xpam_guarded_autoremove simulates
+    # first and refuses if a protected/runtime package would be removed, so this
+    # is safe to run unattended. Non-fatal: cleanup must never fail the weekly run.
+    xpam_guarded_autoremove "$prefix" || echo "WARNING: autoremove skipped (protected package flagged or apt busy)"
 
     echo; echo "--- final apt cache clean"
     apt-get clean || true

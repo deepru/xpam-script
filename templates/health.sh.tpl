@@ -117,6 +117,7 @@ check_http "{{PRIMARY_DOMAIN}}/" 200 "https://{{PRIMARY_DOMAIN}}/"
 check_redirect "{{PRIMARY_DOMAIN}} panel path no-slash" "https://{{PRIMARY_DOMAIN}}/{{PANEL_PATH}}" "https://{{PRIMARY_DOMAIN}}/{{PANEL_PATH}}/"
 check_http "{{PRIMARY_DOMAIN}} panel path" 401 "https://{{PRIMARY_DOMAIN}}/{{PANEL_PATH}}/"
 {{ALT_HEALTH_BLOCK}}
+xpam_ssh_ensure_privsep_dir
 sshd -T -C user=root,host=localhost,addr=127.0.0.1 2>/dev/null | grep -q '^passwordauthentication no$' && echo "OK: SSH password auth disabled" || warn_fail "SSH password auth not disabled"
 if journalctl -u mtprotoproxy.service --no-pager -n 100 2>/dev/null | grep -Eiq 'tg://proxy|secret='; then warn_fail "possible MTProto secret in recent journal"; else echo "OK: no MTProto secret in recent journal"; fi
 if ! xpam_startup_order_check "$XPAM_CONFIG"; then FAIL=1; xpam_notify_once "${XPAM_PREFIX}-startup-order-fail" "[$(xpam_server_label $XPAM_PREFIX)] HAProxy/MTProto startup order check FAILED on $(hostname -f 2>/dev/null || hostname)."; fi

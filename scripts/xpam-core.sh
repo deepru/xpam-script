@@ -292,7 +292,7 @@ VLESS_ALT_TRANSPORT=""; VLESS_ALT_DOMAIN=""; VLESS_ALT_PATH=""; XRAY_XHTTP_PORT=
 # XPAM Auto internal policy defaults. These are intentionally hidden from the normal user menu.
 XPAM_DNS_POLICY_MODE="${XPAM_DNS_POLICY_MODE:-safe}"        # safe|strict
 XPAM_OUTPUT_MODE="${XPAM_OUTPUT_MODE:-compact}"            # compact|verbose
-XPAM_MAINT_APT_MODE="${XPAM_MAINT_APT_MODE:-security}"     # security|upgrade|full|off
+XPAM_MAINT_APT_MODE="${XPAM_MAINT_APT_MODE:-auto}"        # auto|security|upgrade|full|off  (auto = install all incl. kernels + reboot + post-reboot verify)
 XPAM_SERVICE_HYGIENE_MODE="${XPAM_SERVICE_HYGIENE_MODE:-safe}"
 XPAM_BACKUP_KEEP="${XPAM_BACKUP_KEEP:-2}"
 XPAM_HEALTH_LOG_KEEP="${XPAM_HEALTH_LOG_KEEP:-4}"
@@ -562,6 +562,24 @@ legacy_rewrite_file_brand(){
     -e "s/${old_project}/xpam-script/g" \
     -e "s/${old_short}/xpam-script/g" \
     "$f" 2>/dev/null || true
+}
+
+migrate_maint_apt_mode_default(){
+  # 1.4.0 migration. The weekly maintenance default changed from the conservative
+  # "security" (security-only apt upgrade, kernels kept back, manual reboot) to
+  # "auto" (full --with-new-pkgs upgrade + automatic reboot + post-reboot verify).
+  # Existing installs persisted the OLD auto-default value "security" into
+  # config.env, which would otherwise override the new code default and keep them
+  # on the old behavior after an update. Flip ONLY that exact legacy default value
+  # to "auto" so updating to 1.4.0 applies the new behavior with no manual step; a
+  # deliberate off/full/upgrade choice is left untouched. Idempotent.
+  local cfg="$CONFIG_FILE"
+  [[ -f "$cfg" ]] || return 0
+  if grep -qx 'XPAM_MAINT_APT_MODE=security' "$cfg" 2>/dev/null; then
+    sed -i 's/^XPAM_MAINT_APT_MODE=security$/XPAM_MAINT_APT_MODE=auto/' "$cfg" 2>/dev/null || return 0
+    XPAM_MAINT_APT_MODE="auto"
+    [[ "${XPAM_SCRIPT_QUIET_LOAD_CONFIG:-0}" == "1" ]] || ok "Maintenance mode migrated: security -> auto (auto-upgrade + reboot enabled)"
+  fi
 }
 
 migrate_legacy_system_file_names(){
@@ -2916,7 +2934,7 @@ verify_xui_manual_setup(){
 write_nginx_final(){ export_vars; cleanup_legacy_nginx_files; if uses_mtproto; then ensure_telegram_relay_nginx_snippet; render_template "$KIT_DIR/templates/nginx-mtproto.conf.tpl" /etc/nginx/sites-available/xpam-script-final.conf; else render_template "$KIT_DIR/templates/nginx-direct.conf.tpl" /etc/nginx/sites-available/xpam-script-final.conf; fi; rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/xpam-script-certonly.conf; ln -sf /etc/nginx/sites-available/xpam-script-final.conf /etc/nginx/sites-enabled/xpam-script-final.conf; ensure_htpasswd; nginx -t; systemctl reload nginx || systemctl restart nginx; }
 
 write_haproxy(){ uses_mtproto || return 0; export_vars; render_template "$KIT_DIR/templates/haproxy.cfg.tpl" /etc/haproxy/haproxy.cfg; haproxy -c -f /etc/haproxy/haproxy.cfg; mkdir -p /etc/systemd/system/haproxy.service.d; render_template "$KIT_DIR/templates/backend-order.conf.tpl" /etc/systemd/system/haproxy.service.d/backend-order.conf; systemctl daemon-reload; systemctl enable haproxy; systemctl restart haproxy; }
-write_health_weekly(){ say "Writing health and weekly scripts"; write_common_library; bash -c '. /usr/local/sbin/xpam-maint-common.sh; xpam_apply_small_vm_policies' || true; xpam_xui_cleanup_legacy_warp_workers || true; write_dns_policy_script; write_network_tuning_policy_script; write_telegram_https_relay_worker; migrate_legacy_system_file_names || true; export_vars; render_template "$KIT_DIR/templates/health.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-health"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-health"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-health"; write_health_launcher || true; write_links_launcher || true; remove_legacy_vless_launcher || true; remove_legacy_tg_launcher || true; write_repair_launcher || true; remove_legacy_status_netdiag_launchers || true; render_template "$KIT_DIR/templates/weekly.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; write_weekly_launcher || true; local cron_min=35; [[ "$SERVER_PREFIX" == "se" ]] && cron_min=30; [[ "$SERVER_PREFIX" == "lt" ]] && cron_min=40; cat > "/etc/cron.d/${SERVER_PREFIX}-weekly-maintenance" <<EOF
+write_health_weekly(){ say "Writing health and weekly scripts"; write_common_library; bash -c '. /usr/local/sbin/xpam-maint-common.sh; xpam_apply_small_vm_policies' || true; xpam_xui_cleanup_legacy_warp_workers || true; write_dns_policy_script; write_network_tuning_policy_script; write_telegram_https_relay_worker; migrate_legacy_system_file_names || true; migrate_maint_apt_mode_default || true; export_vars; render_template "$KIT_DIR/templates/health.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-health"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-health"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-health"; write_health_launcher || true; write_links_launcher || true; remove_legacy_vless_launcher || true; remove_legacy_tg_launcher || true; write_repair_launcher || true; remove_legacy_status_netdiag_launchers || true; render_template "$KIT_DIR/templates/weekly.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; write_weekly_launcher || true; render_template "$KIT_DIR/templates/post-reboot-maint.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-post-reboot-maint.sh"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-post-reboot-maint.sh"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-post-reboot-maint.sh"; render_template "$KIT_DIR/templates/post-reboot-maint.service.tpl" "/etc/systemd/system/${SERVER_PREFIX}-post-reboot-maint.service"; systemctl daemon-reload 2>/dev/null || true; local cron_min=35; [[ "$SERVER_PREFIX" == "se" ]] && cron_min=30; [[ "$SERVER_PREFIX" == "lt" ]] && cron_min=40; cat > "/etc/cron.d/${SERVER_PREFIX}-weekly-maintenance" <<EOF
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ${cron_min} 4 * * 0 root /usr/bin/nice -n 19 /usr/bin/ionice -c3 /usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh >/dev/null 2>&1
