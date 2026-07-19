@@ -61,7 +61,12 @@ dh_write_current_links(){
   local out="$1" auto_note vless_link mtg_link
   auto_note="/root/secure-notes/${SERVER_PREFIX}-3x-ui-auto.txt"
   mkdir -p "$(dirname "$out")"
-  vless_link="$(print_vless_links_from_xui "$auto_note" 2>/dev/null | awk -F'VLESS Link: ' '/VLESS Link: / {print $2; exit}' || true)"
+  # Extract the share link straight from the `vless://` token. The old parse looked for a
+  # "VLESS Link: " label that print_vless_links_from_xui no longer emits since the -links block
+  # was reformatted to `VLESS · <transport> · <host:port>` / client / bare link — that mismatch
+  # made this return empty, failing dh_snapshot_create and aborting every DoubleHop op. head -n1
+  # keeps the primary (tcp) inbound's link (first by id) as the stable before/after invariant.
+  vless_link="$(print_vless_links_from_xui "$auto_note" 2>/dev/null | grep -oE 'vless://[^[:space:]]+' | head -n1 || true)"
   mtg_link="$(current_telegram_link_from_xui 2>/dev/null || true)"
   : > "$out"
   [[ -n "$vless_link" ]] && printf 'VLESS=%s\n' "$vless_link" >> "$out"
