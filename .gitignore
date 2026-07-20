@@ -13,8 +13,9 @@ secure-notes/
 config-backups/
 manual-backups/
 
-# Handoff: operator-private notes (real fleet data — never commit)
-handoff/OPERATOR_PRIVATE.md
+# Handoff: internal AI-agent context. Contains real fleet/box/domain data in places — NEVER commit
+# the whole set (per the CLAUDE.md rule). Ignoring the entire dir prevents an accidental `git add -A`.
+handoff/
 
 # Local AI-agent context (points at the local handoff/ set — not for the public repo)
 CLAUDE.md
