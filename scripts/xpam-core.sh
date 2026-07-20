@@ -287,7 +287,7 @@ PANEL_PATH="api/internal/storage"; XUI_PANEL_PORT="57827"; XUI_AUTO_SETUP="yes";
 TELEGRAM_RELAY_PATH="api/internal/notify-relay"; TELEGRAM_RELAY_SOCKET="/run/xpam-script-telegram-relay.sock"
 # Optional secondary VLESS transport (xhttp/grpc) on a SEPARATE on-demand domain, coexisting with
 # the untouched tcp primary. Empty = off; configured later via the menu (see xpam-alt-transport.sh).
-VLESS_ALT_TRANSPORT=""; VLESS_ALT_DOMAIN=""; VLESS_ALT_PATH=""; XRAY_XHTTP_PORT="1444"; NGINX_ALT_TLS_PORT="8443"
+VLESS_ALT_TRANSPORT=""; VLESS_ALT_DOMAIN=""; VLESS_ALT_PATH=""; XRAY_ALT_PORT="1444"; NGINX_ALT_TLS_PORT="8443"
 
 # XPAM Auto internal policy defaults. These are intentionally hidden from the normal user menu.
 XPAM_DNS_POLICY_MODE="${XPAM_DNS_POLICY_MODE:-safe}"        # safe|strict
@@ -582,6 +582,23 @@ migrate_maint_apt_mode_default(){
   fi
 }
 
+migrate_xray_alt_port_key(){
+  # 1.4.0 migration. XRAY_XHTTP_PORT was renamed to XRAY_ALT_PORT — one loopback port reused by whichever
+  # alt transport is active (xhttp OR grpc; only one runs at a time). Adopt an existing install's old-key
+  # value in-memory, then rename the key on disk so it persists and stops shadowing the new one. Acts only
+  # when the old key is present and the new one is not. Idempotent.
+  local cfg="$CONFIG_FILE"
+  if [[ -n "${XRAY_XHTTP_PORT:-}" ]]; then
+    XRAY_ALT_PORT="${XRAY_XHTTP_PORT}"
+  fi
+  [[ -f "$cfg" ]] || return 0
+  if grep -q '^XRAY_XHTTP_PORT=' "$cfg" 2>/dev/null && ! grep -q '^XRAY_ALT_PORT=' "$cfg" 2>/dev/null; then
+    sed -i 's/^XRAY_XHTTP_PORT=/XRAY_ALT_PORT=/' "$cfg" 2>/dev/null || return 0
+    [[ "${XPAM_SCRIPT_QUIET_LOAD_CONFIG:-0}" == "1" ]] || ok "Config key migrated: XRAY_XHTTP_PORT -> XRAY_ALT_PORT"
+  fi
+  return 0
+}
+
 migrate_legacy_system_file_names(){
   local old_project old_network old_swap new_network new_swap d old_dns new_dns legacy_dir legacy_runtime
   old_project="$(legacy_project_name)"
@@ -647,7 +664,7 @@ maybe_import_existing_config(){
     chmod 700 "$CONFIG_DIR"
     {
       echo "# Managed by xpam-script ${KIT_VERSION}"
-      for v in PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER MASK_PRESET VLESS_ALT_TRANSPORT VLESS_ALT_DOMAIN VLESS_ALT_PATH XRAY_XHTTP_PORT NGINX_ALT_TLS_PORT TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY; do
+      for v in PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER MASK_PRESET VLESS_ALT_TRANSPORT VLESS_ALT_DOMAIN VLESS_ALT_PATH XRAY_ALT_PORT NGINX_ALT_TLS_PORT TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY; do
         printf '%s=%q\n' "$v" "${!v:-}"
       done
     } > "$CONFIG_FILE"
@@ -732,7 +749,7 @@ save_config(){
   validate_server_prefix
   {
     echo "# Managed by xpam-script ${KIT_VERSION}"
-    for v in PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER MASK_PRESET VLESS_ALT_TRANSPORT VLESS_ALT_DOMAIN VLESS_ALT_PATH XRAY_XHTTP_PORT NGINX_ALT_TLS_PORT TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY; do
+    for v in PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER MASK_PRESET VLESS_ALT_TRANSPORT VLESS_ALT_DOMAIN VLESS_ALT_PATH XRAY_ALT_PORT NGINX_ALT_TLS_PORT TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY; do
       printf '%s=%q\n' "$v" "${!v}"
     done
   } > "$CONFIG_FILE"
@@ -748,7 +765,7 @@ save_config(){
   remove_legacy_status_netdiag_launchers || true
 }
 
-load_config(){ maybe_import_existing_config || true; [[ -f "$CONFIG_FILE" ]] || fail "Config not found: $CONFIG_FILE. Run menu item 1 first."; source "$CONFIG_FILE"; validate_server_prefix; migrate_legacy_system_file_names || true; [[ "${XPAM_SCRIPT_QUIET_LOAD_CONFIG:-0}" == "1" ]] || ok "Loaded config: $CONFIG_FILE"; }
+load_config(){ maybe_import_existing_config || true; [[ -f "$CONFIG_FILE" ]] || fail "Config not found: $CONFIG_FILE. Run menu item 1 first."; source "$CONFIG_FILE"; validate_server_prefix; migrate_legacy_system_file_names || true; migrate_xray_alt_port_key || true; [[ "${XPAM_SCRIPT_QUIET_LOAD_CONFIG:-0}" == "1" ]] || ok "Loaded config: $CONFIG_FILE"; }
 
 show_config(){
   maybe_import_existing_config || true
@@ -775,7 +792,7 @@ open(dst,'w').write(s)
 PY
 }
 export_vars(){
-  export PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER MASK_PRESET VLESS_ALT_TRANSPORT VLESS_ALT_DOMAIN VLESS_ALT_PATH XRAY_XHTTP_PORT NGINX_ALT_TLS_PORT TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY
+  export PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER MASK_PRESET VLESS_ALT_TRANSPORT VLESS_ALT_DOMAIN VLESS_ALT_PATH XRAY_ALT_PORT NGINX_ALT_TLS_PORT TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY
   export WEB_SERVER_NAMES="$(web_domains)" CERTONLY_SERVER_NAMES="$(web_domains)${SYNC_DOMAIN:+ $SYNC_DOMAIN}" SERVICE_SITE_DIR="$(service_site_dir)" ROOT_SITE_DIR="$(root_site_dir)" SERVER_PREFIX_UP="$(printf '%s' "$SERVER_PREFIX" | tr '[:lower:]' '[:upper:]')"
   export HAPROXY_BACKEND_ORDER_UNITS="network-online.target nginx.service x-ui.service"
   if [[ "$PROFILE" == "root_mtproto" ]]; then
@@ -835,7 +852,7 @@ EOF_ROOT_SITE_BLOCK
     export HAPROXY_ALT_ACL="    acl sni_alt req.ssl_sni -i ${VLESS_ALT_DOMAIN}"$'\n'"    use_backend be_vless_front if sni_alt"
     export HAPROXY_ALT_BACKEND="backend be_vless_front"$'\n'"    mode tcp"$'\n'"    server nginx_alt 127.0.0.1:${NGINX_ALT_TLS_PORT} check"
     # deep-health: the alt domain must serve the decoy (masking acceptance gate for the second transport).
-    export ALT_HEALTH_BLOCK="check_http \"${VLESS_ALT_DOMAIN}/ (xhttp decoy)\" 200 \"https://${VLESS_ALT_DOMAIN}/\""
+    export ALT_HEALTH_BLOCK="check_http \"${VLESS_ALT_DOMAIN}/ (${VLESS_ALT_TRANSPORT} decoy)\" 200 \"https://${VLESS_ALT_DOMAIN}/\""
   else
     export HAPROXY_ALT_ACL=""
     export HAPROXY_ALT_BACKEND=""
@@ -3193,7 +3210,10 @@ def build_link(uuid, name, client, stream, inbound_port):
         params["fp"] = fp
 
     alpn = alpn_value(tls)
-    if security == "tls" and alpn and network != "xhttp":
+    # xhttp AND grpc run behind the nginx TLS front: the client must negotiate ALPN itself (grpc needs
+    # HTTP/2 / h2; xhttp is flexible). Advertising the primary's default alpn=http/1.1 here would make a
+    # grpc client offer http/1.1 → grpc-over-h1 fails. Omit alpn for both; the client defaults correctly.
+    if security == "tls" and alpn and network not in ("xhttp", "grpc"):
         params["alpn"] = alpn
 
     if network == "ws":

@@ -40,20 +40,15 @@ server {
     sendfile on;
     tcp_nopush on;
     tcp_nodelay on;
-    # Secret xhttp path → plain (security=none) Xray xhttp inbound on loopback. Prefix match so
-    # xhttp packet-up sub-paths (<path>/<session>/<seq>) are also proxied. Buffering off for streaming.
-    location ^~ {{VLESS_ALT_PATH}} {
-        proxy_pass http://127.0.0.1:{{XRAY_ALT_PORT}};
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header Connection "";
-        proxy_buffering off;
-        proxy_request_buffering off;
-        proxy_read_timeout 300s;
-        proxy_send_timeout 300s;
+    # Secret gRPC serviceName → plain (security=none) Xray grpc inbound on loopback via grpc_pass (HTTP/2,
+    # already enabled above). Prefix match with a LEADING slash: the serviceName is stored slash-less
+    # ({{VLESS_ALT_PATH}} = e.g. v1/streams/<hex>), while the gRPC request path is /<serviceName>/Tun (or
+    # /<serviceName>/TunMulti) — so ^~ /{{VLESS_ALT_PATH}} catches both. Everything else falls through to
+    # the decoy on / (masking).
+    location ^~ /{{VLESS_ALT_PATH}} {
+        grpc_pass grpc://127.0.0.1:{{XRAY_ALT_PORT}};
+        grpc_read_timeout 300s;
+        grpc_send_timeout 300s;
         client_max_body_size 0;
         access_log off;
     }

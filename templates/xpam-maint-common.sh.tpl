@@ -539,6 +539,17 @@ allowed_local_tcp=set(required_local_tcp) | {11111, 62789}
 required_local_tcp |= {int(cfg['XRAY_LOCAL_PORT']), int(cfg['MTPROTO_PORT']), int(cfg['SYNC_BACKEND_PORT'])}
 allowed_local_tcp |= required_local_tcp
 
+# Optional alt transport (xhttp/grpc, Path B): when enabled, the plain Xray alt inbound (XRAY_ALT_PORT)
+# and the nginx alt TLS front (NGINX_ALT_TLS_PORT) are EXPECTED loopback-only listeners. Add them to the
+# allowlist (not required — avoids a false FAIL if a listener is briefly down during a restart) so they
+# are not flagged "unexpected loopback TCP listener". Nothing public is added.
+if cfg.get('VLESS_ALT_TRANSPORT') and cfg.get('VLESS_ALT_DOMAIN'):
+    for _alt_k in ('XRAY_ALT_PORT', 'NGINX_ALT_TLS_PORT'):
+        try:
+            allowed_local_tcp.add(int(cfg[_alt_k]))
+        except (KeyError, ValueError):
+            pass
+
 if (cfg.get('MTPROTO_BACKEND') or '3xui-mtg') == '3xui-mtg':
     try:
         proc_out=subprocess.check_output(['ss','-H','-lntp'], text=True, stderr=subprocess.DEVNULL)

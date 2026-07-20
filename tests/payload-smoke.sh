@@ -59,7 +59,7 @@ MTPROTO_PORT="1450"
 VLESS_ALT_TRANSPORT="xhttp"
 VLESS_ALT_DOMAIN="cdn.example.com"
 VLESS_ALT_PATH="/v1/streams/0123456789abcdef"
-XRAY_XHTTP_PORT="1444"
+XRAY_ALT_PORT="1444"
 NGINX_ALT_TLS_PORT="8443"
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/xpam-payload-smoke.XXXXXX")"
@@ -67,13 +67,15 @@ trap 'rm -rf "$work"' EXIT
 vless_json="$work/vless.json"
 mtg_json="$work/mtg.json"
 xhttp_json="$work/xhttp.json"
+grpc_json="$work/grpc.json"
 
 echo "==> Building payloads offline (kit: $REPO_ROOT)"
 xui_build_inbound_payload "$vless_json" >/dev/null
 mtproto_3xui_mtg_payload "$mtg_json" "" "$MTPROTO_PORT" >/dev/null
 alt_build_xhttp_payload "$xhttp_json" >/dev/null
+VLESS_ALT_TRANSPORT="grpc" VLESS_ALT_PATH="v1/streams/0123456789abcdef" alt_build_grpc_payload "$grpc_json" >/dev/null
 
-SMOKE_VLESS="$vless_json" SMOKE_MTG="$mtg_json" SMOKE_XHTTP="$xhttp_json" python3 - <<'PY_SMOKE_VALIDATE'
+SMOKE_VLESS="$vless_json" SMOKE_MTG="$mtg_json" SMOKE_XHTTP="$xhttp_json" SMOKE_GRPC="$grpc_json" python3 - <<'PY_SMOKE_VALIDATE'
 import json, os, sys
 
 # --- 3x-ui contract, pinned to tag v3.5.0 -----------------------------------
@@ -215,6 +217,34 @@ def check_vless_xhttp(where, payload, settings, stream):
         fail(where, "xhttpSettings must carry path + host")
 
 
+def check_vless_grpc(where, payload, settings, stream):
+    # gRPC behind nginx: same discipline as xhttp — plain inbound (security=none), share-link TLS via the
+    # externalProxy entry, no vestigial inbound tlsSettings. grpcSettings.serviceName carries the secret.
+    if stream.get("network") != "grpc":
+        fail(where, "expected network=grpc, got %r" % stream.get("network"))
+    if stream.get("security") != "none":
+        fail(where, "grpc inbound must be security=none (nginx terminates TLS), got %r"
+             % stream.get("security"))
+    if "tlsSettings" in stream:
+        fail(where, "grpc inbound must NOT carry tlsSettings (useless for the link; drop it)")
+    ep = stream.get("externalProxy")
+    if not isinstance(ep, list) or not ep:
+        fail(where, "externalProxy missing (needed for the security=tls share-link)")
+    else:
+        e0 = ep[0]
+        if e0.get("forceTls") != "tls":
+            fail(where, "externalProxy[0].forceTls must be 'tls', got %r" % e0.get("forceTls"))
+        if not str(e0.get("sni") or "").strip():
+            fail(where, "externalProxy[0].sni must be set (panel link sni comes from it)")
+        if not str(e0.get("fingerprint") or "").strip():
+            fail(where, "externalProxy[0].fingerprint must be set (panel link fp comes from it)")
+    gs = stream.get("grpcSettings")
+    if not isinstance(gs, dict) or not str(gs.get("serviceName") or "").strip():
+        fail(where, "grpcSettings must carry a non-empty serviceName")
+    elif not isinstance(gs.get("multiMode"), bool):
+        fail(where, "grpcSettings.multiMode must be a bool")
+
+
 def check_mtproto(where, payload, settings, clients):
     if not any(str(c.get("secret") or "").strip() for c in clients):
         fail(where, "no mtproto client carries a secret")
@@ -237,6 +267,8 @@ def run(where, path, kind):
         check_vless_primary(where, payload, settings, stream)
     elif kind == "vless_xhttp":
         check_vless_xhttp(where, payload, settings, stream)
+    elif kind == "vless_grpc":
+        check_vless_grpc(where, payload, settings, stream)
     elif kind == "mtproto":
         check_mtproto(where, payload, settings, clients)
 
@@ -244,6 +276,7 @@ def run(where, path, kind):
 run("VLESS-primary", os.environ["SMOKE_VLESS"], "vless_primary")
 run("MTProto/MTG", os.environ["SMOKE_MTG"], "mtproto")
 run("VLESS-xhttp", os.environ["SMOKE_XHTTP"], "vless_xhttp")
+run("VLESS-grpc", os.environ["SMOKE_GRPC"], "vless_grpc")
 
 for w in warns:
     print("  WARN  " + w)
