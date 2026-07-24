@@ -829,14 +829,13 @@ server {
     tcp_nodelay on;
     location ~* \.(css|js|png|jpg|jpeg|gif|ico|svg|webp|woff2?)\$ {
         expires 7d;
-        add_header Cache-Control "public, max-age=604800" always;
         access_log off;
     }
     location @same_domain_root { return 302 https://\$host/; }
-    location = /license { try_files /license.html @same_domain_root; add_header Cache-Control "no-store" always; }
-    location = /docs { try_files /docs.html @same_domain_root; add_header Cache-Control "no-store" always; }
+    location = /license { try_files /license.html @same_domain_root; expires -1; }
+    location = /docs { try_files /docs.html @same_domain_root; expires -1; }
     location = /favicon.ico { try_files /favicon.ico =204; log_not_found off; access_log off; }
-    location / { add_header Cache-Control "no-cache" always; try_files \$uri \$uri/ =404; }
+    location / { expires -1; try_files \$uri \$uri/ =404; }
     error_page 404 /404.html;
 }
 EOF_ROOT_SITE_BLOCK
@@ -852,7 +851,15 @@ EOF_ROOT_SITE_BLOCK
     export HAPROXY_ALT_ACL="    acl sni_alt req.ssl_sni -i ${VLESS_ALT_DOMAIN}"$'\n'"    use_backend be_vless_front if sni_alt"
     export HAPROXY_ALT_BACKEND="backend be_vless_front"$'\n'"    mode tcp"$'\n'"    server nginx_alt 127.0.0.1:${NGINX_ALT_TLS_PORT} check"
     # deep-health: the alt domain must serve the decoy (masking acceptance gate for the second transport).
-    export ALT_HEALTH_BLOCK="check_http \"${VLESS_ALT_DOMAIN}/ (${VLESS_ALT_TRANSPORT} decoy)\" 200 \"https://${VLESS_ALT_DOMAIN}/\""
+    # 1) the decoy still answers on / ; 2) the alt inbound really listens on its loopback port ;
+    # 3) the secret path/serviceName is actually routed to Xray. (3) is deliberately NOT checked by
+    # status code — grpc answers 415, xhttp may answer 404 from Xray itself, so a code check would
+    # false-alarm. Instead we detect the ONE unambiguous failure: nginx falling through to the decoy,
+    # which serves our themed 404 (that headline is identical in every archetype). A bring-your-own
+    # site has no such marker, so the check stays silent rather than crying wolf.
+    export ALT_HEALTH_BLOCK="check_http \"${VLESS_ALT_DOMAIN}/ (${VLESS_ALT_TRANSPORT} decoy)\" 200 \"https://${VLESS_ALT_DOMAIN}/\"
+ss -ltn 2>/dev/null | grep -q '127.0.0.1:${XRAY_ALT_PORT}' && echo \"OK: alt ${VLESS_ALT_TRANSPORT} inbound listening on 127.0.0.1:${XRAY_ALT_PORT}\" || warn_fail \"alt ${VLESS_ALT_TRANSPORT} inbound not listening on 127.0.0.1:${XRAY_ALT_PORT}\"
+if curl -ksS --max-time 12 \"https://${VLESS_ALT_DOMAIN}/${VLESS_ALT_PATH}\" 2>/dev/null | grep -q 'This page could not be found'; then warn_fail \"alt secret path falls through to the decoy — nginx is NOT routing it to Xray\"; else echo \"OK: alt secret path is routed to Xray (not the decoy)\"; fi"
   else
     export HAPROXY_ALT_ACL=""
     export HAPROXY_ALT_BACKEND=""

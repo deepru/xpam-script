@@ -454,13 +454,22 @@ alt_transport_enable(){
     echo "Он будет ЗАМЕНЁН на «${tlabel}» (одновременно активен только один альт-транспорт)."
     echo
   fi
-  echo "Требования к домену:"
-  echo "  • A-запись указывает на IP этого сервера;"
-  echo "  • порт 80 доступен извне (для выпуска TLS-сертификата)."
-  echo
-  ask d "Введите домен для ${tlabel} (например cdn.example.com)" "${old_domain}"
-  d="$(alt_domain_normalize "$d")"
-  alt_domain_validate "$d" || { echo "Изменения не внесены."; return 1; }
+  if (( was_enabled )) && [[ -n "$old_domain" ]]; then
+    # Switching transport only: the domain is already configured and its certificate already issued,
+    # so don't re-ask for it and don't re-validate DNS/:80 — that would just repeat proven checks.
+    # Changing the alt domain is a separate, explicit action (disable, then enable on a new domain).
+    d="$old_domain"
+    echo "Домен остаётся прежним: ${d} (сертификат переиспользуется)."
+    echo
+  else
+    echo "Требования к домену:"
+    echo "  • A-запись указывает на IP этого сервера;"
+    echo "  • порт 80 доступен извне (для выпуска TLS-сертификата)."
+    echo
+    ask d "Введите домен для ${tlabel} (например cdn.example.com)" "${old_domain}"
+    d="$(alt_domain_normalize "$d")"
+    alt_domain_validate "$d" || { echo "Изменения не внесены."; return 1; }
+  fi
 
   uses_mtproto || { warn "Дополнительный транспорт требует HAProxy (профиль с MTProto)."; return 1; }
   systemctl is-active --quiet x-ui || { warn "Сервис x-ui не активен. Сначала выполните health/repair."; return 1; }

@@ -1,0 +1,74 @@
+/* Shared layout primitives for the structural variants (hero layouts, hero visuals, capability
+   blocks, nav styles). Appended to EVERY theme; written entirely against the theme's own custom
+   properties, so each archetype renders these in its own colours/typography. */
+
+/* ---- hero layouts ----
+   These own the STRUCTURE (grid, padding, alignment) with 2-class specificity so they always beat
+   a theme's own single-class `.hero{...}` rules. Themes must only contribute colour/typography. */
+.hero.h-split{display:grid;grid-template-columns:1.05fr .95fr;gap:40px;align-items:center;padding:70px 0 30px;}
+.hero.h-mirror{display:grid;grid-template-columns:.95fr 1.05fr;gap:40px;align-items:center;padding:70px 0 30px;}
+.hero.h-center{display:block;max-width:720px;margin:0 auto;text-align:center;padding:82px 0 26px;}
+.hero.h-center .lede{margin-left:auto;margin-right:auto;}
+.hero.h-center .actions{justify-content:center;}
+.hero.h-stacked{display:block;max-width:780px;padding:72px 0 26px;}
+.hero.h-bigtype{display:grid;grid-template-columns:1.12fr .88fr;gap:56px;align-items:start;padding:56px 0 36px;}
+.hero.h-bigtype h1{font-size:clamp(2.5rem,5.2vw,3.9rem);}
+.hero.h-bigtype .hero-txt{padding:0;}
+.hero.h-bigtype .meta{padding-bottom:8px;}
+.hero.h-split>div:first-child,.hero.h-mirror>div:first-child{padding:0;}
+.wide{margin-top:34px;text-align:left;}
+.wide .uicard{max-width:680px;margin:0 auto;}
+
+/* ---- hero visual: terminal window ---- */
+.termwin{border-radius:12px;overflow:hidden;background:var(--surface);box-shadow:0 0 0 1px var(--border);}
+.tw-bar{display:flex;align-items:center;gap:7px;padding:10px 14px;background:var(--surface-2);
+  border-bottom:1px solid var(--border);font-family:var(--mono);font-size:.72rem;color:var(--ink-faint);}
+.tw-dot{width:10px;height:10px;border-radius:50%;background:var(--border-2);display:block;}
+.tw-bar span:last-child{margin-left:8px;}
+.tw-body{margin:0;padding:20px 22px;font-family:var(--mono);font-size:.8rem;line-height:1.8;
+  color:var(--ink-soft);overflow-x:auto;white-space:pre;}
+
+/* ---- hero visual: API reference card ---- */
+.uicard{border-radius:14px;padding:18px 18px 8px;background:var(--surface);box-shadow:0 0 0 1px var(--border);}
+.uc-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+.uc-head b{color:var(--ink);font-size:.94rem;}
+.uc-tag{font-family:var(--mono);font-size:.7rem;color:var(--accent);
+  border:1px solid var(--border-2);border-radius:999px;padding:2px 9px;}
+.uc-spark{display:block;width:100%;height:40px;color:var(--accent);opacity:.85;margin-bottom:8px;}
+.uc-row{display:flex;align-items:baseline;gap:12px;padding:9px 0;border-top:1px solid var(--border);}
+.uc-row code{font-family:var(--mono);font-size:.74rem;color:var(--accent);white-space:nowrap;}
+.uc-row span{font-size:.82rem;color:var(--ink-soft);}
+
+/* ---- bigtype meta row ---- */
+.metarow{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:22px;
+  font-family:var(--mono);font-size:.74rem;color:var(--ink-faint);}
+.metarow span{border:1px solid var(--border);border-radius:6px;padding:4px 10px;}
+
+/* ---- capabilities: numbered ruled list ---- */
+.caplist{display:flex;flex-direction:column;}
+.caplist .cap{display:grid;grid-template-columns:56px 1fr;gap:20px;align-items:start;
+  padding:26px 0;border-top:1px solid var(--border);}
+.caplist .cap:last-child{border-bottom:1px solid var(--border);}
+.capnum{font-family:var(--mono);font-size:.9rem;color:var(--accent);font-weight:600;}
+
+/* ---- capabilities: spec table ---- */
+.spectable{width:100%;border-collapse:collapse;}
+.spectable td{padding:16px 14px;border-top:1px solid var(--border);vertical-align:top;
+  font-size:.94rem;color:var(--ink-soft);}
+.spectable tr:last-child td{border-bottom:1px solid var(--border);}
+.spectable td:first-child{width:34%;color:var(--ink);font-weight:600;}
+
+/* ---- nav variants ---- */
+.top.navmin{gap:20px;}
+.top.navcta{gap:18px;}
+.top .cta{color:var(--bg);background:var(--accent);border-radius:8px;padding:8px 15px;
+  font-weight:600;font-size:.85rem;}
+.top .cta:hover{filter:brightness(1.08);}
+
+@media (max-width:760px){
+  .hero.h-split,.hero.h-mirror,.hero.h-bigtype{grid-template-columns:1fr;gap:22px;}
+  .hero.h-mirror .visual,.hero.h-mirror .diagram{order:2;}
+  .caplist .cap{grid-template-columns:1fr;gap:6px;}
+  .spectable td:first-child{width:auto;}
+  .tw-body{font-size:.74rem;}
+}

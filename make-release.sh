@@ -37,6 +37,10 @@ REQUIRED_FILES=(
   templates/xpam-maint-common.sh.tpl
   VERSION
   RELEASE
+  # Masking depends on these at install/repair time; without them the decoy cannot be rendered.
+  sites/_mask/generate.py
+  sites/_mask/presets.json
+  sites/_mask/themes/_layout.css
 )
 
 # verify_tree <root> — assert required files exist and every shell script /
@@ -50,6 +54,32 @@ verify_tree(){
   for f in "${REQUIRED_FILES[@]}"; do
     [[ -f "$root/$f" ]] || die "required file missing: $f"
   done
+
+  # The "3-list gotcha": every config var must appear in THREE separate lists in xpam-core.sh — the
+  # import loop, save_config and export_vars. They sit on different lines with different indentation,
+  # so a careless edit updates only some of them and the var ends up loaded/exported but never
+  # persisted — silently lost on the next repair. Compare the three lists as sets.
+  local core="$root/scripts/xpam-core.sh" cl1 cl2 cl3
+  if [[ -f "$core" ]]; then
+    cl1="$(grep -oE 'for v in PROFILE [A-Z0-9_ ]+' "$core" | sed -n '1p' | sed 's/^for v in //' | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ')"
+    cl2="$(grep -oE 'for v in PROFILE [A-Z0-9_ ]+' "$core" | sed -n '2p' | sed 's/^for v in //' | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ')"
+    cl3="$(grep -oE 'export PROFILE [A-Z0-9_ ]+'   "$core" | sed -n '1p' | sed 's/^export //'   | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ')"
+    [[ -n "$cl1" && -n "$cl2" && -n "$cl3" ]] \
+      || die "3-list gate: could not locate the config-var lists in scripts/xpam-core.sh"
+    [[ "$cl1" == "$cl2" ]] || die "3-list gotcha: import-loop and save_config config-var lists differ"
+    [[ "$cl1" == "$cl3" ]] || die "3-list gotcha: import-loop and export_vars config-var lists differ"
+  fi
+
+  # Every archetype the decoy generator can pick MUST have its theme file. generate.py deliberately
+  # falls back to clean.css when one is missing, so a deleted/renamed theme would NOT crash — it
+  # would silently render the wrong design on some domains. Fail loudly here instead.
+  local gen="$root/sites/_mask/generate.py" arch
+  if [[ -f "$gen" ]]; then
+    for arch in $(sed -n '/^ARCHES = \[/,/\]/p' "$gen" | grep -oE '"[a-z0-9_-]+"' | tr -d '"'); do
+      [[ -f "$root/sites/_mask/themes/${arch}.css" ]] \
+        || die "decoy archetype '${arch}' is listed in generate.py but sites/_mask/themes/${arch}.css is missing"
+    done
+  fi
 
   # Raw bash -n on install/bootstrap, every scripts/**/*.sh and every *.sh.tpl
   # (mirrors the updater's static preflight exactly).

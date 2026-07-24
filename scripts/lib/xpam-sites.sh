@@ -3,9 +3,11 @@
 # Keep functions side-effect free at source time.
 
 mask_render_preset_site(){
-  # Render the deterministic "product landing" decoy for <domain> into <dest>.
-  # Preset + accent are chosen from the domain (see sites/_mask/generate.py + MASKING_IDEAS.md).
-  # Honors the optional MASK_PRESET config override. Echoes "<preset>\t<palette>".
+  # Render the deterministic, per-install-UNIQUE "product landing" decoy for <domain> into <dest>.
+  # Everything about the look (accent palette, CSS class names, hero SVG, product name) is derived
+  # from the FQDN, so every install is visually unique yet reproducible (see sites/_mask/generate.py
+  # + MASKING_IDEAS.md section 6). Honors the optional MASK_PRESET override. Echoes an informational
+  # "<preset-id>\t<palette-id>\t<product-name>" line (not parsed by callers).
   local domain="$1" role="${2:-primary}" dest="$3"
   local gen="${KIT_DIR}/sites/_mask/generate.py"
   [[ -n "$domain" && -n "$dest" ]] || fail "mask_render_preset_site: требуется domain и dest"
@@ -15,6 +17,11 @@ mask_render_preset_site(){
   local peers="${PRIMARY_DOMAIN:-$domain}"
   if uses_mtproto && [[ -n "${SYNC_DOMAIN:-}" ]]; then peers="${peers},${SYNC_DOMAIN}"; fi
   if [[ "${PROFILE:-}" == "root_mtproto" && -n "${ROOT_DOMAIN:-}" ]]; then peers="${peers},${ROOT_DOMAIN}"; fi
+  # The alt-transport domain is a decoy too and MUST be in the peer set, otherwise the generator
+  # dedupes it against a different peer list and can hand it an archetype/product already used on
+  # this box. Appended LAST on purpose: the greedy assignment processes peers in order, so adding
+  # (or removing) the alt domain never moves the primary/sync/root assignments.
+  if [[ -n "${VLESS_ALT_DOMAIN:-}" ]]; then peers="${peers},${VLESS_ALT_DOMAIN}"; fi
   MASK_DOMAIN="$domain" MASK_DEST="$dest" MASK_ROLE="$role" MASK_PEERS="$peers" \
     MASK_PRESET="${MASK_PRESET:-}" MASK_DIR="${KIT_DIR}/sites/_mask" \
     python3 "$gen"

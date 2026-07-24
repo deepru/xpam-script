@@ -53,16 +53,15 @@ server {
         access_log off;
     }
     location @same_domain_root { return 302 https://$host/; }
-    location = /license { try_files /license.html @same_domain_root; add_header Cache-Control "no-store" always; }
-    location = /docs { try_files /docs.html @same_domain_root; add_header Cache-Control "no-store" always; }
+    location = /license { try_files /license.html @same_domain_root; expires -1; }
+    location = /docs { try_files /docs.html @same_domain_root; expires -1; }
     location = /favicon.ico { try_files /favicon.ico =204; log_not_found off; access_log off; }
     location ~* \.(css|js|png|jpg|jpeg|gif|ico|svg|webp|woff2?)$ {
         expires 7d;
-        add_header Cache-Control "public, max-age=604800" always;
         access_log off;
     }
     location / {
-        add_header Cache-Control "no-cache" always;
+        expires -1;
         try_files $uri $uri/ =404;
     }
     error_page 404 /404.html;

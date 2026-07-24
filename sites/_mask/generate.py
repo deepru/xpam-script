@@ -1,20 +1,27 @@
 #!/usr/bin/env python3
-# XPAM Script — deterministic decoy mask-site generator.
+# XPAM Script — deterministic + per-install-UNIQUE decoy mask-site generator.
 # Renders a small, self-contained "product landing" site (index/docs/license/404 +
-# favicon/robots/sitemap + assets/style.css) into a target web root, chosen deterministically
-# from the domain. Design + rationale: handoff/MASKING_IDEAS.md (section 4b).
+# favicon/robots/sitemap + assets/style.css) into a target web root. Everything about the LOOK is
+# derived from the site's own FQDN, so every install is visually unique (defeats a fleet-wide
+# template fingerprint) yet fully deterministic (repair/reset reproduce the same site).
+# Design + rationale: handoff/MASKING_IDEAS.md section 6 (Phase A).
 #
 # Inputs (environment):
 #   MASK_DOMAIN      full FQDN of the site (e.g. app.example.com)             [required]
 #   MASK_DEST        target directory (e.g. /var/www/app.example.com)          [required]
 #   MASK_ROLE        primary|sync|root  (informational; all presets are API-shaped)
 #   MASK_PRESET      optional preset id override (empty = deterministic auto)
-#   MASK_DIR         directory holding presets.json + palettes.json (default: this file's dir)
+#   MASK_ARCH        optional archetype override (clean|terminal|...; empty = deterministic auto)
+#   MASK_PEERS       optional comma-separated FQDNs of all decoy domains on THIS box (anti-collision)
+#   MASK_DIR         directory holding presets.json + themes/ (default: this file's dir)
 #
-# No network, no external assets — everything is inlined or same-origin. Deterministic:
-# the same domain always yields the same preset + accent (stable across repair/reset).
+# No network, no external assets, SYSTEM FONTS ONLY — everything is inlined or same-origin.
+# What varies per FQDN (Phase A): accent palette (continuous hue), CSS class names (mangled),
+# hero SVG diagram + favicon shape (procedural), product name (generated). The URL surface
+# (file names + routes /docs //license //health //v1 + panel path) is NEVER randomized — health
+# checks and the nginx config depend on it.
 
-import hashlib, html, json, os, sys
+import hashlib, html, json, math, os, random, re, sys
 
 SELF_DIR = os.path.dirname(os.path.abspath(__file__))
 MASK_DIR = os.environ.get("MASK_DIR") or SELF_DIR
@@ -92,9 +99,191 @@ def code_html(src):
     return "\n".join(out)
 
 
-# ---------------------------------------------------------------- CSS
-def build_css(pal):
-    css = open(os.path.join(MASK_DIR, "templates", "style.css"), "r", encoding="utf-8").read()
+# ---------------------------------------------------------------- per-install uniqueness
+
+# Every CSS class the stylesheet + builders use. The mangle map renames these consistently in
+# BOTH the CSS and the rendered HTML. A class NOT listed here is simply left un-mangled on both
+# sides (still consistent) — so completeness only affects how much is randomized, never correctness.
+CLASS_SET = [
+    "wrap", "site", "bar", "logo", "g", "top", "on", "hero", "hero-txt", "eyebrow", "lede",
+    "actions", "doclink", "install", "p", "diagram", "node", "core", "glyph", "on-core", "flow",
+    "wire", "strip", "sep", "caps", "grid", "cap", "ic", "how", "howcard", "txt", "k", "code", "c",
+    "doc", "aside", "ey", "sub", "hash", "callout", "page", "prose", "copyright", "license",
+    "notfound", "nf", "code404", "links", "brand", "cr", "act", "grp",
+    # structural variants (layout profiles)
+    "h-split", "h-mirror", "h-center", "h-bigtype", "h-stacked", "visual", "wide",
+    "termwin", "tw-bar", "tw-dot", "tw-body", "uicard", "uc-head", "uc-row", "uc-tag", "uc-spark",
+    "meta", "metarow", "caplist", "capnum", "spectable", "cta", "navmin", "navcta",
+]
+
+
+def build_class_map(domain):
+    """Deterministic per-FQDN class-name map. Short minified-looking tokens (letter-led)."""
+    rnd = random.Random(seed_int(domain + "|cls"))
+    alph = "abcdefghijklmnopqrstuvwxyz"
+    alnum = alph + "0123456789"
+    used, m = set(), {}
+    for name in CLASS_SET:
+        while True:
+            tok = rnd.choice(alph) + "".join(rnd.choice(alnum) for _ in range(rnd.randint(1, 3)))
+            if tok not in used:
+                break
+        used.add(tok)
+        m[name] = tok
+    return m
+
+
+def mangle_css(css, cmap):
+    # Rename `.class` selectors only. The pattern requires a LETTER after the dot, so numeric
+    # values like `-.02em`, `1.6`, `.9rem` are never touched; `[\w-]*` captures the whole
+    # identifier so `.code` maps `code` (not `c`).
+    return re.sub(r"\.([A-Za-z][\w-]*)",
+                  lambda mm: "." + cmap.get(mm.group(1), mm.group(1)), css)
+
+
+def mangle_html(page, cmap):
+    # Rename class attribute values. Only our own class="..." attributes exist in the output.
+    def repl(mm):
+        return 'class="' + " ".join(cmap.get(x, x) for x in mm.group(1).split()) + '"'
+    return re.sub(r'class="([^"]*)"', repl, page)
+
+
+def hsl_to_hex(h, s, l):
+    h = h % 360.0
+    c = (1 - abs(2 * l - 1)) * s
+    x = c * (1 - abs((h / 60.0) % 2 - 1))
+    mm = l - c / 2
+    r, g, b = [(c, x, 0), (x, c, 0), (0, c, x), (0, x, c), (x, 0, c), (c, 0, x)][int(h // 60) % 6]
+    return "#%02x%02x%02x" % (round((r + mm) * 255), round((g + mm) * 255), round((b + mm) * 255))
+
+
+# Curated accent hue bands — the ranges that read as a designed brand accent. Deliberately skips
+# the muddy yellow/olive/yellow-green (45–125), sickly cyan (188–205) and garish magenta (292–322)
+# zones, so a random hue never lands on an "off" colour.
+_HUE_BANDS = [
+    (18, 40),    # amber / warm orange
+    (128, 168),  # green → emerald
+    (168, 188),  # teal
+    (205, 255),  # blue → indigo
+    (255, 292),  # indigo → violet
+    (325, 358),  # rose / crimson
+]
+
+
+# Per-archetype colour character: which hue bands it may use, and how saturated. Without this every
+# archetype on the same domain got the SAME accent, which made them look like one site recoloured.
+# (bands, sat_light_range, sat_dark_range)
+_ARCH_COLOR = {
+    "clean":     (_HUE_BANDS,                        (0.52, 0.68), (0.66, 0.82)),
+    "terminal":  ([(168, 188), (205, 255), (128, 168)], (0.55, 0.70), (0.78, 0.92)),
+    "editorial": ([(18, 40), (325, 358), (128, 168)], (0.28, 0.42), (0.34, 0.48)),   # muted
+    "financial": ([(205, 250)],                      (0.55, 0.70), (0.62, 0.76)),   # fintech blue
+    "atlas":     ([(18, 40), (128, 168), (205, 250)], (0.40, 0.55), (0.48, 0.62)),   # calm warm/earthy
+    "soft":      ([(255, 292), (205, 255), (325, 358)], (0.42, 0.56), (0.55, 0.70)),  # pastel
+    "midnight":  ([(18, 44), (325, 358)],            (0.34, 0.48), (0.40, 0.56)),   # muted warm
+    "console":   ([(128, 168), (168, 188), (40, 56)], (0.60, 0.78), (0.72, 0.90)),  # phosphor
+    "slate":     ([(196, 232)],                      (0.20, 0.34), (0.26, 0.40)),   # desaturated cool
+    "aurora":    ([(255, 300), (205, 255)],          (0.62, 0.80), (0.76, 0.94)),   # vivid
+}
+
+
+def build_palette(domain, arch):
+    """Accent from the FQDN **and the archetype** → the 4 accent tokens the stylesheet expects.
+    Each archetype has its own hue bands + saturation character, so two archetypes never share a
+    palette even on the same domain, and each still varies per install."""
+    rnd = random.Random(seed_int(domain + "|css|" + arch))
+    bands, sl, sd = _ARCH_COLOR.get(arch, (_HUE_BANDS, (0.52, 0.68), (0.66, 0.82)))
+    lo, hi = rnd.choice(bands)
+    hue = rnd.uniform(lo, hi)
+    s_l = rnd.uniform(*sl)
+    s_d = rnd.uniform(*sd)
+    return {
+        "id": "h%d" % round(hue),
+        "accent_l":     hsl_to_hex(hue, s_l, rnd.uniform(0.38, 0.45)),
+        "accent_ink_l": hsl_to_hex(hue, min(s_l + 0.05, 0.9), rnd.uniform(0.29, 0.35)),
+        "accent_d":     hsl_to_hex(hue, s_d, rnd.uniform(0.62, 0.70)),
+        "accent_ink_d": hsl_to_hex(hue, max(s_d - 0.12, 0.3), rnd.uniform(0.78, 0.86)),
+    }
+
+
+# --- layout profiles: each archetype gets a DIFFERENT page skeleton, not just a different skin ---
+# hero:  split | mirror | center | bigtype | stacked
+# vis:   diagram | terminal | uicard | none
+# caps:  grid3 | grid2 | list | table
+# how:   split | stacked | none
+# nav:   full | min | cta
+# order: sequence of sections after the hero
+LAYOUT = {
+    "clean":     {"hero": "split",   "vis": "diagram",  "caps": "grid3", "how": "split",   "nav": "full", "order": ["strip", "caps", "how"]},
+    "terminal":  {"hero": "stacked", "vis": "terminal", "caps": "grid3", "how": "split",   "nav": "full", "order": ["caps", "strip", "how"]},
+    "editorial": {"hero": "bigtype", "vis": "none",     "caps": "list",  "how": "stacked", "nav": "min",  "order": ["caps", "how", "strip"]},
+    "financial": {"hero": "mirror",  "vis": "uicard",   "caps": "grid2", "how": "split",   "nav": "cta",  "order": ["caps", "strip", "how"]},
+    "atlas":     {"hero": "center",  "vis": "terminal", "caps": "grid2", "how": "stacked", "nav": "min",  "order": ["strip", "caps", "how"]},
+    "soft":      {"hero": "center",  "vis": "uicard",   "caps": "grid3", "how": "stacked", "nav": "full", "order": ["caps", "how"]},
+    "midnight":  {"hero": "center",  "vis": "uicard",   "caps": "list",  "how": "split",   "nav": "min",  "order": ["caps", "strip", "how"]},
+    "console":   {"hero": "stacked", "vis": "terminal", "caps": "list",  "how": "stacked", "nav": "full", "order": ["strip", "caps", "how"]},
+    "slate":     {"hero": "split",   "vis": "uicard",   "caps": "table", "how": "split",   "nav": "cta",  "order": ["strip", "caps", "how"]},
+    "aurora":    {"hero": "center",  "vis": "diagram",  "caps": "grid3", "how": "split",   "nav": "cta",  "order": ["caps", "strip", "how"]},
+}
+
+
+# --- product name generator (coined, fictional, pronounceable) ---
+_ONSET = ["b", "c", "d", "f", "g", "h", "k", "l", "m", "n", "p", "r", "s", "t", "v", "z",
+          "br", "cr", "dr", "fr", "gr", "pr", "tr", "st", "sl", "sn", "cl", "fl", "gl", "kr",
+          "th", "sk", "sp", "vr", "ny", "ov", "el"]
+_NUCLEUS = ["a", "e", "i", "o", "u", "ar", "er", "or", "en", "in", "on", "el", "al", "yn", "ur"]
+_CODA = ["n", "r", "l", "x", "th", "nd", "rk", "st", "sk", "ll", "rn", "m", "ss", "ft", "lt", "ve", "s"]
+_NAME_BLOCK = {"google", "apple", "yandex", "amazon", "cloudflare", "nginx", "microsoft", "oracle",
+               "docker", "github", "telegram", "android", "windows", "chrome", "firefox", "xray",
+               "reality", "vision", "meta", "adobe", "netflix", "stripe", "vercel", "linear"}
+
+
+def gen_name(domain):
+    rnd = random.Random(seed_int(domain + "|name"))
+    for _ in range(64):
+        syl = rnd.choice(_ONSET) + rnd.choice(_NUCLEUS)
+        core = rnd.choice(_ONSET) + rnd.choice(_NUCLEUS) + rnd.choice(_CODA)
+        word = syl + core
+        if 5 <= len(word) <= 9 and word.lower() not in _NAME_BLOCK:
+            return word[:1].upper() + word[1:]
+    return "Vantor"
+
+
+# ---------------------------------------------------------------- archetypes / CSS
+# Each archetype is a whole visual language (its own themes/<id>.css, single committed theme).
+# The seed picks one; all share the same class vocabulary + HTML skeleton, so Phase A's mangling
+# and the builders are unchanged. A theme file references whichever accent tokens suit its ground.
+ARCHES = ["clean", "terminal", "editorial", "financial", "atlas",
+          "soft", "midnight", "console", "slate", "aurora"]
+
+
+def assign_index(domain, peers, n, salt=""):
+    """Deterministic, peer-aware index in [0,n). Every decoy domain on THIS box gets a DIFFERENT
+    index while peers <= n, so 5-6 domains on one server never share an archetype/preset.
+    Stable for a given (peer set, domain) — repair/reset reproduce the same choice."""
+    taken, assign = set(), {}
+    dedupe = len(peers) <= n
+    for d in peers:
+        idx = seed_int(d + salt) % n
+        if dedupe:
+            while idx in taken:
+                idx = (idx + 1) % n
+        assign[d] = idx
+        taken.add(idx)
+    return assign[domain]
+
+
+def build_css(pal, arch):
+    path = os.path.join(MASK_DIR, "themes", arch + ".css")
+    if not os.path.isfile(path):
+        path = os.path.join(MASK_DIR, "themes", "clean.css")
+    theme = open(path, "r", encoding="utf-8").read()
+    # Shared structural primitives (hero layouts, visuals, caps blocks, nav variants), written
+    # against the theme's own tokens. They come FIRST so a theme can always override their
+    # cosmetics; the hero grid rules still win over a theme's plain `.hero{}` on specificity.
+    layout = os.path.join(MASK_DIR, "themes", "_layout.css")
+    base = open(layout, "r", encoding="utf-8").read() + "\n" if os.path.isfile(layout) else ""
+    css = base + theme
     return (css
             .replace("__ACCENT_L__", pal["accent_l"]).replace("__ACCENT_INK_L__", pal["accent_ink_l"])
             .replace("__ACCENT_D__", pal["accent_d"]).replace("__ACCENT_INK_D__", pal["accent_ink_d"]))
@@ -113,15 +302,28 @@ def head(title, desc, extra=""):
     )
 
 
-def site_header(p, active):
+_NAV = "full"  # set per archetype in main(); docs/license/404 inherit it
+
+
+def site_header(p, active, nav=None):
+    nav = nav or _NAV
+
     def a(href, label, key):
         cls = ' class="on"' if key == active else ""
         return '<a' + cls + ' href="' + href + '">' + label + "</a>"
+
+    if nav == "min":
+        links = '<nav class="top navmin">' + a("/docs", "Docs", "docs") + a("/license", "License", "license") + "</nav>"
+    elif nav == "cta":
+        links = ('<nav class="top navcta">' + a("/", "Home", "home") + a("/docs", "Docs", "docs")
+                 + '<a class="cta" href="/docs">Get started</a></nav>')
+    else:
+        links = ('<nav class="top">' + a("/", "Home", "home") + a("/docs", "Docs", "docs")
+                 + a("/license", "License", "license") + "</nav>")
     return (
         '<header class="site"><div class="wrap bar">'
         '<a class="logo" href="/"><span class="g">' + glyph(p["glyph"]) + "</span>" + esc(p["product"]) + "</a>"
-        '<nav class="top">' + a("/", "Home", "home") + a("/docs", "Docs", "docs") + a("/license", "License", "license") + "</nav>"
-        "</div></header>"
+        + links + "</div></header>"
     )
 
 
@@ -134,51 +336,203 @@ def site_footer(p):
 
 
 # ---------------------------------------------------------------- pages
-def build_index(p):
-    caps = "".join(
-        '<div class="cap"><span class="ic">' + icon(c["icon"]) + "</span>"
-        "<h3>" + esc(c["title"]) + "</h3><p>" + esc(c["body"]) + "</p></div>"
-        for c in p["capabilities"])
-    spec = '<span class="sep">·</span>'.join("<span>" + esc(s) + "</span>" for s in p["spec"])
-    steps = "".join('<li><span class="k">' + str(i) + "</span><span>" + esc(s) + "</span></li>"
-                    for i, s in enumerate(p["how"]["steps"], 1))
-    head_html = esc(p["headline"])
+def _headline_html(p):
+    h = esc(p["headline"])
     if p.get("headline_em"):
-        head_html = head_html.replace(esc(p["headline_em"]), "<em>" + esc(p["headline_em"]) + "</em>")
-    body = (
-        site_header(p, "home") +
-        '<main><div class="wrap"><section class="hero"><div class="hero-txt">'
+        h = h.replace(esc(p["headline_em"]), "<em>" + esc(p["headline_em"]) + "</em>")
+    return h
+
+
+def _hero_text(p):
+    return (
         '<p class="eyebrow">' + esc(p["category"]) + "</p>"
-        "<h1>" + head_html + "</h1>"
+        "<h1>" + _headline_html(p) + "</h1>"
         '<p class="lede">' + esc(p["lede"]) + "</p>"
         '<div class="actions"><a class="doclink" href="/docs">Read the documentation <span>&rarr;</span></a>'
         '<span class="install"><span class="p">$</span> ' + esc(p["install"]) + "</span></div>"
-        "</div>" + hero_diagram() + "</section></div>"
-        '<div class="strip"><div class="wrap"><span><b>' + esc(p["product"]) + "</b> " + esc(p["category"].split()[0]) + "</span>"
-        '<span class="sep">·</span>' + spec + "</div></div>"
-        '<div class="wrap"><section class="caps" id="capabilities"><h2>Capabilities</h2>'
-        '<div class="grid">' + caps + "</div></section>"
-        '<section class="how" id="how"><div class="howcard"><div class="txt">'
-        "<h2>" + esc(p["how"]["title"]) + "</h2><p>" + esc(p["how"]["intro"]) + "</p>"
-        "<ol>" + steps + "</ol></div>"
-        '<div class="code">' + code_html(p["how"]["code"]) + "</div></div></section></div></main>"
     )
+
+
+def _metarow(p):
+    return '<div class="metarow">' + "".join("<span>" + esc(s) + "</span>" for s in p["spec"]) + "</div>"
+
+
+# ---- hero visuals -------------------------------------------------------------
+def visual_terminal(p):
+    title = esc(p["product"].lower()) + " — shell"
+    return (
+        '<div class="visual termwin"><div class="tw-bar">'
+        '<span class="tw-dot"></span><span class="tw-dot"></span><span class="tw-dot"></span>'
+        "<span>" + title + "</span></div>"
+        '<pre class="tw-body">' + code_html(p["how"]["code"]) + "</pre></div>"
+    )
+
+
+def visual_uicard(p, rng):
+    rows = "".join(
+        '<div class="uc-row"><code>' + esc(m) + "</code><span>" + esc(t) + "</span></div>"
+        for m, t in p["docs"]["api_rows"][:4])
+    pts = " ".join("%d,%d" % (i * 26, 34 - (h % 26)) for i, h in
+                   enumerate(rng.sample(range(4, 30), 10)))
+    spark = ('<svg class="uc-spark" viewBox="0 0 234 40" preserveAspectRatio="none">'
+             '<polyline points="' + pts + '" fill="none" stroke="currentColor" stroke-width="2" '
+             'stroke-linejoin="round"/></svg>')
+    return (
+        '<div class="visual uicard"><div class="uc-head"><b>' + esc(p["product"]) + " API</b>"
+        '<span class="uc-tag">v1</span></div>' + spark + rows + "</div>"
+    )
+
+
+def hero_visual(kind, p, rng):
+    if kind == "diagram":
+        return hero_diagram(rng)
+    if kind == "terminal":
+        return visual_terminal(p)
+    if kind == "uicard":
+        return visual_uicard(p, rng)
+    return ""
+
+
+# ---- capability blocks --------------------------------------------------------
+def caps_block(kind, p):
+    head_h2 = "<h2>Capabilities</h2>"
+    if kind == "list":
+        items = "".join(
+            '<div class="cap"><span class="capnum">' + "%02d" % i + "</span><div>"
+            "<h3>" + esc(c["title"]) + "</h3><p>" + esc(c["body"]) + "</p></div></div>"
+            for i, c in enumerate(p["capabilities"], 1))
+        inner = '<div class="caplist">' + items + "</div>"
+    elif kind == "table":
+        rows = "".join("<tr><td>" + esc(c["title"]) + "</td><td>" + esc(c["body"]) + "</td></tr>"
+                       for c in p["capabilities"])
+        inner = '<table class="spectable"><tbody>' + rows + "</tbody></table>"
+    else:  # grid3 / grid2 — same markup, the theme decides the column count
+        inner = '<div class="grid">' + "".join(
+            '<div class="cap"><span class="ic">' + icon(c["icon"]) + "</span>"
+            "<h3>" + esc(c["title"]) + "</h3><p>" + esc(c["body"]) + "</p></div>"
+            for c in p["capabilities"]) + "</div>"
+    return '<section class="caps" id="capabilities">' + head_h2 + inner + "</section>"
+
+
+def how_block(kind, p):
+    if kind == "none":
+        return ""
+    steps = "".join('<li><span class="k">' + str(i) + "</span><span>" + esc(s) + "</span></li>"
+                    for i, s in enumerate(p["how"]["steps"], 1))
+    txt = ("<h2>" + esc(p["how"]["title"]) + "</h2><p>" + esc(p["how"]["intro"]) + "</p>"
+           "<ol>" + steps + "</ol>")
+    code = '<div class="code">' + code_html(p["how"]["code"]) + "</div>"
+    if kind == "stacked":
+        return ('<section class="how" id="how"><div class="howcard wide">'
+                '<div class="txt">' + txt + "</div>" + code + "</div></section>")
+    return ('<section class="how" id="how"><div class="howcard"><div class="txt">' + txt
+            + "</div>" + code + "</div></section>")
+
+
+def strip_block(p):
+    spec = '<span class="sep">·</span>'.join("<span>" + esc(s) + "</span>" for s in p["spec"])
+    return ('<div class="strip"><div class="wrap"><span><b>' + esc(p["product"]) + "</b> "
+            + esc(p["category"].split()[0]) + "</span>"
+            '<span class="sep">·</span>' + spec + "</div></div>")
+
+
+def build_index(p, rng, arch):
+    prof = LAYOUT.get(arch, LAYOUT["clean"])
+    vis = hero_visual(prof["vis"], p, rng)
+    kind = prof["hero"]
+
+    if kind == "mirror":
+        hero = ('<div class="wrap"><section class="hero h-mirror">' + vis
+                + '<div class="hero-txt">' + _hero_text(p) + "</div></section></div>")
+    elif kind == "center":
+        hero = ('<div class="wrap"><section class="hero h-center"><div class="hero-txt">'
+                + _hero_text(p) + "</div></section>"
+                + ('<div class="wide">' + vis + "</div>" if vis else "") + "</div>")
+    elif kind == "bigtype":
+        hero = ('<div class="wrap"><section class="hero h-bigtype"><div class="hero-txt">'
+                '<p class="eyebrow">' + esc(p["category"]) + "</p><h1>" + _headline_html(p) + "</h1></div>"
+                '<div class="meta"><p class="lede">' + esc(p["lede"]) + "</p>"
+                '<div class="actions"><a class="doclink" href="/docs">Read the documentation <span>&rarr;</span></a>'
+                '<span class="install"><span class="p">$</span> ' + esc(p["install"]) + "</span></div>"
+                + _metarow(p) + "</div></section></div>")
+    elif kind == "stacked":
+        hero = ('<div class="wrap"><section class="hero h-stacked"><div class="hero-txt">'
+                + _hero_text(p) + "</div></section>"
+                + ('<div class="wide">' + vis + "</div>" if vis else "") + "</div>")
+    else:  # split
+        hero = ('<div class="wrap"><section class="hero h-split"><div class="hero-txt">'
+                + _hero_text(p) + "</div>" + vis + "</section></div>")
+
+    parts = []
+    for sec in prof["order"]:
+        if sec == "strip":
+            parts.append(strip_block(p))
+        elif sec == "caps":
+            parts.append('<div class="wrap">' + caps_block(prof["caps"], p) + "</div>")
+        elif sec == "how":
+            hb = how_block(prof["how"], p)
+            if hb:
+                parts.append('<div class="wrap">' + hb + "</div>")
+
+    body = site_header(p, "home", prof["nav"]) + "<main>" + hero + "".join(parts) + "</main>"
     return head(p["product"] + " — " + p["category"], p["lede"]) + body + site_footer(p)
 
 
-def hero_diagram():
+def hero_diagram(rng):
+    # Procedural: node positions + bezier control points jitter per install, and the number of
+    # top inputs (2 or 3) varies, so the SVG path strings differ from every other install.
+    def j(base, amt):
+        return base + rng.randint(-amt, amt)
+
+    cx, cy = j(170, 8), j(150, 6)
+    r = j(37, 3)
+    hexpts = []
+    for k in range(6):
+        a = math.radians(60 * k - 90)
+        hexpts.append((cx + r * math.cos(a), cy + r * 0.92 * math.sin(a)))
+    core = "M" + " L".join("%.0f %.0f" % (x, y) for x, y in hexpts) + " Z"
+    gl = ("M%.0f %.0f V%.0f M%.0f %.0f L%.0f %.0f"
+          % (cx, cy - r * 0.9, cy + r * 0.9, cx - r * 0.72, cy - r * 0.2, cx, cy + r * 0.15))
+
+    n_in = rng.choice([2, 3])
+    if n_in == 2:
+        xs = [j(62, 12), j(278, 12)]
+    else:
+        xs = [j(52, 8), j(170, 12), j(288, 8)]
+
+    def curve(x1, y1, x2, y2, bow=0):
+        my = (y1 + y2) / 2
+        return ("M%.0f %.0f C %.0f %.0f, %.0f %.0f, %.0f %.0f"
+                % (x1, y1, x1 + bow, my, x2 - bow, my, x2, y2))
+
+    wires, flows, nodes = [], [], []
+    for x in xs:
+        y = j(50, 6)
+        nodes.append('<rect class="node" x="%d" y="%d" width="52" height="36" rx="8"/>' % (x - 26, y - 18))
+        d = curve(x, y + 18, cx + (x - cx) * 0.12, cy - r)
+        wires.append('<path class="wire" d="%s"/>' % d)
+        flows.append('<path class="flow" d="%s"/>' % d)
+    # side input
+    sx, sy = j(44, 6), j(168, 8)
+    nodes.append('<rect class="node" x="%d" y="%d" width="50" height="34" rx="8"/>' % (sx - 25, sy - 17))
+    ds = curve(sx + 25, sy, cx - r, cy + 4, bow=18)
+    wires.append('<path class="wire" d="%s"/>' % ds)
+    flows.append('<path class="flow" d="%s"/>' % ds)
+    # output down to a cylinder
+    by = j(250, 6)
+    db = "M%.0f %.0f L%.0f %.0f" % (cx, cy + r, cx, by - 24)
+    wires.append('<path class="wire" d="%s"/>' % db)
+    flows.append('<path class="flow" d="%s"/>' % db)
+    cyl = ('<path class="node" d="M%.0f %.0f v22 c0 4.4 13.4 8 30 8 s30 -3.6 30 -8 v-22" fill="var(--surface-2)"/>'
+           '<ellipse class="wire" cx="%.0f" cy="%.0f" rx="30" ry="8"/>' % (cx - 30, by, cx, by))
+
     return (
         '<div class="diagram" aria-hidden="true"><svg viewBox="0 0 340 300">'
-        '<path class="wire" d="M70 60 C 130 90, 150 110, 170 140"/><path class="wire" d="M270 60 C 210 90, 190 110, 170 140"/>'
-        '<path class="wire" d="M55 170 C 100 165, 130 160, 158 158"/>'
-        '<path class="flow" d="M70 60 C 130 90, 150 110, 170 140"/><path class="flow" d="M270 60 C 210 90, 190 110, 170 140"/>'
-        '<path class="flow" d="M55 170 C 100 165, 130 160, 158 158"/><path class="flow" d="M170 176 L170 226"/>'
-        '<rect class="node" x="44" y="40" width="52" height="40" rx="8"/><rect class="node" x="244" y="40" width="52" height="40" rx="8"/>'
-        '<rect class="node" x="30" y="152" width="50" height="36" rx="8"/>'
-        '<path class="core" d="M170 118 L206 140 V182 L170 204 L134 182 V140 Z"/>'
-        '<path class="glyph on-core" d="M170 118 V204 M134 140 L170 162 L206 140" opacity=".8"/>'
-        '<path class="node" d="M140 246 v22 c0 4.4 13.4 8 30 8 s30 -3.6 30 -8 v-22" fill="var(--surface-2)"/>'
-        '<ellipse class="wire" cx="170" cy="246" rx="30" ry="8"/></svg></div>'
+        + "".join(wires) + "".join(flows)
+        + "".join(nodes)
+        + '<path class="core" d="%s"/>' % core
+        + '<path class="glyph on-core" d="%s" opacity=".8"/>' % gl
+        + cyl + "</svg></div>"
     )
 
 
@@ -252,11 +606,18 @@ def build_404(p):
     return head("404 — Not found", "Page not found.") + body + site_footer(p)
 
 
-def build_favicon(p, pal):
+def build_favicon(p, pal, rng):
     letter = esc(p["product"][:1].lower())
+    accent = pal["accent_l"]
+    shape = rng.choice(["rrect", "rrect", "circle", "hex"])
+    if shape == "circle":
+        bg = '<circle cx="16" cy="16" r="15" fill="%s"/>' % accent
+    elif shape == "hex":
+        bg = '<path d="M16 1.5l12.6 7.3v14.4L16 30.5 3.4 23.2V8.8z" fill="%s"/>' % accent
+    else:
+        bg = '<rect width="32" height="32" rx="%d" fill="%s"/>' % (rng.choice([6, 7, 8, 9]), accent)
     return (
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
-        '<rect width="32" height="32" rx="7" fill="' + pal["accent_l"] + '"/>'
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">' + bg +
         '<text x="16" y="22" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="18" '
         'font-weight="700" fill="#fff" text-anchor="middle">' + letter + "</text></svg>"
     )
@@ -272,6 +633,23 @@ def build_sitemap(domain):
             '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + urls + "</urlset>\n")
 
 
+def apply_identity(preset, name, glyph_key):
+    """Swap the preset's product name (deeply embedded: CLI, prose, footer, docs) for the
+    generated one, and set the seed-picked glyph. Done as a whole-blob token replace so every
+    reference stays consistent."""
+    old_cap, old_low = preset["product"], preset["id"]
+    blob = json.dumps(preset, ensure_ascii=False)
+    # Word-BOUNDED replacement on purpose. A naive substring replace would corrupt prose the moment a
+    # preset id happens to sit inside another word — e.g. an "ember" preset would mangle "September",
+    # "slate" would mangle "translate", "pulse" would mangle "impulse". Today no preset trips that,
+    # but adding one later must not silently break the copy.
+    blob = re.sub(r"\b%s\b" % re.escape(old_cap), name, blob)
+    blob = re.sub(r"\b%s\b" % re.escape(old_low), name.lower(), blob)
+    out = json.loads(blob)
+    out["glyph"] = glyph_key
+    return out
+
+
 # ---------------------------------------------------------------- main
 def main():
     domain = os.environ.get("MASK_DOMAIN", "").strip().lower()
@@ -281,51 +659,52 @@ def main():
         die("MASK_DOMAIN and MASK_DEST are required")
 
     presets = json.load(open(os.path.join(MASK_DIR, "presets.json"), encoding="utf-8"))
-    palettes = json.load(open(os.path.join(MASK_DIR, "palettes.json"), encoding="utf-8"))
-    if not presets or not palettes:
-        die("empty presets/palettes")
+    if not presets:
+        die("empty presets")
+
+    # MASK_PEERS = all decoy FQDNs on THIS box, fixed order (primary, sync, root, ...). Used to give
+    # each domain of one box a DIFFERENT archetype AND a different content skeleton.
+    peers_env = os.environ.get("MASK_PEERS", "").strip()
+    peers = [d.strip().lower() for d in peers_env.split(",") if d.strip()] or [domain]
+    if domain not in peers:
+        peers = [domain] + peers
+    seen = set()
+    peers = [d for d in peers if not (d in seen or seen.add(d))]  # dedupe, keep order
 
     if override:
         chosen = next((x for x in presets if x["id"] == override), None)
         if chosen is None:
             die("MASK_PRESET '%s' not found" % override)
     else:
-        # Peer-aware, deterministic preset selection. MASK_PEERS (comma-separated FQDNs of all
-        # decoy domains on THIS box, in a fixed order) lets us hand each domain a DIFFERENT product
-        # so two subdomains of one box aren't the same product. With no peers, falls back to the
-        # plain per-domain choice. Deterministic given the same peer set → stable across repair.
-        peers_env = os.environ.get("MASK_PEERS", "").strip()
-        peers = [d.strip().lower() for d in peers_env.split(",") if d.strip()] or [domain]
-        if domain not in peers:
-            peers = [domain] + peers
-        seen = set()
-        peers = [d for d in peers if not (d in seen or seen.add(d))]  # dedupe, keep order
-        taken, assign = set(), {}
-        dedupe = len(peers) <= len(presets)
-        for d in peers:
-            idx = seed_int(d) % len(presets)
-            if dedupe:
-                while idx in taken:
-                    idx = (idx + 1) % len(presets)
-            assign[d] = idx
-            taken.add(idx)
-        chosen = presets[assign[domain]]
-    pal = palettes[seed_int(domain + "|accent") % len(palettes)]
+        chosen = presets[assign_index(domain, peers, len(presets))]
 
-    # substitute the real domain into docs code samples
+    # --- per-install identity: archetype + generated name + glyph + palette + class map
+    arch = os.environ.get("MASK_ARCH", "").strip() or ARCHES[assign_index(domain, peers, len(ARCHES), "|arch")]
+    if arch not in ARCHES:
+        die("MASK_ARCH '%s' not found (have: %s)" % (arch, ", ".join(ARCHES)))
+    global _NAV
+    _NAV = LAYOUT.get(arch, LAYOUT["clean"])["nav"]
+    rng_svg = random.Random(seed_int(domain + "|svg|" + arch))
+    name = gen_name(domain)
+    glyph_key = rng_svg.choice(list(GLYPHS.keys()))
+    chosen = apply_identity(chosen, name, glyph_key)
+    pal = build_palette(domain, arch)
+    cmap = build_class_map(domain)
+
     def finalize(s):
         return s.replace("__DOMAIN__", domain)
 
-    pages = {
-        "index.html": build_index(chosen),
+    html_pages = {
+        "index.html": build_index(chosen, rng_svg, arch),
         "docs.html": finalize(build_docs(chosen)),
         "license.html": build_license(chosen),
         "404.html": build_404(chosen),
-        "favicon.svg": build_favicon(chosen, pal),
-        "robots.txt": build_robots(domain),
-        "sitemap.xml": build_sitemap(domain),
-        os.path.join("assets", "style.css"): build_css(pal),
     }
+    pages = {rel: mangle_html(page, cmap) for rel, page in html_pages.items()}
+    pages["favicon.svg"] = build_favicon(chosen, pal, rng_svg)
+    pages["robots.txt"] = build_robots(domain)
+    pages["sitemap.xml"] = build_sitemap(domain)
+    pages[os.path.join("assets", "style.css")] = mangle_css(build_css(pal, arch), cmap)
 
     os.makedirs(os.path.join(dest, "assets"), exist_ok=True)
     for rel, content in pages.items():
@@ -333,7 +712,7 @@ def main():
         os.makedirs(os.path.dirname(path), exist_ok=True) if os.path.dirname(rel) else None
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
-    sys.stdout.write("%s\t%s\n" % (chosen["id"], pal["id"]))
+    sys.stdout.write("%s\t%s\t%s\t%s\n" % (arch, chosen["id"], pal["id"], name))
 
 
 if __name__ == "__main__":

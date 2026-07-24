@@ -1,8 +1,0 @@
-[
-  { "id": "azure",   "accent_l": "#295bd6", "accent_ink_l": "#1f47a8", "accent_d": "#6f9bff", "accent_ink_d": "#a9c3ff" },
-  { "id": "teal",    "accent_l": "#0f766e", "accent_ink_l": "#0b5952", "accent_d": "#2dd4bf", "accent_ink_d": "#7ff0e2" },
-  { "id": "indigo",  "accent_l": "#4f46e5", "accent_ink_l": "#3c34c2", "accent_d": "#8b93ff", "accent_ink_d": "#b7bcff" },
-  { "id": "emerald", "accent_l": "#047857", "accent_ink_l": "#035c43", "accent_d": "#34d399", "accent_ink_d": "#83e9c3" },
-  { "id": "amber",   "accent_l": "#b45309", "accent_ink_l": "#8a3f07", "accent_d": "#f0a55c", "accent_ink_d": "#f8c98a" },
-  { "id": "rose",    "accent_l": "#be123c", "accent_ink_l": "#980d2f", "accent_d": "#fb7185", "accent_ink_d": "#fda4b4" }
-]
