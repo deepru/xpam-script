@@ -44,6 +44,37 @@ dh_require_sqlite(){
   [[ -s /etc/x-ui/x-ui.db ]] || fail "Сервер ещё не готов для DoubleHop. Завершите установку XPAM и проверьте health."
 }
 
+# True when WARP is actually in use: a tag=warp outbound AND at least one routing rule pointing at
+# it. Used only to warn the operator — DoubleHop itself is transport-wide and does not care.
+#
+# Why the warning matters: the DoubleHop rule matches by inboundTag and carries no domain filter, and
+# it is inserted right after the protected api/blocked rules — i.e. ABOVE WARP's domain rules. Xray
+# takes the first matching rule, so with DoubleHop on for VLESS every VLESS connection goes to the
+# Exit server and the WARP rules never fire. Nothing breaks and nothing is lost (WARP keeps its
+# settings and resumes when DoubleHop is switched off), but silently ignoring a feature the operator
+# deliberately configured would be surprising. Telegram-only mode leaves VLESS direct, so WARP keeps
+# working there — no warning in that mode.
+dh_warp_active(){
+  local db=/etc/x-ui/x-ui.db
+  [[ -s "$db" ]] || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+  sqlite3 "$db" "SELECT value FROM settings WHERE key='xrayTemplateConfig';" 2>/dev/null | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+if not raw.strip():
+    sys.exit(1)
+try:
+    cfg = json.loads(raw)
+except Exception:
+    sys.exit(1)
+outs = cfg.get("outbounds") or []
+has_warp = any(isinstance(o, dict) and o.get("tag") == "warp" for o in outs)
+rules = (cfg.get("routing") or {}).get("rules") or []
+has_rule = any(isinstance(r, dict) and r.get("outboundTag") == "warp" for r in rules)
+sys.exit(0 if (has_warp and has_rule) else 1)
+' 2>/dev/null
+}
+
 dh_preflight(){
   dh_require_sqlite
   [[ -s /usr/local/x-ui/bin/config.json || -s /etc/x-ui/x-ui.db ]] || fail "Сервер ещё не готов для DoubleHop. Завершите установку XPAM и проверьте health."
@@ -1118,6 +1149,14 @@ dh_menu_enable_change(){
   echo "  VLESS: без изменений"
   echo "  Telegram: без изменений"
   echo
+  # Telegram-only leaves VLESS direct, so WARP keeps working there — warn only for the VLESS modes.
+  if [[ "$mode" != "telegram-only" ]] && dh_warp_active; then
+    echo "ВНИМАНИЕ: на этом сервере настроен WARP."
+    echo "  При включённом DoubleHop весь VLESS-трафик идёт через Exit-сервер,"
+    echo "  поэтому WARP использоваться не будет."
+    echo "  Настройки WARP сохранятся: он снова заработает, когда вы выключите DoubleHop."
+    echo
+  fi
   read -r -p "Продолжить? [yes/no]: " answer || true
   case "$answer" in
     yes|YES|y|Y|д|Д) dh_apply_mode_with_rollback "$mode" "$label" ;;
