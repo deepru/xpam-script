@@ -116,21 +116,76 @@ VERSION="$(tr -d ' \t\r\n' < VERSION)"
 rel_ver="$(awk -F= '$1=="XPAM_VERSION"{gsub(/[ \t\r]/,"",$2); print $2}' RELEASE)"
 [[ "$rel_ver" == "$VERSION" ]] || die "VERSION ($VERSION) != RELEASE XPAM_VERSION ($rel_ver) — bump both before release"
 
-prefix="xpam-script-v${VERSION}"
-out_dir="${2:-dist}"
+# ---- release vs dev build -------------------------------------------------------------------
+# A branch build used to be named exactly like the published asset (VERSION only bumps at release
+# time), so `dist/xpam-script-v1.3.9.tar.gz` could be either the real release or a work-in-progress
+# build of the next version. That ambiguity once put an unreleased kit on a production box.
+# Now only a build that provably matches a release tag gets the release name; everything else is
+# marked as a dev build, in its own directory, and carries the commit in its filename.
+head_sha="$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
+dirty=no
+if ! git diff --quiet || ! git diff --cached --quiet; then dirty=yes; fi
+head_tag="$(git describe --exact-match --tags HEAD 2>/dev/null || true)"
+
+build_kind=dev
+if [[ "$dirty" == "no" && "$head_tag" == "v${VERSION}" ]]; then
+  build_kind=release
+elif [[ "${XPAM_FORCE_RELEASE_BUILD:-}" == "1" ]]; then
+  # Escape hatch for the documented flow, which builds the artifact BEFORE tagging.
+  build_kind=release
+  info "XPAM_FORCE_RELEASE_BUILD=1 — release naming forced (HEAD is not tagged v${VERSION})"
+fi
+
+if [[ "$build_kind" == "release" ]]; then
+  prefix="xpam-script-v${VERSION}"
+  default_out=dist
+else
+  # e.g. xpam-script-v1.3.9+dev.7175e18ab12c.dirty
+  prefix="xpam-script-v${VERSION}+dev.${head_sha}"
+  [[ "$dirty" == "yes" ]] && prefix="${prefix}.dirty"
+  default_out=build
+fi
+
+out_dir="${2:-$default_out}"
 mkdir -p "$out_dir"
 tarball="${out_dir}/${prefix}.tar.gz"
 
-if ! git diff --quiet || ! git diff --cached --quiet; then
+if [[ "$dirty" == "yes" ]]; then
   info "note: working tree has uncommitted changes — they WILL be included (working-tree build)"
 fi
+if [[ "$build_kind" == "dev" ]]; then
+  info "DEV build (HEAD=${head_sha}, dirty=${dirty}) — NOT a release; never deploy this to a live box"
+else
+  info "RELEASE build (tag ${head_tag:-forced}, HEAD=${head_sha})"
+fi
+
+# BUILD_INFO travels inside the kit, so `cat /opt/xpam-script/BUILD_INFO` on any box answers
+# "what exactly is installed here". It carries no timestamp on purpose, so that a RELEASE build
+# (clean tree) stays byte-reproducible: rebuilding the same tag must yield the same sha256, which
+# is what makes the published asset verifiable. (A dirty dev build cannot be reproducible either
+# way — `git stash create` mints a fresh commit each time and git archive takes file mtimes from
+# the commit date; the tree, and therefore the content, is still identical.)
+# The temp file must literally be named BUILD_INFO: `git archive --add-file` names the archive
+# entry after the source file's basename. Renaming it afterwards would mean unpacking and
+# re-taring the archive, and `tar -czf` stamps the current time into the gzip header — which
+# would make two builds of the same commit differ.
+build_info_dir="$(mktemp -d)"
+build_info="${build_info_dir}/BUILD_INFO"
+{
+  echo "XPAM_VERSION=${VERSION}"
+  echo "XPAM_BUILD_KIND=${build_kind}"
+  echo "XPAM_GIT_COMMIT=${head_sha}"
+  echo "XPAM_GIT_TAG=${head_tag:-none}"
+  echo "XPAM_WORKTREE_DIRTY=${dirty}"
+} > "$build_info"
 
 # Archive the WORKING TREE (tracked files, current on-disk content) under the
 # wrapper prefix. git stash create yields a tree object for the working tree
 # without touching the stash list; falls back to HEAD when the tree is clean.
 tree="$(git stash create 2>/dev/null || true)"
 [[ -n "$tree" ]] || tree="HEAD"
-git archive --format=tar.gz --prefix="${prefix}/" -o "$tarball" "$tree"
+git archive --format=tar.gz --prefix="${prefix}/" --add-file="$build_info" -o "$tarball" "$tree"
+rm -rf "$build_info_dir"
 ( cd "$out_dir" && sha256sum "${prefix}.tar.gz" > "${prefix}.tar.gz.sha256" )
 info "built: $tarball"
 

@@ -23,6 +23,7 @@ CLAUDE.local.md
 
 # Local install/build/test directories
 dist/
+build/
 xpam-install/
 xpam-v*/
 xpam-*-build/
