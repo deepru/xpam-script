@@ -15,20 +15,20 @@ Sensitive data includes:
 - WARP/WireGuard credentials;
 - the spare transport's connection link and its secret path/serviceName;
 - `/etc/xpam-script/config.env`;
-- output from `sudo <prefix>-links --show-secrets`.
+- output from `sudo <prefix>-links`.
 
 ## Safe and unsafe link commands
 
-Safe diagnostic summary:
+Diagnostic summary without secrets:
+
+```bash
+sudo <prefix>-links --safe
+```
+
+Full output — treat as sensitive:
 
 ```bash
 sudo <prefix>-links
-```
-
-Sensitive full output:
-
-```bash
-sudo <prefix>-links --show-secrets
 ```
 
 Never paste the full output into a public issue.

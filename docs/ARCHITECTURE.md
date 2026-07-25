@@ -36,7 +36,6 @@ sudo <prefix>-xpam
 sudo <prefix>-links
 sudo <prefix>-health
 sudo <prefix>-repair
-sudo <prefix>-netdiag
 ```
 
 `sudo <prefix>-xpam` is the main management interface.
@@ -47,10 +46,10 @@ Connection links are managed centrally:
 
 ```bash
 sudo <prefix>-links
-sudo <prefix>-links --show-secrets
+sudo <prefix>-links --safe
 ```
 
-The first command is safe for diagnostics and does not print secrets. The second command prints full connection data and must be treated as sensitive.
+`<prefix>-links` prints the full connection data and must be treated as sensitive. `<prefix>-links --safe` prints a summary without secrets, suitable for diagnostics and bug reports.
 
 For VLESS and Telegram proxy / MTG, the full links output is built from the current 3x-ui configuration. If a VLESS client or Telegram proxy / MTG secret is changed in 3x-ui, run the command again and use the updated links. When the spare transport is enabled, its link is printed by the transport menu itself.
 

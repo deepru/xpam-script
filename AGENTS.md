@@ -22,8 +22,8 @@ Use the current public terminology consistently: **Telegram proxy / MTG**, **Tel
 
 - `sudo <prefix>-xpam` is the primary management interface.
 - `sudo <prefix>-links` is the safe connection summary.
-- `sudo <prefix>-links --show-secrets` prints sensitive connection data.
-- VLESS and Telegram links shown by `sudo <prefix>-links --show-secrets` must be generated from the current 3x-ui configuration.
+- `sudo <prefix>-links` prints sensitive connection data.
+- VLESS and Telegram links shown by `sudo <prefix>-links` must be generated from the current 3x-ui configuration.
 - Public documentation should not reference removed user-facing command names from older releases.
 
 ## DoubleHop invariants
@@ -32,7 +32,7 @@ Use the current public terminology consistently: **Telegram proxy / MTG**, **Tel
 - The Exit server is prepared separately by the user.
 - XPAM uses a user-provided Exit VLESS link.
 - Enabling, changing or disabling DoubleHop must not change existing Entry-side VLESS or Telegram links.
-- Manual Telegram proxy / MTG secret rotation in 3x-ui must be reflected by `sudo <prefix>-links --show-secrets` and must not be reverted by health, repair or weekly maintenance.
+- Manual Telegram proxy / MTG secret rotation in 3x-ui must be reflected by `sudo <prefix>-links` and must not be reverted by health, repair or weekly maintenance.
 - Public documentation must not imply automatic Exit-server management.
 
 ## Update invariants

@@ -12,12 +12,11 @@ sudo <prefix>-xpam
 
 ```bash
 sudo <prefix>-xpam                 # main XPAM menu
-sudo <prefix>-links                # safe connection summary
-sudo <prefix>-links --show-secrets # full connection data
+sudo <prefix>-links                # full connection data
+sudo <prefix>-links --safe         # summary without secrets
 sudo <prefix>-health               # quick health check
 sudo <prefix>-health --deep        # extended health check
 sudo <prefix>-repair               # repair XPAM runtime glue
-sudo <prefix>-netdiag              # network diagnostics
 sudo <prefix>-weekly-maintenance.sh # run the weekly maintenance pass by hand
 ```
 
@@ -48,15 +47,15 @@ Do not publish live domains in public issues unless they are intentionally publi
 XPAM centralizes user connection data in:
 
 ```bash
-sudo <prefix>-links --show-secrets
+sudo <prefix>-links
 ```
 
 The full output shows current VLESS and Telegram links from the active 3x-ui configuration. After adding/removing VLESS clients or rotating the Telegram proxy / MTG secret in 3x-ui, run the command again and use the updated links.
 
-The safe summary is:
+A summary without secrets:
 
 ```bash
-sudo <prefix>-links
+sudo <prefix>-links --safe
 ```
 
 ## DoubleHop Mode

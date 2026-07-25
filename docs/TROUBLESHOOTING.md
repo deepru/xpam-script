@@ -14,21 +14,15 @@ If the command is missing, run repair from the installed runtime if available, o
 
 ## Links command does not show full data
 
-The safe command does not print secrets:
+`sudo <prefix>-links` already prints everything — links, panel address and credentials. There is no extra flag to reveal secrets.
 
 ```bash
 sudo <prefix>-links
 ```
 
-Use the full command only in a private terminal:
+Do not paste that output into public reports; use `sudo <prefix>-links --safe` for a summary without secrets.
 
-```bash
-sudo <prefix>-links --show-secrets
-```
-
-Do not paste this output into public reports.
-
-If you manually changed a VLESS client or Telegram proxy / MTG secret in 3x-ui, run the full command again and use the current links from its output.
+If you manually changed a VLESS client or Telegram proxy / MTG secret in 3x-ui, run the command again and use the current links from its output.
 
 ## Health failed
 
@@ -84,7 +78,7 @@ connect — or connects only sometimes, typically on one network — the problem
 the server rather than the server.
 
 - Test the same link from a different network (for example a phone hotspot).
-- Re-copy the link: `sudo <prefix>-links --show-secrets`.
+- Re-copy the link: `sudo <prefix>-links`.
 - Enable the optional **spare VLESS transport** on a separate domain
   (`sudo <prefix>-xpam` → `Дополнительно` → `Транспорты VLESS`) and add its link to the client as a
   second server. The primary transport is untouched and keeps working.

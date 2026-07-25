@@ -20,18 +20,18 @@ Do not publish or paste publicly:
 - private keys;
 - certificate private keys;
 - `/etc/xpam-script/config.env`;
-- output from `sudo <prefix>-links --show-secrets`.
+- output from `sudo <prefix>-links`.
 
-The safe command for public diagnostics is:
+The command for public diagnostics, which prints no secrets, is:
 
 ```bash
-sudo <prefix>-links
+sudo <prefix>-links --safe
 ```
 
 The following command prints sensitive connection data and must be treated as secret:
 
 ```bash
-sudo <prefix>-links --show-secrets
+sudo <prefix>-links
 ```
 
 ## DoubleHop Mode

@@ -10,7 +10,7 @@ sudo <prefix>-repair
 
 Repair restores XPAM runtime glue and generated helper commands, and re-asserts the front layer (nginx, HAProxy, the spare transport front when enabled) and the WARP outbound shape. It does not change VLESS or Telegram links.
 
-VLESS and Telegram links shown by `sudo <prefix>-links --show-secrets` are expected to come from the current 3x-ui configuration, not from stale text copies.
+VLESS and Telegram links shown by `sudo <prefix>-links` are expected to come from the current 3x-ui configuration, not from stale text copies.
 
 ## Weekly maintenance
 
@@ -24,11 +24,15 @@ sudo <prefix>-weekly-maintenance.sh
 
 ## Network diagnostics
 
+Network diagnostics no longer has its own command — it is run from the menu:
+
 ```bash
-sudo <prefix>-netdiag
+sudo <prefix>-xpam
 ```
 
-Use network diagnostics when DNS, TLS, routing or connectivity checks fail.
+Open `Дополнительно / обслуживание` → `Диагностика сети Debian/провайдера`.
+
+Use it when DNS, TLS, routing or connectivity checks fail.
 
 ## Safe self-update
 

@@ -1,21 +1,50 @@
 # XPAM Script
 
-**XPAM Script** is a Bash automation tool for deploying a private HTTPS/TLS VPS setup on a clean server.
+[![License: MIT](https://img.shields.io/github/license/deepru/xpam-script?color=blue)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/deepru/xpam-script?sort=semver)](https://github.com/deepru/xpam-script/releases/latest)
+[![CI](https://github.com/deepru/xpam-script/actions/workflows/ci.yml/badge.svg)](https://github.com/deepru/xpam-script/actions/workflows/ci.yml)
+[![Platform](https://img.shields.io/badge/Ubuntu%20%C2%B7%20Debian-informational)](docs/INSTALLATION.md)
 
-It configures **VLESS**, **Telegram proxy / MTG**, 3x-ui/Xray, nginx, HAProxy, Certbot, firewall, fail2ban, health checks, maintenance scripts, WARP via Xray, **DoubleHop Mode**, an optional spare VLESS transport, and safe XPAM self-update.
+[Русский](README.md) · **English**
 
-> XPAM Script changes SSH, firewall, nginx, HAProxy, 3x-ui/Xray, Certbot, fail2ban, systemd units, health/maintenance scripts, DNS checks, `/etc/hosts`, and VPS network settings. Use it on a clean VPS, not on a server that already hosts important services.
+> Turns a clean VPS into a private HTTPS setup: **VLESS** and **Telegram proxy (MTG)** behind a single `443` port, with a real TLS certificate and decoy websites.
+
+Everything normally done by hand is handled for you: 3x-ui/Xray, nginx, HAProxy, Certbot, UFW, fail2ban, SSH hardening, health checks, weekly maintenance and safe self-update. After installation everything is managed by one command, `sudo <prefix>-xpam`.
+
+> [!WARNING]
+> The script changes SSH, the firewall, nginx, HAProxy, 3x-ui/Xray, Certbot, fail2ban, systemd units, `/etc/hosts` and network parameters. Run it **on a clean VPS**, not on a server that already hosts your services.
+
+## Features
+
+| | |
+|---|---|
+| 🔐 **VLESS + Telegram proxy** | Both behind one HTTPS front on `443/tcp` — no separate "suspicious" ports |
+| 🎭 **Smart masking** | Every domain gets its own believable website, unique to each installation. You can serve your own real site instead |
+| 🔁 **Spare transport** | A second way in (xhttp/grpc) on its own domain, for when the primary one gets blocked |
+| 🔀 **DoubleHop** | Route VLESS and/or Telegram traffic through a second server |
+| ⚙️ **WARP** | Automatic registration and selective routing — not a system-wide VPN |
+| 🛡️ **Hardening** | SSH keys only, UFW, fail2ban, panel behind a secret path and Basic Auth |
+| ❤️ **Checks and repair** | Quick and deep diagnostics, runtime and 3x-ui database restore with automatic rollback |
+| ⬆️ **Updates** | Checksum verification, backup, post-update health check, rollback on failure |
+
+## How it works
+
+Only one working port is exposed — ordinary HTTPS. Requests are routed by domain name:
+
+```text
+Internet :443 (HTTPS)
+      │
+      ├─ VLESS domain     →  Xray / VLESS
+      ├─ Telegram domain  →  Telegram proxy (MTG)
+      ├─ spare domain     →  spare transport (when enabled)
+      └─ anything else    →  an ordinary website (masking)
+```
+
+That is why the server looks like a normal web server from the outside: opening a domain in a browser shows a real page, not a blank technical response.
 
 ## Quick start
 
-Prepare:
-
-- a clean **Ubuntu** or **Debian** VPS;
-- root SSH access;
-- domains for VLESS, Telegram proxy / MTG, and the panel;
-- DNS A records pointing to your server IPv4.
-
-### Install through GitHub bootstrap
+You will need: a clean VPS running **Ubuntu** or **Debian** with root access, domains for VLESS, Telegram proxy and the panel with **A records** pointing at the server's IPv4, open ports `22`, `80`, `443`, and an **SSH key** — password login is disabled at the very first step.
 
 ```bash
 cd /root
@@ -23,121 +52,18 @@ curl -fsSL https://raw.githubusercontent.com/deepru/xpam-script/main/bootstrap.s
 sudo XPAM_REPO="deepru/xpam-script" bash xpam-bootstrap.sh
 ```
 
-The bootstrap downloads the published archive from **GitHub Releases**, verifies SHA256, extracts XPAM Script, and starts the installer.
+Bootstrap downloads the published archive from GitHub Releases, verifies its SHA256 and starts the installer. Two menu entries follow: SSH security first, then the server setup. Once the server is installed they disappear and the operational menu takes their place.
 
-Run menu item `0` first to configure SSH safety and create the prefix command, then run item `1` to install the server.
-
-```text
-1) SSH security and server command creation
-2) Install / continue server setup
-```
-
-After step 0, the main management command is:
-
-```bash
-sudo <prefix>-xpam
-```
-
-For example, if prefix = `srv`:
-
-```bash
-sudo srv-xpam
-```
+> [!TIP]
+> The full step-by-step guide is in Russian: **[Руководство пользователя](docs/USER_GUIDE_RU.md)**. The English docs under [`docs/`](docs/README.md) cover the same operational model in shorter form.
 
 ## Documentation
 
-Before installation, read the full user guide.
+- [Architecture](docs/ARCHITECTURE.md) · [Installation](docs/INSTALLATION.md) · [Configuration and commands](docs/CONFIGURATION.md)
+- [Health checks](docs/HEALTHCHECKS.md) · [Maintenance](docs/MAINTENANCE.md) · [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [Masking sites](docs/SITES.md) · [WARP](docs/WARP.md) · [Telegram notifications](docs/TELEGRAM_NOTIFICATIONS.md)
+- [Security model](docs/SECURITY_MODEL.md) · [Changelog](CHANGELOG.md) · [Releases](https://github.com/deepru/xpam-script/releases)
 
-**Full guide:** [User guide (Russian)](docs/USER_GUIDE_RU.md) — from VPS prep to operation, updates, and diagnostics. Opens right on GitHub.
+## License
 
-Additional documents:
-
-- [Release notes / changelog](CHANGELOG.md)
-- [GitHub Releases](https://github.com/deepru/xpam-script/releases)
-- [CHANGELOG.md](CHANGELOG.md)
-- [TESTING.md](TESTING.md)
-- [SECURITY.md](SECURITY.md)
-- [THIRD_PARTY.md](THIRD_PARTY.md)
-
-## What XPAM Script provides
-
-After installation, you get:
-
-- SSH key based access;
-- HTTPS/TLS entry surface on `443/tcp`;
-- nginx + HAProxy + Certbot;
-- 3x-ui/Xray with SQLite backend;
-- VLESS on a dedicated domain;
-- Telegram proxy / MTG on a dedicated domain;
-- masking sites that are unique per installation, and fallback;
-- health and deep-health diagnostics;
-- repair command;
-- weekly maintenance;
-- an optional spare VLESS transport (xhttp/grpc) on its own domain, enabled on demand;
-- WARP via 3x-ui/Xray with automatic registration, enabled on demand;
-- DoubleHop Mode for VLESS and/or Telegram routing through the second XPAM server;
-- safe user-initiated XPAM updates through the menu.
-
-## Supported systems
-
-Officially tested:
-
-- Ubuntu
-- Debian
-
-A clean VPS with root access and IPv4 is recommended.
-
-## Main commands
-
-```bash
-sudo <prefix>-xpam
-sudo <prefix>-health
-sudo <prefix>-health --deep
-sudo <prefix>-links
-sudo <prefix>-links --show-secrets
-sudo <prefix>-repair
-sudo <prefix>-netdiag
-```
-
-`sudo <prefix>-xpam` opens the main XPAM management menu.
-
-## VLESS and Telegram links
-
-Current connection data is shown with:
-
-```bash
-sudo <prefix>-links --show-secrets
-```
-
-VLESS links and the Telegram link are generated from the current **3x-ui** configuration. If you add/change a VLESS client or manually rotate the Telegram proxy / MTG secret in 3x-ui, run the links command again and use the updated output.
-
-Do not publish `--show-secrets` output in chats, issues, screenshots, or public logs.
-
-## DoubleHop Mode
-
-DoubleHop Mode lets you use two XPAM servers: the main server keeps accepting the existing VLESS/Telegram links, while selected traffic exits through the second XPAM server.
-
-Supported modes:
-
-```text
-VLESS only
-Telegram only
-VLESS + Telegram
-```
-
-How it works:
-
-- install XPAM on both servers normally;
-- on the second server, run `sudo <prefix>-links --show-secrets` and copy its VLESS link;
-- on the main server, open `sudo <prefix>-xpam` → `DoubleHop Mode` and paste the second server VLESS link;
-- the current VLESS and Telegram links of the main server do not change when DoubleHop is enabled, changed, or disabled.
-
-## Safe update
-
-XPAM supports user-initiated updates through the menu. The updater checks release metadata and SHA256, creates backup/snapshot, runs preflight, applies the new version, runs post-update health/deep-health, and rolls back on failure.
-
-## License and third-party components
-
-XPAM Script is distributed under the MIT License.
-
-3x-ui, Xray-core, nginx, HAProxy, Certbot, UFW, fail2ban, systemd, and other components keep their own licenses. See [THIRD_PARTY.md](THIRD_PARTY.md).
+MIT License. 3x-ui, Xray-core, mtg, nginx, HAProxy, Certbot, UFW, fail2ban, systemd and other components keep their own licenses — see [THIRD_PARTY.md](THIRD_PARTY.md).

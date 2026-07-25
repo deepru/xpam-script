@@ -11,6 +11,7 @@ of them. Each component keeps its own license, authorship and upstream support.
 |---|---|---|---|
 | **3x-ui** | [MHSanaei/3x-ui](https://github.com/MHSanaei/3x-ui) | [GPL-3.0](https://github.com/MHSanaei/3x-ui/blob/main/LICENSE) | Web panel and management layer for Xray |
 | **Xray-core** | [XTLS/Xray-core](https://github.com/XTLS/Xray-core) | [MPL-2.0](https://github.com/XTLS/Xray-core/blob/main/LICENSE) | VLESS and routing engine |
+| **mtg-multi** | [mhsanaei/mtg-multi](https://github.com/mhsanaei/mtg-multi) | [MIT](https://github.com/mhsanaei/mtg-multi/blob/master/LICENSE) | MTProto proxy sidecar behind Telegram proxy / MTG. Shipped inside the 3x-ui release archive and spawned by 3x-ui — XPAM neither downloads nor pins it |
 | **nginx** | [nginx.org](https://nginx.org/) | [BSD-2-Clause](https://nginx.org/LICENSE) | Local web server, masking and fallback sites |
 | **HAProxy** | [haproxy.org](https://www.haproxy.org/) | [GPL-2.0](https://github.com/haproxy/haproxy/blob/master/LICENSE) | Public HTTPS/TLS routing on `:443` |
 | **Certbot** | [certbot/certbot](https://github.com/certbot/certbot) | [Apache-2.0](https://github.com/certbot/certbot/blob/main/LICENSE.txt) | TLS certificate issuance and renewal |

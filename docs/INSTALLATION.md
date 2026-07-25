@@ -57,16 +57,16 @@ It stays the main management interface.
 
 ## Connection data
 
-Safe summary:
+Summary without secrets:
 
 ```bash
-sudo <prefix>-links
+sudo <prefix>-links --safe
 ```
 
 Full connection data:
 
 ```bash
-sudo <prefix>-links --show-secrets
+sudo <prefix>-links
 ```
 
 The full output contains sensitive data. VLESS and Telegram links in this output are generated from the current 3x-ui configuration.
