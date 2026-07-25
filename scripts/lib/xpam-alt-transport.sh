@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# XPAM Script module: optional secondary VLESS transport (xhttp; grpc later) on a SEPARATE
+# XPAM Script module: optional secondary VLESS transport (xhttp OR grpc) on a SEPARATE
 # on-demand domain, coexisting with the untouched tcp primary (Design 2, see
-# handoff/FEATURE_TRANSPORT_SELECTOR.md §5.5).
+# handoff/FEATURE_TRANSPORT_SELECTOR.md §5.5 for xhttp, §5.6 for grpc).
 #
 # Topology when enabled:
 #   :443 HAProxy (mode tcp, SNI) ─ SNI=primary → be_xray (tcp+tls+vision)     ← UNTOUCHED
-#                                 ─ SNI=alt     → be_vless_front → nginx (TLS) → xhttp inbound (security=none)
+#                                 ─ SNI=alt     → be_vless_front → nginx (TLS) → alt inbound (security=none)
 #                                                                              → decoy on /
 # The primary tcp path stays byte-identical; this module only ADDS the alt front.
 #
 # Build phases (offline-first): A = config vars + validation + menu skeleton (this scaffold);
-# B = cert + ACME vhost + decoy; C = xhttp inbound + nginx front + HAProxy ACL + link; D = DoubleHop
+# B = cert + ACME vhost + decoy; C = alt inbound + nginx front + HAProxy ACL + link; D = DoubleHop
 # multi-inbound + deep-health + repair-safety. Live test (E) is deferred to an ephemeral box.
 
 # ---------- helpers ----------
@@ -223,7 +223,7 @@ alt_delete_inbound(){
   xui_ensure_api_token || { warn "Нет API-токена для удаления инбаунда."; return 1; }
   # 3x-ui 3.x makes a client a first-class many-to-many entity: DelInbound removes the inbound + the
   # client_inbounds junction but LEAVES the `clients` row + client_traffics (no ON DELETE CASCADE) — by
-  # design, since a client may span inbounds — so our dedicated xhttp client would linger on the panel
+  # design, since a client may span inbounds — so our dedicated alt client would linger on the panel
   # Clients page. Capture the client(s) bound to THIS inbound NOW (the junction is dropped once the
   # inbound is deleted), so cleanup finds them by their link to the inbound — rename-safe: it does not
   # rely on a hardcoded email the operator may have changed in the panel.
@@ -269,12 +269,31 @@ alt_issue_cert(){
   [[ -s "/etc/letsencrypt/live/$d/fullchain.pem" && -s "/etc/letsencrypt/live/$d/privkey.pem" ]]
 }
 
-alt_nginx_target(){ printf '/etc/nginx/sites-available/xpam-alt-xhttp.conf'; }
+# The front file is transport-neutral: the SAME file holds the xhttp OR the grpc server block
+# (only one alt transport runs at a time). It used to be named …-xhttp.conf, which was misleading
+# once grpc shipped — see alt_nginx_migrate_legacy_conf for what happens to installs that have it.
+alt_nginx_target(){ printf '/etc/nginx/sites-available/xpam-alt.conf'; }
+alt_nginx_link(){ printf '/etc/nginx/sites-enabled/xpam-alt.conf'; }
+
+# Installs made before the rename carry /etc/nginx/sites-{available,enabled}/xpam-alt-xhttp.conf.
+# It MUST be dropped before nginx sees the new file: both blocks listen on the same port with the
+# same server_name, so leaving the old one behind means a conflicting-server-name warning and a
+# stale config that could win. Called on every write and on removal, so enable/switch/repair all
+# migrate; a no-op once migrated.
+alt_nginx_migrate_legacy_conf(){
+  local legacy_link=/etc/nginx/sites-enabled/xpam-alt-xhttp.conf
+  local legacy_file=/etc/nginx/sites-available/xpam-alt-xhttp.conf
+  if [[ -e "$legacy_link" || -L "$legacy_link" || -e "$legacy_file" ]]; then
+    rm -f "$legacy_link" "$legacy_file"
+    say "Миграция: старый nginx-конфиг xpam-alt-xhttp.conf заменён на транспортно-нейтральный xpam-alt.conf"
+  fi
+}
 
 alt_nginx_write_acme(){
   export_vars
+  alt_nginx_migrate_legacy_conf
   render_template "$KIT_DIR/templates/nginx-alt-acme.conf.tpl" "$(alt_nginx_target)"
-  ln -sf "$(alt_nginx_target)" /etc/nginx/sites-enabled/xpam-alt-xhttp.conf
+  ln -sf "$(alt_nginx_target)" "$(alt_nginx_link)"
   nginx -t || return 1
   systemctl reload nginx || systemctl restart nginx || return 1
 }
@@ -287,14 +306,16 @@ alt_nginx_write_front(){
   # block + decoy either way — differs only in the secret location (xhttp proxy_pass vs grpc grpc_pass).
   local tpl="$KIT_DIR/templates/nginx-alt-xhttp.conf.tpl"
   [[ "${VLESS_ALT_TRANSPORT:-}" == "grpc" ]] && tpl="$KIT_DIR/templates/nginx-alt-grpc.conf.tpl"
+  alt_nginx_migrate_legacy_conf
   render_template "$tpl" "$(alt_nginx_target)"
-  ln -sf "$(alt_nginx_target)" /etc/nginx/sites-enabled/xpam-alt-xhttp.conf
+  ln -sf "$(alt_nginx_target)" "$(alt_nginx_link)"
   nginx -t || return 1
   systemctl reload nginx || systemctl restart nginx || return 1
 }
 
 alt_nginx_remove(){
-  rm -f /etc/nginx/sites-enabled/xpam-alt-xhttp.conf "$(alt_nginx_target)"
+  alt_nginx_migrate_legacy_conf
+  rm -f "$(alt_nginx_link)" "$(alt_nginx_target)"
   if nginx -t >/dev/null 2>&1; then systemctl reload nginx || systemctl restart nginx || true; fi
 }
 
@@ -307,10 +328,10 @@ alt_rerender_health(){
   bash -n "/usr/local/sbin/${SERVER_PREFIX}-health"
 }
 
-# Repair-safety: re-assert the alt xhttp front when configured. HAProxy (alt ACL) and deep-health are
+# Repair-safety: re-assert the alt front (whichever transport is active) when configured. HAProxy (alt ACL) and deep-health are
 # re-rendered by the surrounding repair steps (write_haproxy / write_health_weekly read the config);
 # this restores the parts repair does not otherwise touch: the separate nginx TLS front + its hook.
-# The xhttp inbound lives in the 3x-ui DB, so a normal repair keeps it (no re-create → no link churn).
+# The alt inbound lives in the 3x-ui DB, so a normal repair keeps it (no re-create → no link churn).
 alt_transport_reconcile(){
   alt_transport_is_enabled || return 0
   local cert="/etc/letsencrypt/live/${VLESS_ALT_DOMAIN}/fullchain.pem"
