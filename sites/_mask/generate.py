@@ -176,7 +176,7 @@ _HUE_BANDS = [
 _ARCH_COLOR = {
     "clean":     (_HUE_BANDS,                        (0.52, 0.68), (0.66, 0.82)),
     "terminal":  ([(168, 188), (205, 255), (128, 168)], (0.55, 0.70), (0.78, 0.92)),
-    "editorial": ([(18, 40), (325, 358), (128, 168)], (0.28, 0.42), (0.34, 0.48)),   # muted
+    "harbor":    ([(168, 188), (128, 168)],          (0.48, 0.64), (0.58, 0.76)),   # fresh teal cloud
     "financial": ([(205, 250)],                      (0.55, 0.70), (0.62, 0.76)),   # fintech blue
     "atlas":     ([(18, 40), (128, 168), (205, 250)], (0.40, 0.55), (0.48, 0.62)),   # calm warm/earthy
     "soft":      ([(255, 292), (205, 255), (325, 358)], (0.42, 0.56), (0.55, 0.70)),  # pastel
@@ -216,7 +216,7 @@ def build_palette(domain, arch):
 LAYOUT = {
     "clean":     {"hero": "split",   "vis": "diagram",  "caps": "grid3", "how": "split",   "nav": "full", "order": ["strip", "caps", "how"]},
     "terminal":  {"hero": "stacked", "vis": "terminal", "caps": "grid3", "how": "split",   "nav": "full", "order": ["caps", "strip", "how"]},
-    "editorial": {"hero": "bigtype", "vis": "none",     "caps": "list",  "how": "stacked", "nav": "min",  "order": ["caps", "how", "strip"]},
+    "harbor":    {"hero": "mirror",  "vis": "uicard",   "caps": "grid3", "how": "split",   "nav": "cta",  "order": ["caps", "strip", "how"]},
     "financial": {"hero": "mirror",  "vis": "uicard",   "caps": "grid2", "how": "split",   "nav": "cta",  "order": ["caps", "strip", "how"]},
     "atlas":     {"hero": "center",  "vis": "terminal", "caps": "grid2", "how": "stacked", "nav": "min",  "order": ["strip", "caps", "how"]},
     "soft":      {"hero": "center",  "vis": "uicard",   "caps": "grid3", "how": "stacked", "nav": "full", "order": ["caps", "how"]},
@@ -259,7 +259,7 @@ def gen_name(domain):
 # Each archetype is a whole visual language (its own themes/<id>.css, single committed theme).
 # The seed picks one; all share the same class vocabulary + HTML skeleton, so Phase A's mangling
 # and the builders are unchanged. A theme file references whichever accent tokens suit its ground.
-ARCHES = ["clean", "terminal", "editorial", "financial", "atlas",
+ARCHES = ["clean", "terminal", "harbor", "financial", "atlas",
           "soft", "midnight", "console", "slate", "aurora"]
 
 
