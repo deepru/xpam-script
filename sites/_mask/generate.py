@@ -228,24 +228,30 @@ LAYOUT = {
 
 
 # --- product name generator (coined, fictional, pronounceable) ---
-_ONSET = ["b", "c", "d", "f", "g", "h", "k", "l", "m", "n", "p", "r", "s", "t", "v", "z",
-          "br", "cr", "dr", "fr", "gr", "pr", "tr", "st", "sl", "sn", "cl", "fl", "gl", "kr",
-          "th", "sk", "sp", "vr", "ny", "ov", "el"]
-_NUCLEUS = ["a", "e", "i", "o", "u", "ar", "er", "or", "en", "in", "on", "el", "al", "yn", "ur"]
-_CODA = ["n", "r", "l", "x", "th", "nd", "rk", "st", "sk", "ll", "rn", "m", "ss", "ft", "lt", "ve", "s"]
+_ONSET = ["b", "c", "d", "f", "g", "h", "j", "k", "l", "m", "n", "p", "r", "s", "t", "v", "w", "z",
+          "br", "cr", "dr", "fr", "gr", "pr", "tr", "st", "sl", "sn", "cl", "fl", "gl", "th", "sk", "sp"]
+_ONSET2 = ["b", "c", "d", "f", "g", "k", "l", "m", "n", "p", "r", "s", "t", "v", "z"]  # single only (soft interior)
+_VOWEL = ["a", "e", "i", "o", "u"]
+_CODA = ["n", "r", "l", "s", "x", "m", "th", "nt", "rk", "st", "ft", "lt", "sk", "nd", "rn", "ll", "ss"]
 _NAME_BLOCK = {"google", "apple", "yandex", "amazon", "cloudflare", "nginx", "microsoft", "oracle",
                "docker", "github", "telegram", "android", "windows", "chrome", "firefox", "xray",
                "reality", "vision", "meta", "adobe", "netflix", "stripe", "vercel", "linear"}
 
 
 def gen_name(domain):
+    # Pronounceable coined name: (consonant-cluster + vowel) syllables with an optional final coda.
+    # Every consonant group is separated by a vowel, so awkward junction clusters and triple letters
+    # (the old builder's "Thonnalll" / vowel-led "Ovarfave") cannot occur.
     rnd = random.Random(seed_int(domain + "|name"))
-    for _ in range(64):
-        syl = rnd.choice(_ONSET) + rnd.choice(_NUCLEUS)
-        core = rnd.choice(_ONSET) + rnd.choice(_NUCLEUS) + rnd.choice(_CODA)
-        word = syl + core
-        if 5 <= len(word) <= 9 and word.lower() not in _NAME_BLOCK:
-            return word[:1].upper() + word[1:]
+    for _ in range(96):
+        word = rnd.choice(_ONSET) + rnd.choice(_VOWEL) + rnd.choice(_ONSET2) + rnd.choice(_VOWEL)
+        if rnd.random() < 0.55:
+            word += rnd.choice(_CODA)
+        if not 5 <= len(word) <= 7:
+            continue
+        if word.lower() in _NAME_BLOCK or re.search(r"(.)\1\1", word):
+            continue
+        return word[:1].upper() + word[1:]
     return "Vantor"
 
 
@@ -375,8 +381,8 @@ def visual_uicard(p, rng):
     pts = " ".join("%d,%d" % (i * 26, 34 - (h % 26)) for i, h in
                    enumerate(rng.sample(range(4, 30), 10)))
     spark = ('<svg class="uc-spark" viewBox="0 0 234 40" preserveAspectRatio="none">'
-             '<polyline points="' + pts + '" fill="none" stroke="currentColor" stroke-width="2" '
-             'stroke-linejoin="round"/></svg>')
+             '<polyline points="' + pts + '" pathLength="1" fill="none" stroke="currentColor" '
+             'stroke-width="2" stroke-linejoin="round"/></svg>')
     return (
         '<div class="visual uicard"><div class="uc-head"><b>' + esc(p["product"]) + " API</b>"
         '<span class="uc-tag">v1</span></div>' + spark + rows + "</div>"

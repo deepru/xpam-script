@@ -27,6 +27,11 @@
 .tw-bar span:last-child{margin-left:8px;}
 .tw-body{margin:0;padding:20px 22px;font-family:var(--mono);font-size:.8rem;line-height:1.8;
   color:var(--ink-soft);overflow-x:auto;white-space:pre;}
+/* live terminal: a soft block caret blinks at the end of the last line (Phase C) */
+.tw-body::after{content:"";display:inline-block;width:.55em;height:1.02em;margin-left:.14em;
+  vertical-align:-.16em;background:var(--accent);opacity:.85;border-radius:1px;
+  animation:caret 1.15s steps(1,end) infinite;}
+@keyframes caret{50%{opacity:0;}}
 
 /* ---- hero visual: API reference card ---- */
 .uicard{border-radius:14px;padding:18px 18px 8px;background:var(--surface);box-shadow:0 0 0 1px var(--border);}
@@ -35,6 +40,17 @@
 .uc-tag{font-family:var(--mono);font-size:.7rem;color:var(--accent);
   border:1px solid var(--border-2);border-radius:999px;padding:2px 9px;}
 .uc-spark{display:block;width:100%;height:40px;color:var(--accent);opacity:.85;margin-bottom:8px;}
+/* live API card: the sparkline traces itself, holds, then fades and redraws (Phase C).
+   `pathLength="1"` on the polyline (set in the generator) normalises the dash math. */
+.uc-spark polyline{stroke-dasharray:1;stroke-dashoffset:1;animation:trace 8s ease-in-out infinite;}
+@keyframes trace{
+  0%{stroke-dashoffset:1;opacity:0;}
+  9%{opacity:1;}
+  40%{stroke-dashoffset:0;opacity:1;}
+  82%{stroke-dashoffset:0;opacity:1;}
+  97%{stroke-dashoffset:0;opacity:0;}
+  100%{stroke-dashoffset:1;opacity:0;}
+}
 .uc-row{display:flex;align-items:baseline;gap:12px;padding:9px 0;border-top:1px solid var(--border);}
 .uc-row code{font-family:var(--mono);font-size:.74rem;color:var(--accent);white-space:nowrap;}
 .uc-row span{font-size:.82rem;color:var(--ink-soft);}
@@ -64,6 +80,12 @@
 .top .cta{color:var(--bg);background:var(--accent);border-radius:8px;padding:8px 15px;
   font-weight:600;font-size:.85rem;}
 .top .cta:hover{filter:brightness(1.08);}
+
+/* motion off → resolve to the finished, static state (caret steady, sparkline fully drawn) */
+@media (prefers-reduced-motion:reduce){
+  .tw-body::after{animation:none;}
+  .uc-spark polyline{animation:none;stroke-dashoffset:0;opacity:1;}
+}
 
 @media (max-width:760px){
   .hero.h-split,.hero.h-mirror,.hero.h-bigtype{grid-template-columns:1fr;gap:22px;}

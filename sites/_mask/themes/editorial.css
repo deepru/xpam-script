@@ -27,7 +27,20 @@ nav.top a.on{color:var(--accent);}
 .hero{display:grid;grid-template-columns:1.1fr .9fr;gap:44px;align-items:center;padding:70px 0 34px;}
 .eyebrow{font-family:var(--mono);font-size:.72rem;text-transform:uppercase;letter-spacing:.18em;color:var(--accent);margin:0 0 22px;}
 .hero h1{font-family:var(--serif);font-size:clamp(2.6rem,5.2vw,3.9rem);line-height:1.03;margin:0;font-weight:500;letter-spacing:-.015em;text-wrap:balance;}
-.hero h1 em{font-style:italic;color:var(--accent);}
+/* editorial has no hero visual — the motion is a thin accent rule under the emphasised word that
+   draws itself in left→right, holds, then clears left→right and repeats, echoing the publication's
+   hairline-rule language (Phase C). box-decoration-break makes it correct when the word wraps. */
+.hero h1 em{font-style:italic;color:var(--accent);
+  background:linear-gradient(currentColor,currentColor) no-repeat left 94% / 0 2px;
+  -webkit-box-decoration-break:clone;box-decoration-break:clone;
+  padding-bottom:.02em;animation:rule 7.5s ease-in-out infinite;}
+@keyframes rule{
+  0%,5%{background-size:0 2px;background-position-x:left;}     /* empty */
+  27%{background-size:100% 2px;background-position-x:left;}    /* drawn L→R */
+  56%{background-size:100% 2px;background-position-x:right;}   /* hold (anchor flips, unseen at full width) */
+  80%,100%{background-size:0 2px;background-position-x:right;} /* cleared L→R, then idle */
+}
+@media (prefers-reduced-motion:reduce){.hero h1 em{background-size:100% 2px;animation:none;}}
 .lede{font-size:1.2rem;color:var(--ink-soft);max-width:42ch;margin:24px 0 0;line-height:1.55;}
 .actions{display:flex;align-items:center;gap:24px;margin:32px 0 0;flex-wrap:wrap;font-family:var(--mono);font-size:.82rem;}
 .doclink{font-weight:600;color:var(--accent);display:inline-flex;align-items:center;gap:7px;border-bottom:1px solid var(--accent);padding-bottom:3px;}
