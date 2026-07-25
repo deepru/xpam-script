@@ -1589,6 +1589,21 @@ else:
         if settings.get('noKernelTun') is False: ok(f'WARP {tag}: noKernelTun=false')
         else: warn_setting(f'{tag}.noKernelTun', settings.get('noKernelTun'), False)
 
+    # 3x-ui can rotate the WARP IP on a schedule (setting warpUpdateInterval, in days). That job
+    # calls ChangeWarpIP() directly, which rewrites `address` with the Cloudflare IPv6 address and
+    # leaves XPAM's own fields untouched — i.e. it silently drifts the outbound away from the
+    # IPv4-only policy between XPAM runs. XPAM does not enable it; warn if something else did.
+    if warp_obs:
+        try:
+            row=cur.execute("SELECT value FROM settings WHERE key='warpUpdateInterval'").fetchone()
+            interval=int(str((row or [''])[0] or '0').strip() or 0)
+        except Exception:
+            interval=0
+        if interval > 0:
+            warn(f'3x-ui scheduled WARP IP rotation is enabled (warpUpdateInterval={interval} days); it re-adds an IPv6 address and skips XPAM normalization. Use the XPAM WARP menu to change the IP, and set the interval to 0 in the panel.')
+        else:
+            ok('3x-ui scheduled WARP IP rotation is disabled; WARP IP changes go through XPAM')
+
 try:
     subprocess.check_call(['ip','link','show','wg0'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     ok('wg0 currently exists; acceptable when WARP/WireGuard is active or lazy-created by Xray')

@@ -350,6 +350,129 @@ xui_api_token(){
   printf '%s\n' "$token"
 }
 
+# POST an application/x-www-form-urlencoded body. 3x-ui's Xray-settings endpoints
+# (/panel/api/xray/warp/<action>, /panel/api/xray/update) read their parameters with
+# gin's c.PostForm(), so they need form encoding — a JSON body arrives as empty params.
+# Same loopback/TLS reasoning as xpam_xui_api_post_json; the timeout is longer because
+# warp/reg makes 3x-ui talk to Cloudflare (its own client timeout is 15s).
+# Args: <url> <payload-file> <out-file> <err-file>   (payload = already-encoded k=v&k=v)
+xpam_xui_api_post_form(){
+  local url="$1" payload="$2" out_file="$3" err_file="$4" token
+  token="$(xui_api_token)" || return 1
+  XPAM_XUI_API_TOKEN="$token" XPAM_XUI_API_URL="$url" XPAM_XUI_API_PAYLOAD="$payload" XPAM_XUI_API_OUT="$out_file" XPAM_XUI_API_ERR="$err_file" python3 - <<'PY_XPAM_XUI_API_POST_FORM'
+import os, ssl, sys, urllib.error, urllib.request
+url=os.environ['XPAM_XUI_API_URL']
+payload=os.environ['XPAM_XUI_API_PAYLOAD']
+out_path=os.environ['XPAM_XUI_API_OUT']
+err_path=os.environ['XPAM_XUI_API_ERR']
+token=os.environ['XPAM_XUI_API_TOKEN']
+ctx=ssl._create_unverified_context()
+try:
+    data=open(payload, 'rb').read()
+    req=urllib.request.Request(url, data=data, method='POST', headers={
+        'Authorization': 'Bearer '+token,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json',
+        'User-Agent': 'XPAM-Script/3x-ui-compat'
+    })
+    with urllib.request.urlopen(req, timeout=60, context=ctx) as resp:
+        body=resp.read(10*1024*1024)
+    open(out_path, 'wb').write(body)
+    open(err_path, 'wb').write(b'')
+except urllib.error.HTTPError as exc:
+    body=exc.read(1024*1024)
+    open(out_path, 'wb').write(body)
+    open(err_path, 'w', encoding='utf-8').write(f'HTTP error {exc.code}\n')
+    sys.exit(1)
+except Exception as exc:
+    open(out_path, 'wb').write(b'')
+    open(err_path, 'w', encoding='utf-8').write(str(exc)+'\n')
+    sys.exit(1)
+PY_XPAM_XUI_API_POST_FORM
+}
+
+# Call one 3x-ui WARP API action: /panel/api/xray/warp/<action> (POST, form-encoded).
+# Actions and their params (verified against 3x-ui v3.5.0 controller/xray_setting.go):
+#   data | config | del | changeIp        — no params
+#   reg                                   — privateKey=<b64> publicKey=<b64>
+#   license                               — license=<key>
+#   interval                              — interval=<days>
+# Args: <action> [name=value ...]. On success prints the response's `obj` field (may be empty).
+# Values are percent-encoded here: WireGuard keys are base64 and contain +, / and = which
+# would otherwise be misparsed by a form decoder. The payload file holds the PRIVATE key,
+# so it is created 600 and removed on every exit path, and never echoed.
+xpam_xui_warp_api(){
+  local action="$1"; shift || true
+  local url payload out err rc
+  [[ -n "$action" ]] || { warn "xpam_xui_warp_api: не указано действие"; return 1; }
+  url="$(xpam_xui_panel_base_url)/panel/api/xray/warp/${action}"
+  payload="$(mktemp)" || return 1
+  out="$(mktemp)" || { rm -f -- "$payload"; return 1; }
+  err="$(mktemp)" || { rm -f -- "$payload" "$out"; return 1; }
+  chmod 600 "$payload" "$out" "$err" 2>/dev/null || true
+
+  if ! python3 - "$@" >"$payload" 2>/dev/null <<'PY_XPAM_WARP_FORM'
+import sys, urllib.parse
+pairs=[]
+for arg in sys.argv[1:]:
+    if '=' not in arg:
+        continue
+    k, v = arg.split('=', 1)
+    pairs.append((k, v))
+sys.stdout.write(urllib.parse.urlencode(pairs))
+PY_XPAM_WARP_FORM
+  then
+    rm -f -- "$payload" "$out" "$err"
+    warn "xpam_xui_warp_api: не удалось подготовить запрос"
+    return 1
+  fi
+
+  xpam_xui_api_post_form "$url" "$payload" "$out" "$err"
+  rc=$?
+  rm -f -- "$payload"
+
+  # 3x-ui answers with {"success":bool,"msg":string,"obj":any}. A transport-level failure
+  # (rc!=0) still often carries that envelope, so parse it either way for a usable message.
+  XPAM_WARP_OUT="$out" XPAM_WARP_ERR="$err" XPAM_WARP_RC="$rc" XPAM_WARP_ACTION="$action" python3 - <<'PY_XPAM_WARP_PARSE'
+import json, os, sys
+out=os.environ['XPAM_WARP_OUT']; err=os.environ['XPAM_WARP_ERR']
+rc=int(os.environ['XPAM_WARP_RC']); action=os.environ['XPAM_WARP_ACTION']
+raw=b''
+try:
+    raw=open(out,'rb').read()
+except Exception:
+    pass
+transport=''
+try:
+    transport=open(err,'r',encoding='utf-8',errors='replace').read().strip()
+except Exception:
+    pass
+env=None
+try:
+    env=json.loads(raw.decode('utf-8',errors='replace'))
+except Exception:
+    env=None
+if isinstance(env, dict):
+    if env.get('success'):
+        obj=env.get('obj')
+        if obj is None:
+            obj=''
+        if not isinstance(obj, str):
+            obj=json.dumps(obj, ensure_ascii=False)
+        sys.stdout.write(obj)
+        sys.exit(0)
+    msg=str(env.get('msg') or '').strip() or 'без сообщения'
+    sys.stderr.write(f'warp/{action}: 3x-ui отклонил запрос: {msg}\n')
+    sys.exit(1)
+detail=transport or (raw[:300].decode('utf-8',errors='replace') if raw else 'пустой ответ')
+sys.stderr.write(f'warp/{action}: не удалось разобрать ответ панели (rc={rc}): {detail}\n')
+sys.exit(1)
+PY_XPAM_WARP_PARSE
+  rc=$?
+  rm -f -- "$out" "$err"
+  return $rc
+}
+
 xpam_xui_api_post_json(){
   local url="$1" payload="$2" out_file="$3" err_file="$4" token
   token="$(xui_api_token)" || return 1
@@ -674,6 +797,16 @@ else:
     ok("3x-ui WARP-managed state уже был отключён")
 PY_XPAM_XUI_WARP_DISABLE
 
+  # Clear the WARP account 3x-ui keeps in its `warp` setting row (access_token/device_id/
+  # license_key/private_key). Upstream's warp/del only touches those credentials — it never
+  # removes the outbound — so it complements the teardown above instead of duplicating it.
+  # Best-effort: a stale credential blob is harmless, so a failure here must not fail disable.
+  if xpam_xui_warp_api del >/dev/null 2>&1; then
+    ok "Сохранённый аккаунт WARP удалён из 3x-ui"
+  else
+    warn "Не удалось удалить сохранённый аккаунт WARP из 3x-ui (не критично; outbound и маршруты уже отключены)"
+  fi
+
   warn "Сейчас будет перезапущен 3x-ui/Xray. Если ваша SSH-сессия идёт через этот же VLESS/прокси, соединение может оборваться. Это не означает поломку сервера: после переподключения выполните sudo ${SERVER_PREFIX}-health."
   say "Перезапускаем 3x-ui, чтобы Xray перечитал конфигурацию"
   systemctl restart x-ui || fail "x-ui restart failed after WARP disable/reset"
@@ -698,7 +831,8 @@ stage_warp_3xui_disable(){
   echo "Будет отключён только XPAM-managed WARP state:"
   echo "  - outbound tag=warp protocol=wireguard;"
   echo "  - routing rules с outboundTag=warp;"
-  echo "  - sniffing у XPAM-managed VLESS inbound будет выключен."
+  echo "  - sniffing у XPAM-managed VLESS inbound будет выключен;"
+  echo "  - сохранённый в 3x-ui аккаунт WARP (ключи, токен) будет удалён."
   echo
   echo "Пользовательские WireGuard/WARP outbound с другими tag не удаляются."
   echo "Перед изменением будет создан backup /etc/x-ui/x-ui.db."
@@ -707,6 +841,30 @@ stage_warp_3xui_disable(){
   read -r -p "Продолжить отключение WARP? [y/N]: " confirm || true
   case "$confirm" in
     y|Y|yes|YES|д|Д) xpam_xui_warp_disable_reset ;;
+    *) echo "Отменено. Изменений не внесено."; return 0 ;;
+  esac
+}
+
+stage_warp_change_ip(){
+  need_root
+  load_config
+  validate_inputs
+  echo "============================================================"
+  echo "Сменить WARP-IP"
+  echo "============================================================"
+  echo
+  echo "Cloudflare выдаст серверу новый выходной WARP-адрес:"
+  echo "  - будет создан новый ключ и зарегистрировано новое устройство WARP;"
+  echo "  - WARP outbound обновится, затем XPAM снова приведёт его к своим настройкам"
+  echo "    (адрес останется только IPv4);"
+  echo "  - 3x-ui/Xray будет перезапущен."
+  echo
+  echo "Ссылки VLESS/Telegram и клиенты не меняются."
+  echo
+  local confirm
+  read -r -p "Сменить WARP-IP? [y/N]: " confirm || true
+  case "$confirm" in
+    y|Y|yes|YES|д|Д) warp_change_ip ;;
     *) echo "Отменено. Изменений не внесено."; return 0 ;;
   esac
 }
@@ -720,14 +878,16 @@ stage_warp_menu(){
   validate_inputs
   echo "WARP через 3x-ui / Xray"
   echo "1) Настроить или проверить WARP outbound"
-  echo "2) Отключить WARP и вернуть VLESS в обычный режим"
-  echo "3) Выйти"
+  echo "2) Сменить WARP-IP (новый выходной адрес)"
+  echo "3) Отключить WARP и вернуть VLESS в обычный режим"
+  echo "4) Выйти"
   local choice
-  read -r -p "Выберите пункт [1-3]: " choice || true
+  read -r -p "Выберите пункт [1-4]: " choice || true
   case "$choice" in
     1) stage_warp_3xui_youtube ;;
-    2) stage_warp_3xui_disable ;;
-    3) return 0 ;;
+    2) stage_warp_change_ip ;;
+    3) stage_warp_3xui_disable ;;
+    4) return 0 ;;
     *) fail "Неизвестный пункт меню" ;;
   esac
 }
