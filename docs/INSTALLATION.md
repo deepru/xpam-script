@@ -47,11 +47,13 @@ sudo <prefix>-xpam
 Typical first-run order:
 
 ```text
-0) SSH-безопасность / создать prefix-команду
-1) Установить / продолжить настройку сервера
+1) SSH-безопасность и создание команды сервера
+2) Установить / продолжить настройку сервера
 ```
 
-After installation, the same command remains the main management interface.
+Once the server is fully installed those two entries disappear and the same command shows the
+operational menu instead (connection data, health, notifications, WARP, DoubleHop, sites, advanced).
+It stays the main management interface.
 
 ## Connection data
 

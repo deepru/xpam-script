@@ -11,6 +11,7 @@ XPAM Script is documented as a VPS automation project for:
 - nginx + HAProxy + TLS routing;
 - DoubleHop Mode;
 - WARP through 3x-ui/Xray;
+- an optional spare VLESS transport (xhttp/grpc) on a separate domain;
 - health/deep-health;
 - repair and weekly maintenance;
 - safe self-update.

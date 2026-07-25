@@ -8,13 +8,19 @@ XPAM Script installs maintenance helpers for repair, diagnostics, weekly checks 
 sudo <prefix>-repair
 ```
 
-Repair restores XPAM runtime glue and generated helper commands. It should not change VLESS or Telegram links.
+Repair restores XPAM runtime glue and generated helper commands, and re-asserts the front layer (nginx, HAProxy, the spare transport front when enabled) and the WARP outbound shape. It does not change VLESS or Telegram links.
 
 VLESS and Telegram links shown by `sudo <prefix>-links --show-secrets` are expected to come from the current 3x-ui configuration, not from stale text copies.
 
 ## Weekly maintenance
 
-Weekly maintenance is configured automatically. It keeps the XPAM-managed server state consistent and should not recreate removed legacy command surfaces or change user connection links. It must not revert a valid Telegram proxy / MTG secret that was changed in 3x-ui.
+Weekly maintenance is configured automatically and runs on a schedule once a week. It takes a configuration snapshot, applies system updates, renews certificates, runs a health check and prunes old logs and backups within the configured limits.
+
+It does not change user connection links, does not revert a Telegram proxy / MTG secret changed in 3x-ui, and does not reboot the server on its own — if a reboot is needed to finish an update, it says so (and notifies over Telegram when notifications are configured). To run it by hand:
+
+```bash
+sudo <prefix>-weekly-maintenance.sh
+```
 
 ## Network diagnostics
 

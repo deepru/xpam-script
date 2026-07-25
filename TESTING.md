@@ -20,7 +20,8 @@ XPAM Script прошёл полное тестирование на:
 - ручная смена Telegram proxy / MTG secret в 3x-ui и повторное получение актуальной Telegram link;
 - DoubleHop Mode: включение, изменение режима и выключение;
 - сохранение VLESS и Telegram links при изменении DoubleHop Mode;
-- WARP через 3x-ui/Xray;
+- WARP через 3x-ui/Xray: автоматическая регистрация, смена выходного адреса, отключение;
+- запасной транспорт VLESS (xhttp/grpc): включение, переключение, выключение, сохранение основного подключения;
 - health и deep-health проверки;
 - repair-сценарии;
 - weekly maintenance;

@@ -41,6 +41,11 @@ sudo <prefix>-health
 sudo <prefix>-health --deep
 ```
 
-## Notes
+## WARP and DoubleHop
 
-WARP and DoubleHop are separate routing concepts. Do not assume that changing one automatically changes the other.
+They are separate features and are configured independently, but they do interact: DoubleHop routes
+**all** VLESS traffic to the Exit server, so while it is enabled for VLESS the WARP rules never
+match and WARP is effectively unused. Nothing is lost — the WARP configuration is kept and takes
+effect again once DoubleHop is switched off — and the menu says so before enabling DoubleHop.
+
+In `Telegram only` mode VLESS stays direct, so WARP keeps working there.

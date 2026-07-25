@@ -11,9 +11,14 @@ casual visitor or a network probe sees a normal website rather than a bare or su
 
 By default XPAM generates a small, self-contained **product landing** site for each domain — a
 plausible page for a minimal technical product (landing, docs, license, 404, plus robots.txt and
-sitemap.xml). The specific product and accent colour are derived from the domain name, so every
-domain gets a different-looking site automatically, and no two subdomains of one server look the
-same. You do not need to edit anything for masking to work.
+sitemap.xml). The product, the layout and the styling are all derived from the domain name, so every install
+looks different — not merely recoloured, but laid out differently — and no two domains of one server
+look the same. The pages carry restrained CSS motion (and honour `prefers-reduced-motion`); they
+contain no invented metrics, statuses or dates and do not change over time. The same domain always
+regenerates the same site, so repair and reset are stable. You do not need to edit anything for
+masking to work.
+
+When the optional spare transport is enabled, its domain gets its own decoy site as well.
 
 ## Site management
 

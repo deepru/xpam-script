@@ -13,6 +13,7 @@ Sensitive data includes:
 - tokens;
 - private keys;
 - WARP/WireGuard credentials;
+- the spare transport's connection link and its secret path/serviceName;
 - `/etc/xpam-script/config.env`;
 - output from `sudo <prefix>-links --show-secrets`.
 

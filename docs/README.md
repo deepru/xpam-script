@@ -27,6 +27,7 @@ Use:
 - Telegram proxy / MTG;
 - Telegram link;
 - DoubleHop Mode;
+- spare VLESS transport (xhttp/grpc) — "запасной способ подключения" in the Russian guide;
 - `sudo <prefix>-xpam`;
 - `sudo <prefix>-links`.
 

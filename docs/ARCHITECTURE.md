@@ -6,10 +6,13 @@ XPAM Script prepares a clean VPS as a managed HTTPS/TLS stack with VLESS, Telegr
 
 ```text
 Internet :443
-  -> HAProxy
-      -> 3x-ui / Xray VLESS
-      -> Telegram proxy / MTG through 3x-ui
-      -> nginx masking/fallback sites
+  -> HAProxy (routes by SNI, i.e. by the requested domain name)
+      -> 3x-ui / Xray VLESS                        (primary domain, tcp + TLS + Vision)
+      -> Telegram proxy / MTG through 3x-ui        (Telegram domain)
+      -> nginx masking/fallback sites              (anything else)
+      -> optional spare VLESS transport            (its own domain: nginx terminates TLS,
+                                                    proxies the secret path to a plain
+                                                    xhttp/grpc inbound, decoy site on /)
       -> optional WARP outbound through Xray
       -> optional DoubleHop outbound through Exit VLESS link
 ```
@@ -19,7 +22,7 @@ Internet :443
 - **3x-ui/Xray** — VLESS, routing and outbound management.
 - **Telegram proxy / MTG through 3x-ui** — Telegram connectivity through the 3x-ui stack.
 - **HAProxy** — public HTTPS/TLS routing layer.
-- **nginx** — local masking/fallback sites.
+- **nginx** — local masking/fallback sites, and the TLS front for the optional spare transport.
 - **Certbot / Let's Encrypt** — TLS certificates.
 - **UFW / fail2ban** — firewall and basic SSH protection.
 - **XPAM runtime scripts** — links, health, repair, maintenance, update and diagnostics.
@@ -49,7 +52,7 @@ sudo <prefix>-links --show-secrets
 
 The first command is safe for diagnostics and does not print secrets. The second command prints full connection data and must be treated as sensitive.
 
-For VLESS and Telegram proxy / MTG, the full links output is built from the current 3x-ui configuration. If a VLESS client or Telegram proxy / MTG secret is changed in 3x-ui, run the command again and use the updated links.
+For VLESS and Telegram proxy / MTG, the full links output is built from the current 3x-ui configuration. If a VLESS client or Telegram proxy / MTG secret is changed in 3x-ui, run the command again and use the updated links. When the spare transport is enabled, its link is printed by the transport menu itself.
 
 ## DoubleHop Mode
 
@@ -65,7 +68,20 @@ Supported DoubleHop modes:
 - Telegram only;
 - VLESS + Telegram.
 
-Entry-side VLESS and Telegram links must remain unchanged when DoubleHop is enabled, changed or disabled.
+Entry-side VLESS and Telegram links stay unchanged when DoubleHop is enabled, changed or disabled. DoubleHop scopes to every managed VLESS inbound, including the spare transport when it is enabled.
+
+## Spare VLESS transport (optional)
+
+A second VLESS transport — **xhttp** or **grpc** — can be enabled on demand on a **separate domain**,
+alongside the untouched primary tcp transport. Only one spare transport runs at a time.
+
+The primary transport keeps its decoy through Xray's TLS `fallbacks`, which exist for tcp only.
+So the spare transport is fronted by nginx instead: nginx terminates TLS on the spare domain,
+reverse-proxies the secret path (xhttp) or serviceName (grpc) to a plain `security=none` inbound,
+and serves the decoy site on `/`. HAProxy routes the spare domain by SNI to that front.
+
+Consequences: the primary inbound stays byte-identical, masking holds on both domains, and
+DoubleHop covers the spare inbound as well. The spare transport has its own connection link.
 
 ## Safe self-update model
 

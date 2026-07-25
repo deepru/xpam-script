@@ -2,7 +2,7 @@
 
 **XPAM Script** is a Bash automation tool for deploying a private HTTPS/TLS VPS setup on a clean server.
 
-It configures **VLESS**, **Telegram proxy / MTG**, 3x-ui/Xray, nginx, HAProxy, Certbot, firewall, fail2ban, health checks, maintenance scripts, WARP via Xray, **DoubleHop Mode**, and safe XPAM self-update.
+It configures **VLESS**, **Telegram proxy / MTG**, 3x-ui/Xray, nginx, HAProxy, Certbot, firewall, fail2ban, health checks, maintenance scripts, WARP via Xray, **DoubleHop Mode**, an optional spare VLESS transport, and safe XPAM self-update.
 
 > XPAM Script changes SSH, firewall, nginx, HAProxy, 3x-ui/Xray, Certbot, fail2ban, systemd units, health/maintenance scripts, DNS checks, `/etc/hosts`, and VPS network settings. Use it on a clean VPS, not on a server that already hosts important services.
 
@@ -28,8 +28,8 @@ The bootstrap downloads the published archive from **GitHub Releases**, verifies
 Run menu item `0` first to configure SSH safety and create the prefix command, then run item `1` to install the server.
 
 ```text
-0) SSH security / create prefix command
-1) Install / continue server setup
+1) SSH security and server command creation
+2) Install / continue server setup
 ```
 
 After step 0, the main management command is:
@@ -69,11 +69,12 @@ After installation, you get:
 - 3x-ui/Xray with SQLite backend;
 - VLESS on a dedicated domain;
 - Telegram proxy / MTG on a dedicated domain;
-- masking/fallback sites;
+- masking sites that are unique per installation, and fallback;
 - health and deep-health diagnostics;
 - repair command;
 - weekly maintenance;
-- WARP via 3x-ui/Xray as an optional outbound;
+- an optional spare VLESS transport (xhttp/grpc) on its own domain, enabled on demand;
+- WARP via 3x-ui/Xray with automatic registration, enabled on demand;
 - DoubleHop Mode for VLESS and/or Telegram routing through the second XPAM server;
 - safe user-initiated XPAM updates through the menu.
 

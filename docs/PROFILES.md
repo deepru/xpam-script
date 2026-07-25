@@ -14,6 +14,7 @@ A normal installation provides:
 - firewall and basic SSH protection;
 - health/deep-health;
 - repair and weekly maintenance;
+- an optional spare VLESS transport (xhttp/grpc) on a separate domain, enabled later from the menu;
 - safe self-update.
 
 ## Optional runtime features

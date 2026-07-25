@@ -71,6 +71,26 @@ sudo <prefix>-xpam
 
 Then open `DoubleHop Mode` → `Показать статус`.
 
+## WARP looks configured but is not used
+
+If DoubleHop is enabled for VLESS, all VLESS traffic goes to the Exit server, so the WARP rules never
+match. This is expected: the WARP configuration is kept and takes effect again once DoubleHop is
+switched off. In `Telegram only` mode VLESS stays direct and WARP keeps working.
+
+## Clients cannot connect while the server itself is healthy
+
+If `sudo <prefix>-health --deep` passes and the domains open in a browser, but a client cannot
+connect — or connects only sometimes, typically on one network — the problem is usually the path to
+the server rather than the server.
+
+- Test the same link from a different network (for example a phone hotspot).
+- Re-copy the link: `sudo <prefix>-links --show-secrets`.
+- Enable the optional **spare VLESS transport** on a separate domain
+  (`sudo <prefix>-xpam` → `Дополнительно` → `Транспорты VLESS`) and add its link to the client as a
+  second server. The primary transport is untouched and keeps working.
+- If `xhttp` performs poorly, switch to `grpc` (or the other way round): which one survives depends
+  on the network, and switching reuses the same domain and certificate.
+
 ## Update failed
 
 Safe self-update should either complete successfully or roll back to the previous working version.
