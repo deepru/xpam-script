@@ -337,19 +337,44 @@ xpam_update_extract_staging(){
 xpam_update_static_preflight(){
   local root f required failed=0
   root="$XPAM_UPDATE_STAGING_ROOT"
+  # Must stay identical (as a set) to REQUIRED_FILES in make-release.sh — a gate in its verify_tree
+  # compares the two and fails the build on any drift. Rationale for the full list: xpam-core.sh
+  # sources every scripts/lib/*.sh and the code renders every templates/*.tpl, so an archive missing
+  # any of them installs "successfully" and then breaks at repair/render time instead of failing here.
   required=(
     "install.sh"
-    "scripts/xpam-core.sh"
-    "scripts/lib/xpam-launchers.sh"
-    "scripts/lib/xpam-maintenance.sh"
-    "scripts/lib/xpam-update.sh"
-    "templates/health.sh.tpl"
-    "templates/weekly.sh.tpl"
-    "templates/post-reboot-maint.sh.tpl"
-    "templates/post-reboot-maint.service.tpl"
-    "templates/xpam-maint-common.sh.tpl"
+    "bootstrap.sh"
     "VERSION"
     "RELEASE"
+    "scripts/xpam-core.sh"
+    "scripts/lib/xpam-alt-transport.sh"
+    "scripts/lib/xpam-doublehop.sh"
+    "scripts/lib/xpam-launchers.sh"
+    "scripts/lib/xpam-maintenance.sh"
+    "scripts/lib/xpam-mtproto.sh"
+    "scripts/lib/xpam-notify.sh"
+    "scripts/lib/xpam-sites.sh"
+    "scripts/lib/xpam-update.sh"
+    "scripts/lib/xpam-xui.sh"
+    "templates/backend-order.conf.tpl"
+    "templates/check-dns-policy.sh.tpl"
+    "templates/check-network-tuning-policy.sh.tpl"
+    "templates/haproxy.cfg.tpl"
+    "templates/health.sh.tpl"
+    "templates/nginx-alt-acme.conf.tpl"
+    "templates/nginx-alt-grpc.conf.tpl"
+    "templates/nginx-alt-xhttp.conf.tpl"
+    "templates/nginx-certonly.conf.tpl"
+    "templates/nginx-direct.conf.tpl"
+    "templates/nginx-mtproto.conf.tpl"
+    "templates/post-reboot-maint.service.tpl"
+    "templates/post-reboot-maint.sh.tpl"
+    "templates/wait-for-local-port.sh.tpl"
+    "templates/weekly.sh.tpl"
+    "templates/xpam-maint-common.sh.tpl"
+    "sites/_mask/generate.py"
+    "sites/_mask/presets.json"
+    "sites/_mask/themes/_layout.css"
   )
   for f in "${required[@]}"; do
     [[ -f "$root/$f" ]] || { xpam_update_log "required file missing in update archive: $f"; return 1; }

@@ -245,6 +245,31 @@ def check_vless_grpc(where, payload, settings, stream):
         fail(where, "grpcSettings.multiMode must be a bool")
 
 
+def check_alt_vision_gates(where, settings, clients):
+    # THE AUTO-VISION GATE (3x-ui backend, internal/web/service/inbound_flow_restore.go).
+    # restoreVisionFlowForEligibleInbound() writes flow="xtls-rprx-vision" into every EMPTY-flow
+    # client of a "flow-eligible" VLESS inbound whose intended flow — resolved from the SAME EMAIL
+    # on a sibling inbound — is Vision. It runs on inbound update AND as a migration, i.e. it can
+    # fire long after we created the inbound. Vision is tcp-only, so that would break the spare
+    # transport on the next panel upgrade, silently.
+    #
+    # inboundCanEnableTlsFlow() (inbound_protocol.go) is eligible for tcp+tls|reality, and for
+    # xhttp ONLY when VLESS-level encryption is on; grpc is never eligible. Two independent facts
+    # in OUR payload keep the alt inbound out of that path, and both are asserted here:
+    #   1. decryption == "none"  -> vlessEncryptionEnabled() is false -> xhttp is not eligible;
+    #   2. the alt client's email differs from the primary's (checked across payloads below)
+    #      -> there is no sibling row to inherit Vision from.
+    # See handoff/3XUI_3.5.0_VS_XPAM.md §6.6 and PROJECT_AUDIT.md §6 row 19.
+    if settings.get("decryption") != "none":
+        fail(where, "alt inbound settings.decryption must be 'none' (VLESS encryption would make "
+                    "an xhttp inbound flow-eligible and 3x-ui would inject xtls-rprx-vision, which "
+                    "is tcp-only); got %r" % settings.get("decryption"))
+    for i, c in enumerate(clients):
+        if str(c.get("flow") or "").strip():
+            fail(where, "alt client[%d].flow must be empty (Vision is tcp-only and breaks this "
+                        "transport); got %r" % (i, c.get("flow")))
+
+
 def check_mtproto(where, payload, settings, clients):
     if not any(str(c.get("secret") or "").strip() for c in clients):
         fail(where, "no mtproto client carries a secret")
@@ -267,16 +292,33 @@ def run(where, path, kind):
         check_vless_primary(where, payload, settings, stream)
     elif kind == "vless_xhttp":
         check_vless_xhttp(where, payload, settings, stream)
+        check_alt_vision_gates(where, settings, clients)
     elif kind == "vless_grpc":
         check_vless_grpc(where, payload, settings, stream)
+        check_alt_vision_gates(where, settings, clients)
     elif kind == "mtproto":
         check_mtproto(where, payload, settings, clients)
+    return [str(c.get("email") or "").strip() for c in clients]
 
 
-run("VLESS-primary", os.environ["SMOKE_VLESS"], "vless_primary")
-run("MTProto/MTG", os.environ["SMOKE_MTG"], "mtproto")
-run("VLESS-xhttp", os.environ["SMOKE_XHTTP"], "vless_xhttp")
-run("VLESS-grpc", os.environ["SMOKE_GRPC"], "vless_grpc")
+emails = {}
+emails["VLESS-primary"] = run("VLESS-primary", os.environ["SMOKE_VLESS"], "vless_primary")
+emails["MTProto/MTG"] = run("MTProto/MTG", os.environ["SMOKE_MTG"], "mtproto")
+emails["VLESS-xhttp"] = run("VLESS-xhttp", os.environ["SMOKE_XHTTP"], "vless_xhttp")
+emails["VLESS-grpc"] = run("VLESS-grpc", os.environ["SMOKE_GRPC"], "vless_grpc")
+
+# Second half of the auto-vision gate (see check_alt_vision_gates): the alt client's email must
+# differ from the primary's. 3x-ui resolves a client's "intended flow" BY EMAIL across inbounds, so
+# reusing the primary's email on the alt inbound would hand it a Vision flow to inherit. Distinct
+# emails are also what keeps our orphan-client teardown (delete by email) from touching the primary.
+primary_emails = set(e for e in emails["VLESS-primary"] if e)
+for label in ("VLESS-xhttp", "VLESS-grpc"):
+    shared = primary_emails.intersection(e for e in emails[label] if e)
+    if shared:
+        fail(label, "alt client email(s) %s also exist on the primary inbound: 3x-ui resolves the "
+                    "intended flow by email across inbounds, so the alt inbound could inherit "
+                    "xtls-rprx-vision (tcp-only); and teardown-by-email would hit the primary"
+             % sorted(shared))
 
 for w in warns:
     print("  WARN  " + w)

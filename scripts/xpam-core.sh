@@ -241,6 +241,42 @@ xui_assert_sqlite_backend(){
   esac
 }
 
+# Consistent copy of the LIVE 3x-ui database, valid under any SQLite journal mode.
+#
+# Why this exists: `cp` of a database a running process is writing to is only sound while SQLite is
+# in rollback-journal mode, where every committed transaction is already inside x-ui.db. 3x-ui v3.5.0
+# pins `_journal_mode=DELETE`, so plain copies were fine — but upstream has since made the mode
+# configurable and defaults it to **WAL** (internal/database/db.go, sqliteJournalMode(); no release
+# tag yet). Under WAL recent commits live in x-ui.db-wal until a checkpoint, so a plain copy silently
+# yields a database that is MISSING the newest clients/inbounds — a backup that restores an older
+# state than the operator believes, which is the worst possible failure for a restore path.
+#
+# `.backup` uses SQLite's online backup API: it takes a read lock, follows the WAL, and produces a
+# self-consistent single file whatever the mode. The preceding checkpoint just keeps that cheap. This
+# mirrors dh_snapshot_create() in xpam-doublehop.sh, which has done it this way since the Stage 9A
+# WAL/SHM incident — this helper generalizes that proven pattern to every other backup site.
+#
+# Falls back to `cp -a` when sqlite3 is absent so behaviour is never worse than before.
+# Usage: xui_db_safe_copy <destination>   (returns non-zero on failure; caller decides how loud)
+xui_db_safe_copy(){
+  local dest="${1:-}" db="/etc/x-ui/x-ui.db"
+  [[ -n "$dest" ]] || return 1
+  [[ -s "$db" ]] || return 1
+  mkdir -p "$(dirname -- "$dest")" 2>/dev/null || true
+  if command -v sqlite3 >/dev/null 2>&1; then
+    sqlite3 "$db" "PRAGMA wal_checkpoint(FULL);" >/dev/null 2>&1 || true
+    if sqlite3 "$db" ".timeout 5000" ".backup '${dest}'" 2>/dev/null; then
+      chmod 600 "$dest" 2>/dev/null || true
+      return 0
+    fi
+    # .backup can legitimately lose a race with a busy writer; fall through rather than fail the
+    # caller, since a plain copy is still strictly better than no backup at all.
+  fi
+  cp -a "$db" "$dest" || return 1
+  chmod 600 "$dest" 2>/dev/null || true
+  return 0
+}
+
 xui_validate_sqlite_contract(){
   local db="/etc/x-ui/x-ui.db"
   xui_assert_sqlite_backend
@@ -2482,7 +2518,7 @@ xui_disable_subscription(){
   mkdir -p "$backup_dir"
   chmod 700 "$backup_dir"
   backup="${backup_dir}/x-ui.db.$(date +%Y%m%d-%H%M%S)"
-  cp -a "$db" "$backup" 2>/dev/null || true
+  xui_db_safe_copy "$backup" 2>/dev/null || true
   chmod 600 "$backup" 2>/dev/null || true
 
   systemctl stop x-ui || true
@@ -2571,7 +2607,7 @@ xui_enforce_vless_inbound_policy(){
   mkdir -p "$backup_dir"
   chmod 700 "$backup_dir"
   backup="${backup_dir}/x-ui.db.$(date +%Y%m%d-%H%M%S)"
-  cp -a "$db" "$backup" || fail "Could not create 3x-ui DB backup before VLESS policy enforcement"
+  xui_db_safe_copy "$backup" || fail "Could not create 3x-ui DB backup before VLESS policy enforcement"
   chmod 600 "$backup" 2>/dev/null || true
   prune_keep_latest "$backup_dir" "x-ui.db.*" 4
 
@@ -3964,7 +4000,7 @@ warp_auto_register(){
   mkdir -p "$backup_dir"
   chmod 700 "$backup_dir"
   backup="${backup_dir}/x-ui.db.$(date +%Y%m%d-%H%M%S)"
-  cp -a "$db" "$backup" || { rm -f -- "$reg_file"; fail "Не удалось создать backup 3x-ui DB"; }
+  xui_db_safe_copy "$backup" || { rm -f -- "$reg_file"; fail "Не удалось создать backup 3x-ui DB"; }
   chmod 600 "$backup" 2>/dev/null || true
   ok "Backup 3x-ui DB создан: $backup"
   prune_keep_latest "$backup_dir" "x-ui.db.*" 4
@@ -4290,7 +4326,7 @@ xui_warp_youtube_fix(){
   mkdir -p "$backup_dir"
   chmod 700 "$backup_dir"
   backup="${backup_dir}/x-ui.db.$(date +%Y%m%d-%H%M%S)"
-  cp -a "$db" "$backup" || fail "Не удалось создать backup 3x-ui DB"
+  xui_db_safe_copy "$backup" || fail "Не удалось создать backup 3x-ui DB"
   chmod 600 "$backup" 2>/dev/null || true
   ok "Backup 3x-ui DB создан: $backup"
   prune_keep_latest "$backup_dir" "x-ui.db.*" 4
@@ -4637,7 +4673,7 @@ xpam_repair_restore_db_from_snapshot(){
   pre_dir="/root/manual-backups/xui-pre-restore"
   mkdir -p "$pre_dir"; chmod 700 "$pre_dir"
   XPAM_RESTORE_PRE_BACKUP="${pre_dir}/x-ui.db.$(date +%Y%m%d-%H%M%S)"
-  cp -a "$db" "$XPAM_RESTORE_PRE_BACKUP" 2>/dev/null || true
+  xui_db_safe_copy "$XPAM_RESTORE_PRE_BACKUP" 2>/dev/null || true
   chmod 600 "$XPAM_RESTORE_PRE_BACKUP" 2>/dev/null || true
   prune_keep_latest "$pre_dir" "x-ui.db.*" 4
 

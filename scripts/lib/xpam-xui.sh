@@ -676,7 +676,7 @@ xpam_xui_warp_disable_reset(){
   mkdir -p "$backup_dir"
   chmod 700 "$backup_dir"
   backup="${backup_dir}/x-ui.db.$(date +%Y%m%d-%H%M%S)"
-  cp -a "$db" "$backup" || fail "Не удалось создать backup 3x-ui DB"
+  xui_db_safe_copy "$backup" || fail "Не удалось создать backup 3x-ui DB"
   chmod 600 "$backup" 2>/dev/null || true
   ok "Backup 3x-ui DB создан: $backup"
   prune_keep_latest "$backup_dir" "x-ui.db.*" 4

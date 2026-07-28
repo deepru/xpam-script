@@ -25,18 +25,47 @@ cd "$repo_root"
 
 # Files the self-updater's static preflight requires to be present (kept in sync
 # with xpam_update_static_preflight in scripts/lib/xpam-update.sh).
+# Every file whose absence produces a BROKEN install rather than a loud failure. This list used to
+# name only 3 of the 9 lib modules and 3 of the 16 templates, so a kit missing e.g.
+# xpam-alt-transport.sh or nginx-alt-grpc.conf.tpl passed every gate and then died at runtime —
+# exactly the "partial deploy → repair dies on a missing template" incident (2026-07-26), reachable
+# a second way. Rule: xpam-core.sh sources ALL of scripts/lib/*.sh, and every templates/*.tpl on
+# disk is referenced by the code, so all of them are required. Keep in sync with the updater's
+# static preflight — the drift gate in verify_tree enforces that mechanically.
 REQUIRED_FILES=(
   install.sh
   bootstrap.sh
-  scripts/xpam-core.sh
-  scripts/lib/xpam-launchers.sh
-  scripts/lib/xpam-maintenance.sh
-  scripts/lib/xpam-update.sh
-  templates/health.sh.tpl
-  templates/weekly.sh.tpl
-  templates/xpam-maint-common.sh.tpl
   VERSION
   RELEASE
+  scripts/xpam-core.sh
+  # Every module sourced by xpam-core.sh.
+  scripts/lib/xpam-alt-transport.sh
+  scripts/lib/xpam-doublehop.sh
+  scripts/lib/xpam-launchers.sh
+  scripts/lib/xpam-maintenance.sh
+  scripts/lib/xpam-mtproto.sh
+  scripts/lib/xpam-notify.sh
+  scripts/lib/xpam-sites.sh
+  scripts/lib/xpam-update.sh
+  scripts/lib/xpam-xui.sh
+  # Every template the code renders. The nginx/haproxy ones are load-bearing for masking and for
+  # the front layer; repair re-renders them, so a kit without them cannot self-heal.
+  templates/backend-order.conf.tpl
+  templates/check-dns-policy.sh.tpl
+  templates/check-network-tuning-policy.sh.tpl
+  templates/haproxy.cfg.tpl
+  templates/health.sh.tpl
+  templates/nginx-alt-acme.conf.tpl
+  templates/nginx-alt-grpc.conf.tpl
+  templates/nginx-alt-xhttp.conf.tpl
+  templates/nginx-certonly.conf.tpl
+  templates/nginx-direct.conf.tpl
+  templates/nginx-mtproto.conf.tpl
+  templates/post-reboot-maint.service.tpl
+  templates/post-reboot-maint.sh.tpl
+  templates/wait-for-local-port.sh.tpl
+  templates/weekly.sh.tpl
+  templates/xpam-maint-common.sh.tpl
   # Masking depends on these at install/repair time; without them the decoy cannot be rendered.
   sites/_mask/generate.py
   sites/_mask/presets.json
@@ -70,6 +99,24 @@ verify_tree(){
     [[ "$cl1" == "$cl3" ]] || die "3-list gotcha: import-loop and export_vars config-var lists differ"
   fi
 
+  # Required-file drift gate. The self-updater keeps its OWN copy of this list (its static
+  # preflight runs on a box, where make-release.sh is not involved), and the two had already
+  # drifted apart while a comment claimed they mirrored each other. Compare them as sets so a file
+  # added to one is never forgotten in the other: otherwise a kit missing that file either fails to
+  # build but self-updates fine, or the reverse.
+  local upd="$root/scripts/lib/xpam-update.sh" want have
+  if [[ -f "$upd" ]]; then
+    want="$(printf '%s\n' "${REQUIRED_FILES[@]}" | sort -u | tr '\n' ' ')"
+    have="$(sed -n '/^  required=(/,/^  )/p' "$upd" | grep -oE '"[^"]+"' | tr -d '"' | sort -u | tr '\n' ' ')"
+    [[ -n "$have" ]] \
+      || die "required-file drift gate: could not locate the required=() list in scripts/lib/xpam-update.sh"
+    if [[ "$want" != "$have" ]]; then
+      echo "  only in make-release.sh: $(comm -23 <(printf '%s\n' "${REQUIRED_FILES[@]}" | sort -u) <(sed -n '/^  required=(/,/^  )/p' "$upd" | grep -oE '"[^"]+"' | tr -d '"' | sort -u) | tr '\n' ' ')" >&2
+      echo "  only in xpam-update.sh: $(comm -13 <(printf '%s\n' "${REQUIRED_FILES[@]}" | sort -u) <(sed -n '/^  required=(/,/^  )/p' "$upd" | grep -oE '"[^"]+"' | tr -d '"' | sort -u) | tr '\n' ' ')" >&2
+      die "required-file lists differ between make-release.sh and the updater's static preflight"
+    fi
+  fi
+
   # Every archetype the decoy generator can pick MUST have its theme file. generate.py deliberately
   # falls back to clean.css when one is missing, so a deleted/renamed theme would NOT crash — it
   # would silently render the wrong design on some domains. Fail loudly here instead.
@@ -97,6 +144,55 @@ verify_tree(){
     bash -n <(sed -E 's/\{\{[A-Za-z0-9_]+\}\}/x/g' "$f") || { echo "  render-smoke FAIL: $f"; fail=1; }
   done < <(find "$root/templates" -type f -name '*.sh.tpl' -print0)
   [[ "$fail" -eq 0 ]] || die "render-smoke syntax errors (see above)"
+
+  # --- config-template gates -------------------------------------------------------------------
+  # *.conf.tpl / *.cfg.tpl were checked by NOTHING until now: render-smoke only covers *.sh.tpl, and
+  # nginx/HAProxy validity was provable solely by `nginx -t` at apply time, i.e. on a live box. These
+  # are the templates the masking and the whole front layer depend on. A real `nginx -t` stays a
+  # box-time check on purpose (it needs the http context and the actual certificate files, so running
+  # it here would only manufacture false failures) — what IS checkable offline is checked below.
+  local tok tf known
+  # (a) Every {{TOKEN}} a template uses must actually be provided by the kit. An unset token renders
+  #     as an EMPTY string, which silently yields things like "listen ;" or "proxy_pass http://:;" —
+  #     a broken front that no syntax check of ours would notice. "Provided" is deliberately broad:
+  #     the kit sets these in three shapes — a bare list (`export A B C` in export_vars), an inline
+  #     assignment (`export A="..."`, including several per line), and module-local exports such as
+  #     ALT_CERT in xpam-alt-transport.sh. Collect assignment targets plus bare-export names once.
+  # `|| true` on each grep: this runs under `set -e`+`pipefail`, so an empty match would abort.
+  known="$( { grep -rhoE '[A-Za-z_][A-Za-z0-9_]*=' "$root/scripts" 2>/dev/null | tr -d '=' || true
+              grep -rhoE '\bexport[[:space:]]+[A-Za-z_][A-Za-z0-9_ ]*' "$root/scripts" 2>/dev/null | sed -E 's/^export[[:space:]]+//' | tr ' ' '\n' || true
+            } | sort -u )"
+  [[ -n "$known" ]] || die "config-template gate: could not collect any variable names from scripts/"
+  while IFS= read -r -d '' tf; do
+    while read -r tok; do
+      [[ -n "$tok" ]] || continue
+      printf '%s\n' "$known" | grep -qx -- "$tok" \
+        || { echo "  template token FAIL: {{${tok}}} used in ${tf#$root/} but nothing in scripts/ ever sets it (renders empty)"; fail=1; }
+    done < <(grep -ohE '\{\{[A-Za-z0-9_]+\}\}' "$tf" | tr -d '{}' | sort -u)
+  done < <(find "$root/templates" -type f \( -name '*.conf.tpl' -o -name '*.cfg.tpl' \) -print0)
+
+  # (b) nginx templates only: braces must balance and every directive must terminate. Tokens are
+  #     substituted with NOTHING (not a placeholder) because several expand to whole multi-line
+  #     blocks; an empty expansion keeps "listen {{PORT}};" -> "listen ;", still a valid shape for
+  #     this check. Non-nginx templates are excluded: backend-order.conf.tpl is a systemd unit and
+  #     haproxy.cfg.tpl is HAProxy syntax — neither uses semicolons or braces.
+  while IFS= read -r -d '' tf; do
+    local rendered opens closes badline
+    rendered="$(sed -E 's/\{\{[A-Za-z0-9_]+\}\}//g' "$tf")"
+    if printf '%s\n' "$rendered" | grep -q '{{'; then
+      echo "  template FAIL: ${tf#$root/} still contains an unsubstituted '{{' after token removal (malformed token?)"; fail=1
+    fi
+    opens="$(printf '%s\n' "$rendered" | tr -cd '{' | wc -c)"
+    closes="$(printf '%s\n' "$rendered" | tr -cd '}' | wc -c)"
+    [[ "$opens" -eq "$closes" ]] \
+      || { echo "  template FAIL: ${tf#$root/} unbalanced braces ({=$opens, }=$closes)"; fail=1; }
+    # `|| true`: a clean template makes the second grep match nothing, and under `set -e`+`pipefail`
+    # that non-zero would abort the build on SUCCESS. Same reason as the `known=` assignment above.
+    badline="$(printf '%s\n' "$rendered" | grep -vE '^[[:space:]]*(#|$)' | grep -vE '[;{}][[:space:]]*$' | head -1 || true)"
+    [[ -z "$badline" ]] \
+      || { echo "  template FAIL: ${tf#$root/} directive does not end in ';', '{' or '}': ${badline}"; fail=1; }
+  done < <(find "$root/templates" -type f -name 'nginx-*.conf.tpl' -print0)
+  [[ "$fail" -eq 0 ]] || die "config-template gate failed (see above)"
 
   info "verify_tree OK: $root"
 }

@@ -430,6 +430,16 @@ mtproto_3xui_mtg_runtime_invariants_ok(){
 
 mtproto_3xui_mtg_repair_if_needed(){
   uses_mtproto || return 0
+  # Wait for the mtg sidecar to rebind before judging it. `repair` calls this immediately after
+  # `systemctl try-restart x-ui` (xpam-core.sh), and 3x-ui needs a moment to respawn mtg. Without
+  # the wait the invariant sees ZERO mtg listeners, declares failure, and triggers a full MTG
+  # reinstall on EVERY repair and weekly run. That reinstall preserves the secret — so the user's
+  # Telegram link keeps working — but it re-mints the managed client's `id` and `subId`, which
+  # changes the panel's per-client link/QR (the whole point of D-3) and rewrites the row each time.
+  # Measured on a live box 2026-07-29: invariant exit=1 with 0 listeners at t+0s, exit=0 with 2
+  # listeners by t+1s. The helper already exists and bounds the wait at 60s, after which a genuinely
+  # dead runtime still fails the invariant and gets repaired exactly as before.
+  mtproto_3xui_mtg_wait_runtime >/dev/null 2>&1 || true
   if mtproto_3xui_mtg_runtime_invariants_ok; then
     ok "3x-ui MTG runtime invariants already OK; repair skipped"
     return 0

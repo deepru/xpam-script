@@ -101,6 +101,8 @@ xpam_config_snapshot(){
     local ts
     local snapshot
     local list_file
+    local db_stage=""
+    local db_src="/etc/x-ui/x-ui.db"
 
     ts="$(date +%Y%m%d-%H%M%S)"
     snapshot="$backup_dir/${prefix}-config-${ts}.tar.gz"
@@ -108,6 +110,37 @@ xpam_config_snapshot(){
 
     mkdir -p "$backup_dir"
     chmod 700 "$backup_dir"
+
+    # The 3x-ui database is deliberately NOT tarred from its live path (see the path list below).
+    # This is the GOLDEN snapshot `repair --full` restores from, and tarring a file a running process
+    # is writing to is only sound while SQLite uses a rollback journal. 3x-ui v3.5.0 pins
+    # journal_mode=DELETE, but upstream has since made it configurable and defaults it to WAL — under
+    # which the newest committed transactions sit in x-ui.db-wal, so a plain tar captures a database
+    # MISSING recent clients/inbounds while looking perfectly healthy. Instead stage a consistent copy
+    # via SQLite's online backup API (checkpoint + .backup, the same discipline dh_snapshot_create
+    # uses) and archive THAT at the same in-archive path, so `repair --full` extraction is unchanged.
+    if [ -s "$db_src" ]; then
+        db_stage="$(mktemp -d /tmp/${prefix}-snapshot-db.XXXXXX)"
+        mkdir -p "$db_stage/etc/x-ui"
+        if command -v sqlite3 >/dev/null 2>&1; then
+            sqlite3 "$db_src" "PRAGMA wal_checkpoint(FULL);" >/dev/null 2>&1 || true
+            sqlite3 "$db_src" ".timeout 5000" ".backup '$db_stage/etc/x-ui/x-ui.db'" 2>/dev/null \
+              || cp -a "$db_src" "$db_stage/etc/x-ui/x-ui.db" 2>/dev/null || true
+        else
+            cp -a "$db_src" "$db_stage/etc/x-ui/x-ui.db" 2>/dev/null || true
+        fi
+        if [ -s "$db_stage/etc/x-ui/x-ui.db" ]; then
+            # Verify at CAPTURE time, not months later at restore time when it is the only copy left.
+            if command -v sqlite3 >/dev/null 2>&1 \
+               && ! sqlite3 "$db_stage/etc/x-ui/x-ui.db" 'PRAGMA integrity_check;' 2>/dev/null | grep -qi '^ok$'; then
+                echo "WARNING: staged 3x-ui DB copy failed integrity_check; snapshot will not contain a database"
+                rm -rf -- "$db_stage"; db_stage=""
+            fi
+        else
+            echo "WARNING: could not stage a consistent copy of $db_src; snapshot will not contain a database"
+            rm -rf -- "$db_stage"; db_stage=""
+        fi
+    fi
 
     for p in \
       /etc/xpam-script \
@@ -127,7 +160,6 @@ xpam_config_snapshot(){
       /etc/fail2ban \
       /etc/ufw \
       /usr/local/sbin \
-      /etc/x-ui/x-ui.db \
       /usr/local/x-ui/bin/config.json
     do
         [ -e "$p" ] && printf '%s
@@ -137,11 +169,20 @@ xpam_config_snapshot(){
     if [ ! -s "$list_file" ]; then
         echo "WARNING: nothing to snapshot"
         rm -f "$list_file"
+        [ -n "$db_stage" ] && rm -rf -- "$db_stage"
         return 1
     fi
 
-    tar --ignore-failed-read -czf "$snapshot" -T "$list_file" 2>/dev/null || true
+    # The staged database is appended as a RELATIVE entry under -C, so it lands at exactly
+    # "etc/x-ui/x-ui.db" inside the archive — the same member name the absolute paths above produce
+    # (tar strips the leading '/'), which is what xpam_repair_restore_db_from_snapshot extracts.
+    if [ -n "$db_stage" ]; then
+        tar --ignore-failed-read -czf "$snapshot" -T "$list_file" -C "$db_stage" etc/x-ui/x-ui.db 2>/dev/null || true
+    else
+        tar --ignore-failed-read -czf "$snapshot" -T "$list_file" 2>/dev/null || true
+    fi
     rm -f "$list_file"
+    [ -n "$db_stage" ] && rm -rf -- "$db_stage"
 
     if [ ! -s "$snapshot" ]; then
         echo "FAIL: snapshot was not created or is empty: $snapshot"
@@ -1487,6 +1528,49 @@ if db_inb:
         ok('database sniffing is ON with Route only; acceptable for optional WARP/domain routing')
     else:
         warn('database sniffing is enabled without Route only; review if WARP/domain routing is intended')
+# --- spare transport (xhttp/grpc): keep it out of 3x-ui's auto-Vision path -------------------
+# 3x-ui's backend re-injects flow="xtls-rprx-vision" into EMPTY-flow clients of a "flow-eligible"
+# VLESS inbound (restoreVisionFlowForEligibleInbound; runs on inbound update AND as a migration, so
+# it can fire during a panel upgrade we did not trigger). Vision is tcp-only: on our nginx-fronted
+# alt inbound it would silently break the spare transport. Eligibility needs either tcp+tls/reality
+# or xhttp WITH VLESS-level encryption, so `decryption:"none"` is what keeps us out — and a distinct
+# client email means there is no sibling row to inherit Vision from either. Assert both on the LIVE
+# row, because the offline payload gate (tests/payload-smoke.sh) only covers what we create, not what
+# the panel may have rewritten since. Details: handoff/3XUI_3.5.0_VS_XPAM.md §6.6.
+alt_port_raw=str(cfg.get('XRAY_ALT_PORT') or '').strip()
+if cfg.get('VLESS_ALT_TRANSPORT') and cfg.get('VLESS_ALT_DOMAIN') and alt_port_raw.isdigit():
+    alt_port=int(alt_port_raw)
+    alt_rows=[r for r in rows if str(r.get('protocol','')).lower()=='vless' and int(r.get('port') or 0)==alt_port]
+    if not alt_rows:
+        # The transport is configured but its inbound is gone: the listener check in the health
+        # template already covers the service impact, so stay quiet here instead of double-alarming.
+        print(f'INFO: spare transport configured but no VLESS inbound on port {alt_port} in the database')
+    else:
+        alt_sett=jloads(alt_rows[0].get('settings'), {})
+        if str(alt_sett.get('decryption','')) == 'none':
+            ok(f'spare transport inbound keeps decryption=none (stays outside 3x-ui auto-Vision)')
+        else:
+            bad(f'spare transport inbound decryption must be "none", got {alt_sett.get("decryption")!r}: '
+                f'VLESS encryption makes an xhttp inbound flow-eligible and 3x-ui will inject '
+                f'xtls-rprx-vision, which is tcp-only and breaks this transport')
+        alt_flowed=[str(c.get('email') or '?') for c in (alt_sett.get('clients') or [])
+                    if isinstance(c, dict) and str(c.get('flow') or '').strip()]
+        if alt_flowed:
+            bad(f'spare transport client(s) {alt_flowed} carry a flow; XTLS Vision is tcp-only and '
+                f'breaks xhttp/grpc — run repair, and check whether 3x-ui injected it on upgrade')
+        else:
+            ok('spare transport clients carry no flow (correct for xhttp/grpc)')
+        alt_emails={str(c.get('email') or '').strip() for c in (alt_sett.get('clients') or [])
+                    if isinstance(c, dict)} - {''}
+        primary_emails={str(c.get('email') or '').strip() for c in ((sett.get('clients') or []) if db_inb else [])
+                        if isinstance(c, dict)} - {''}
+        shared_emails=sorted(alt_emails & primary_emails)
+        if shared_emails:
+            bad(f'spare transport client email(s) {shared_emails} are also on the primary inbound: '
+                f'3x-ui resolves the intended flow by email across inbounds, so the alt inbound can '
+                f'inherit Vision — and teardown-by-email would hit the primary client')
+        elif alt_emails:
+            ok('spare transport client emails are distinct from the primary inbound')
 config_path=Path('/usr/local/x-ui/bin/config.json')
 print('\n--- Xray generated config validation ---')
 try:
