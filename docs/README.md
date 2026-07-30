@@ -1,34 +1,23 @@
 # XPAM Script documentation
 
-This directory contains the public documentation for XPAM Script.
+The complete documentation is the Russian user guide — **[USER_GUIDE_RU.md](USER_GUIDE_RU.md)**. It
+covers the whole path from preparing a VPS to day-to-day operation, in 25 chapters.
 
-The main user-facing documentation is in Russian. English documentation is intentionally shorter and points to the same operational model.
+The files below are a shorter **English reference** to the same product. They describe the operational
+model rather than walking through it step by step.
 
-## Main documents
+## Reference
 
-- [`INSTALLATION.md`](INSTALLATION.md) — установка и первый запуск.
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) — архитектура XPAM.
-- [`CONFIGURATION.md`](CONFIGURATION.md) — основные настройки и команды.
-- [`PROFILES.md`](PROFILES.md) — режимы работы.
-- [`HEALTHCHECKS.md`](HEALTHCHECKS.md) — health и deep-health.
-- [`MAINTENANCE.md`](MAINTENANCE.md) — repair, weekly maintenance и safe update.
-- [`SECURITY_MODEL.md`](SECURITY_MODEL.md) — секреты, links и DoubleHop.
-- [`SITES.md`](SITES.md) — masking/fallback sites.
-- [`TELEGRAM_NOTIFICATIONS.md`](TELEGRAM_NOTIFICATIONS.md) — уведомления XPAM через Telegram bot/relay.
-- [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) — типовые проблемы.
-- [`WARP.md`](WARP.md) — WARP через 3x-ui/Xray.
-- [`RELEASE_PROCESS.md`](RELEASE_PROCESS.md) — release checklist.
+- [`INSTALLATION.md`](INSTALLATION.md) — requirements, install, first run.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — how the pieces fit together.
+- [`CONFIGURATION.md`](CONFIGURATION.md) — commands, domains, connection data.
+- [`HEALTHCHECKS.md`](HEALTHCHECKS.md) — health and deep health.
+- [`MAINTENANCE.md`](MAINTENANCE.md) — repair, weekly maintenance, safe update.
+- [`SITES.md`](SITES.md) — masking sites, and serving your own.
+- [`WARP.md`](WARP.md) — WARP through 3x-ui/Xray.
+- [`TELEGRAM_NOTIFICATIONS.md`](TELEGRAM_NOTIFICATIONS.md) — operational alerts over Telegram.
+- [`SECURITY_MODEL.md`](SECURITY_MODEL.md) — what is exposed and what is protected.
+- [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) — common problems.
 
-## Terminology
-
-Use:
-
-- VLESS;
-- Telegram proxy / MTG;
-- Telegram link;
-- DoubleHop Mode;
-- spare VLESS transport (xhttp/grpc) — "запасной способ подключения" in the Russian guide;
-- `sudo <prefix>-xpam`;
-- `sudo <prefix>-links`.
-
-Public docs must not contain real domains, IP addresses, connection links, UUIDs, tokens or local operator paths.
+What counts as a secret, and what to strip before posting logs or screenshots, is listed once in
+[`SECURITY.md`](../SECURITY.md).

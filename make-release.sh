@@ -194,6 +194,36 @@ verify_tree(){
   done < <(find "$root/templates" -type f -name 'nginx-*.conf.tpl' -print0)
   [[ "$fail" -eq 0 ]] || die "config-template gate failed (see above)"
 
+  # --- public-docs gate: no removed commands presented as current ---------------------------------
+  # v1.4.0 removed four launchers and the --show-secrets flag. The GitHub issue template kept asking
+  # people to redact the output of `<prefix>-links --show-secrets` — a flag that no longer exists —
+  # and nothing caught it, because documentation is the one thing no gate ever read. A user meeting
+  # the project through a stale instruction is a real defect, not a typo.
+  #
+  # Some files MUST mention the old names: the guide's migration table, the release notes and the
+  # changelog's historical entries. Rather than weaken the check for them, those files declare it
+  # once, near the top:  <!-- xpam-lint: legacy-commands-documented -->
+  # Everything else must not mention the removed names at all. Add a name here the moment a command
+  # is removed, in the same commit.
+  local legacy_re='(<prefix>|\$\{?SERVER_PREFIX\}?)-(status|netdiag|tg|vless)\b|--show-secrets'
+  local df hits
+  while IFS= read -r -d '' df; do
+    # `|| true` on both greps: no match is the SUCCESS case here, and a non-zero would abort the
+    # build under `set -e`+`pipefail` (same reason as the gates above).
+    grep -q 'xpam-lint: legacy-commands-documented' "$df" 2>/dev/null && continue
+    hits="$(grep -nE "$legacy_re" "$df" 2>/dev/null | head -5 || true)"
+    if [[ -n "$hits" ]]; then
+      echo "  public-docs FAIL: ${df#$root/} refers to a command removed in this release:"
+      printf '    %s\n' "$hits"
+      echo "    -> update the text, or add '<!-- xpam-lint: legacy-commands-documented -->' if the file"
+      echo "       documents the migration on purpose."
+      fail=1
+    fi
+  done < <(find "$root" -path "$root/handoff" -prune -o \
+                        -type f \( -name '*.md' -o -name '*.yml' -o -name '*.yaml' \) \
+                        -not -path "*/sites/*" -print0)
+  [[ "$fail" -eq 0 ]] || die "public-docs gate failed (see above)"
+
   info "verify_tree OK: $root"
 }
 

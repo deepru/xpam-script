@@ -52,18 +52,36 @@ curl -fsSL https://raw.githubusercontent.com/deepru/xpam-script/main/bootstrap.s
 sudo XPAM_REPO="deepru/xpam-script" bash xpam-bootstrap.sh
 ```
 
-Bootstrap скачивает опубликованный архив из GitHub Releases, проверяет SHA256 и запускает установку. Дальше — два пункта меню: сначала SSH-безопасность, затем установка сервера. После установки они исчезают, и остаётся рабочее меню.
+Bootstrap скачивает опубликованный архив из GitHub Releases, сверяет его SHA256 с файлом `.sha256` из того же релиза и запускает установку. Дальше — два пункта меню: **1)** SSH-безопасность, **2)** установка сервера. Пункт 2 выполняется дважды, с перезагрузкой между заходами. После установки оба пункта исчезают, и остаётся рабочее меню.
+
+## Что это не решает
+
+- Это инструмент для **своего** сервера и своего круга: одна установка — один оператор. Здесь нет
+  биллинга, тарифов, панели для перепродажи доступа и учёта чужих пользователей.
+- XPAM не обещает невидимости. Он делает сервер похожим на обычный веб-сайт и даёт запасной путь на
+  случай блокировки, но домен, DNS, ключи и аккуратность в эксплуатации остаются на вас.
+- Exit-сервер для DoubleHop готовите вы сами — XPAM настраивает только входную сторону.
 
 > [!TIP]
 > Перед установкой откройте **[Руководство пользователя](docs/USER_GUIDE_RU.md)** — там весь путь от подготовки VPS до эксплуатации, с примерами и разбором частых проблем.
 
 ## Документация
 
-- **[Руководство пользователя](docs/USER_GUIDE_RU.md)** — основной документ, от установки до диагностики
-- [Архитектура](docs/ARCHITECTURE.md) · [Установка](docs/INSTALLATION.md) · [Настройки и команды](docs/CONFIGURATION.md)
-- [Проверки состояния](docs/HEALTHCHECKS.md) · [Обслуживание](docs/MAINTENANCE.md) · [Частые проблемы](docs/TROUBLESHOOTING.md)
-- [Сайты-маскировки](docs/SITES.md) · [WARP](docs/WARP.md) · [Telegram-уведомления](docs/TELEGRAM_NOTIFICATIONS.md)
-- [Модель безопасности](docs/SECURITY_MODEL.md) · [Changelog](CHANGELOG.md) · [Releases](https://github.com/deepru/xpam-script/releases)
+Основной документ — **[Руководство пользователя](docs/USER_GUIDE_RU.md)**. В нём весь путь от
+подготовки VPS до эксплуатации; всё остальное — дополнение к нему.
+
+| | |
+|---|---|
+| [Что подготовить](docs/USER_GUIDE_RU.md#ch2) · [SSH-ключ](docs/USER_GUIDE_RU.md#ch3) · [DNS](docs/USER_GUIDE_RU.md#ch4) | Перед установкой |
+| [Установка](docs/USER_GUIDE_RU.md#ch5) · [Шаг 1](docs/USER_GUIDE_RU.md#ch6) · [Шаг 2](docs/USER_GUIDE_RU.md#ch7) | Как поставить |
+| [Команды](docs/USER_GUIDE_RU.md#ch9) · [Меню](docs/USER_GUIDE_RU.md#ch10) · [Ссылки и секреты](docs/USER_GUIDE_RU.md#ch11) | После установки |
+| [DoubleHop](docs/USER_GUIDE_RU.md#ch14) · [WARP](docs/USER_GUIDE_RU.md#ch15) · [Запасной транспорт](docs/USER_GUIDE_RU.md#ch16) · [Сайты-маскировки](docs/USER_GUIDE_RU.md#ch17) | Возможности |
+| [Проверка и обслуживание](docs/USER_GUIDE_RU.md#ch19) · [Обновление](docs/USER_GUIDE_RU.md#ch20) · [Частые проблемы](docs/USER_GUIDE_RU.md#ch22) | Эксплуатация |
+
+Ещё: [что считается секретом](SECURITY.md) · [проверка сервера](TESTING.md) ·
+[изменения по версиям](CHANGELOG.md) · [релизы](https://github.com/deepru/xpam-script/releases)
+
+Краткий справочник на английском — в [`docs/`](docs/README.md).
 
 ## Лицензия
 

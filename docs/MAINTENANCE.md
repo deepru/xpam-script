@@ -14,9 +14,15 @@ VLESS and Telegram links shown by `sudo <prefix>-links` are expected to come fro
 
 ## Weekly maintenance
 
-Weekly maintenance is configured automatically and runs on a schedule once a week. It takes a configuration snapshot, applies system updates, renews certificates, runs a health check and prunes old logs and backups within the configured limits.
+Weekly maintenance is configured automatically and runs on a schedule once a week, at night. It takes a configuration snapshot, applies system updates, renews certificates, runs a health check and prunes old logs and backups within the configured limits.
 
-It does not change user connection links, does not revert a Telegram proxy / MTG secret changed in 3x-ui, and does not reboot the server on its own — if a reboot is needed to finish an update, it says so (and notifies over Telegram when notifications are configured). To run it by hand:
+It does not change user connection links and does not revert a Telegram proxy / MTG secret changed in 3x-ui.
+
+**It does reboot the server when an update requires it.** In the default `auto` mode weekly installs every available update including kernels, and reboots if the box needs one to finish. After that reboot a one-shot pass runs automatically: it waits for the services to come up, applies whatever became available after the first batch, cleans up and verifies health, then disables itself. Telegram notifications (when configured) are sent on failure only.
+
+To keep the server from rebooting on its own, set `XPAM_MAINT_APT_MODE=upgrade` in `/etc/xpam-script/config.env` (plain package upgrade, kernels held back) or `off` (no system updates at all). The value is read on every run, so saving the file is enough. Do not use the legacy value `security`: it behaves like `upgrade`, but XPAM migrates that exact value back to `auto`.
+
+To run weekly maintenance by hand:
 
 ```bash
 sudo <prefix>-weekly-maintenance.sh
@@ -44,15 +50,7 @@ sudo <prefix>-xpam
 
 Open `Дополнительно` → `Проверить обновления XPAM`.
 
-The updater must:
-
-- verify SHA256 before applying an update;
-- run staging preflight;
-- create a backup;
-- run post-update health/deep-health;
-- roll back if the updated state is not healthy;
-- preserve VLESS and Telegram links;
-- preserve current 3x-ui-sourced VLESS/Telegram link behavior.
+The updater verifies the release checksum, runs preflight checks on the staged copy, backs up the current version, applies the update and re-checks the server. If the result is not healthy it rolls back to the previous version. Connection links are captured before and after and must match, so an update never silently changes a link your clients already hold.
 
 ## Small-VPS policy
 

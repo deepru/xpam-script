@@ -34,18 +34,6 @@ If you place your own static site in a domain's web root (`/var/www/<domain>/`, 
 `index.html`), XPAM keeps it and does not overwrite it on install or repair. Real, self-hosted
 content that you actually own is the most convincing masking of all.
 
-## Domains
-
-Use placeholder examples in documentation:
-
-```text
-example.com
-vless.example.com
-tg.example.com
-```
-
-Do not publish real domains, IP addresses or connection links in public reports.
-
 ## Health
 
 After changing sites or DNS, run:

@@ -1,6 +1,9 @@
 # Troubleshooting
 
-This guide lists common XPAM Script troubleshooting steps.
+Common problems and what to do about them.
+
+Before pasting any output into an issue, a chat or a screenshot, check what has to be removed first:
+[`SECURITY.md`](../SECURITY.md).
 
 ## Main command not found
 
@@ -40,7 +43,7 @@ sudo <prefix>-repair
 sudo <prefix>-health --deep
 ```
 
-If you report the issue, redact domains, IP addresses, links, UUIDs, tokens and local paths.
+`sudo <prefix>-links --safe` gives a summary you can share without stripping anything.
 
 ## DoubleHop does not enable
 
@@ -96,7 +99,8 @@ sudo <prefix>-health
 sudo <prefix>-health --deep
 ```
 
-Do not publish update logs without redacting secrets and environment details.
+Update logs are written without connection links or tokens, but still mention your domains — strip
+those before sharing.
 
 ## Low disk or low memory warnings
 

@@ -21,6 +21,11 @@ handoff/
 CLAUDE.md
 CLAUDE.local.md
 
+# Local agent permission cache. It records real command lines, so it accumulates box IPs and private
+# key paths. It is normally covered by the user's GLOBAL gitignore — which protects only this machine,
+# and would not survive a fresh clone elsewhere. Repeated here so the repo protects itself.
+.claude/settings.local.json
+
 # Local install/build/test directories
 dist/
 build/

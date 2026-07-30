@@ -19,7 +19,7 @@ body:
         - real domains
         - real IP addresses
         - local backup paths
-        - output from `sudo <prefix>-links --show-secrets`
+        - output from `sudo <prefix>-links`
 
         Use placeholders such as `example.com`, `<server-ip>`, `<prefix>` and `<redacted>`.
 
@@ -28,7 +28,7 @@ body:
     attributes:
       label: XPAM version
       description: Run `cat /opt/xpam-script/VERSION` if XPAM is installed.
-      placeholder: "1.3.7"
+      placeholder: "1.4.0"
     validations:
       required: true
 

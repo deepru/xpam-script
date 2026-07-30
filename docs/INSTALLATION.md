@@ -8,22 +8,12 @@ XPAM Script is intended for clean VPS installations on Ubuntu and Debian.
 - root access;
 - IPv4 address;
 - DNS A records prepared for your XPAM domains;
-- SSH key access strongly recommended.
-
-Use placeholders in examples:
-
-```text
-<server-ip>
-vless.example.com
-tg.example.com
-panel.example.com
-```
+- SSH key access is required — password login is disabled at the first step.
 
 ## Install from GitHub Releases
 
-Use the current release archive and SHA256 file from GitHub Releases. The install flow should download the release archive, verify SHA256, extract it and start installation.
-
-Follow the exact command block published in the GitHub release page for the current version. Current bootstrap download should use HTTP/1.1 and retries:
+Bootstrap downloads the current release archive from GitHub Releases, verifies its SHA256, extracts it
+and starts the installer:
 
 ```bash
 cd /root
@@ -31,29 +21,34 @@ curl -fsSL https://raw.githubusercontent.com/deepru/xpam-script/main/bootstrap.s
 sudo XPAM_REPO="deepru/xpam-script" bash xpam-bootstrap.sh
 ```
 
-If bootstrap download temporarily fails because of a provider or GitHub network issue, retry later or download `bootstrap.sh` locally and upload it to the VPS manually. XPAM still downloads the published archive from GitHub Releases and verifies SHA256 before installation.
+If the download fails because of a provider or GitHub network issue, retry later, or fetch
+`bootstrap.sh` on another machine and upload it to the VPS by hand. The release archive itself is
+still downloaded from GitHub Releases and checksum-verified before anything is installed.
 
-
-Do not pin GitHub CDN IPs in `/etc/hosts`. XPAM uses temporary fallback only for the failing download and still verifies release SHA256.
+Do not pin GitHub CDN addresses in `/etc/hosts` to work around this. XPAM falls back to a direct
+address only for a failing download, and verifies the release checksum either way.
 
 ## First run
 
-After the initial bootstrap creates the prefix command, use:
-
-```bash
-sudo <prefix>-xpam
-```
-
-Typical first-run order:
+Installation runs as two menu items, in order:
 
 ```text
 1) SSH-безопасность и создание команды сервера
 2) Установить / продолжить настройку сервера
 ```
 
-Once the server is fully installed those two entries disappear and the same command shows the
-operational menu instead (connection data, health, notifications, WARP, DoubleHop, sites, advanced).
-It stays the main management interface.
+Item 2 runs twice, with a reboot in between: the first pass prepares the system and asks you to
+reboot, the second pass finishes the setup. Once the server is fully installed, both entries
+disappear and the same command shows the operational menu instead.
+
+After the first item creates the prefix command, the menu is reached with:
+
+```bash
+sudo <prefix>-xpam
+```
+
+That stays the main management interface: connection data, health, notifications, WARP, DoubleHop,
+sites and maintenance.
 
 ## Connection data
 
@@ -69,7 +64,8 @@ Full connection data:
 sudo <prefix>-links
 ```
 
-The full output contains sensitive data. VLESS and Telegram links in this output are generated from the current 3x-ui configuration.
+The full output contains sensitive data — see [`SECURITY.md`](../SECURITY.md) before sharing it. VLESS
+and Telegram links in this output are generated from the current 3x-ui configuration.
 
 ## Post-install validation
 

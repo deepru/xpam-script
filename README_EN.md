@@ -52,17 +52,26 @@ curl -fsSL https://raw.githubusercontent.com/deepru/xpam-script/main/bootstrap.s
 sudo XPAM_REPO="deepru/xpam-script" bash xpam-bootstrap.sh
 ```
 
-Bootstrap downloads the published archive from GitHub Releases, verifies its SHA256 and starts the installer. Two menu entries follow: SSH security first, then the server setup. Once the server is installed they disappear and the operational menu takes their place.
+Bootstrap downloads the published archive from GitHub Releases, verifies its SHA256 against the `.sha256` file from the same release, and starts the installer. Two menu entries follow: **1)** SSH security, **2)** server setup. Entry 2 runs twice, with a reboot in between. Once the server is installed both entries disappear and the operational menu takes their place.
 
-> [!TIP]
-> The full step-by-step guide is in Russian: **[Руководство пользователя](docs/USER_GUIDE_RU.md)**. The English docs under [`docs/`](docs/README.md) cover the same operational model in shorter form.
+## What this does not do
+
+- It is built for **your own** server and your own circle: one install, one operator. There is no
+  billing, no plans, no reseller panel, no accounting for other people's users.
+- It does not promise invisibility. It makes the server look like an ordinary website and gives you a
+  spare way in when the primary one gets blocked — the domain, DNS, keys and day-to-day care are
+  still yours.
+- The Exit server for DoubleHop is yours to prepare; XPAM configures the entry side only.
 
 ## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md) · [Installation](docs/INSTALLATION.md) · [Configuration and commands](docs/CONFIGURATION.md)
+The English documentation is a reference to the operational model. The complete step-by-step guide
+exists in Russian only: **[Руководство пользователя](docs/USER_GUIDE_RU.md)**.
+
+- [Installation](docs/INSTALLATION.md) · [Architecture](docs/ARCHITECTURE.md) · [Configuration and commands](docs/CONFIGURATION.md)
 - [Health checks](docs/HEALTHCHECKS.md) · [Maintenance](docs/MAINTENANCE.md) · [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Masking sites](docs/SITES.md) · [WARP](docs/WARP.md) · [Telegram notifications](docs/TELEGRAM_NOTIFICATIONS.md)
-- [Security model](docs/SECURITY_MODEL.md) · [Changelog](CHANGELOG.md) · [Releases](https://github.com/deepru/xpam-script/releases)
+- [Security model](docs/SECURITY_MODEL.md) · [What counts as a secret](SECURITY.md) · [Changelog](CHANGELOG.md) · [Releases](https://github.com/deepru/xpam-script/releases)
 
 ## License
 

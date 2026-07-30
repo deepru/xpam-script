@@ -36,11 +36,9 @@ tg.example.com
 panel.example.com
 ```
 
-If you later enable the optional spare VLESS transport, it needs one more name of its own — for
-example `cdn.example.com` — with an A record pointing at the same server. It is not needed at
-installation time.
-
-Do not publish live domains in public issues unless they are intentionally public.
+If you later enable the optional spare transport, it needs one more name of its own — for example
+`cdn.example.com` — with an A record pointing at the same server. It is not needed at installation
+time.
 
 ## Links
 
