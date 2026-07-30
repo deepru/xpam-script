@@ -204,8 +204,10 @@ verify_tree(){
   # changelog's historical entries. Rather than weaken the check for them, those files declare it
   # once, near the top:  <!-- xpam-lint: legacy-commands-documented -->
   # Everything else must not mention the removed names at all. Add a name here the moment a command
-  # is removed, in the same commit.
-  local legacy_re='(<prefix>|\$\{?SERVER_PREFIX\}?)-(status|netdiag|tg|vless)\b|--show-secrets'
+  # is removed, in the same commit — and only if the kit truly stops writing it. `netdiag` is NOT in
+  # this list on purpose: it still exists, because the pre-1.4.0 updater's postcheck requires it (see
+  # the updater-postcheck gate below).
+  local legacy_re='(<prefix>|\$\{?SERVER_PREFIX\}?)-(status|tg|vless)\b|--show-secrets'
   local df hits
   while IFS= read -r -d '' df; do
     # `|| true` on both greps: no match is the SUCCESS case here, and a non-zero would abort the
@@ -223,6 +225,38 @@ verify_tree(){
                         -type f \( -name '*.md' -o -name '*.yml' -o -name '*.yaml' \) \
                         -not -path "*/sites/*" -print0)
   [[ "$fail" -eq 0 ]] || die "public-docs gate failed (see above)"
+
+  # --- updater postcheck vs. the launchers the kit actually writes --------------------------------
+  # The v1.4.0 release shipped an updater whose postcheck required `<prefix>-netdiag` while the same
+  # release deleted that launcher: every self-update failed its own postcheck and rolled back. Nothing
+  # caught it, because each half was internally consistent — only the pair was wrong. So compare them.
+  #
+  # Left side:  the command list in xpam_update_postcheck (`for c in ... ; do`).
+  # Right side: the launchers write_health_weekly actually creates.
+  # Every name the updater demands must be one the kit writes. (The reverse is fine: the kit may write
+  # more than the updater checks.)
+  local pc_list writes miss
+  pc_list="$(sed -n '/^xpam_update_postcheck()/,/^}/p' "$root/scripts/lib/xpam-update.sh" \
+             | sed -nE 's/^[[:space:]]*for c in ([a-z0-9 _-]+); do.*/\1/p' | head -1 | tr ' ' '\n' | sed '/^$/d')"
+  [[ -n "$pc_list" ]] || die "updater-postcheck gate: could not read the command list from xpam_update_postcheck"
+  # Match DEFINITIONS only (`write_x_launcher(){` at the start of a line), never a mention in prose —
+  # the first cut of this gate grepped the whole file and was satisfied by its own explanatory
+  # comment, so it passed while the defect was present. Verified by breaking it.
+  # `|| true`: a name that is never written yields no match, and that is the case we want to REPORT,
+  # not abort on, under `set -e`+`pipefail`.
+  writes="$(grep -ohE '^[[:space:]]*write_[a-z0-9_]+_launcher[[:space:]]*\(\)' "$root/scripts/lib/xpam-launchers.sh" \
+            | tr -d ' ()' | sort -u || true)"
+  miss=""
+  while read -r c; do
+    [[ -n "$c" ]] || continue
+    printf '%s\n' "$writes" | grep -qx "write_${c}_launcher" || miss="${miss} ${c}"
+  done <<< "$pc_list"
+  if [[ -n "$miss" ]]; then
+    echo "  updater-postcheck FAIL: xpam_update_postcheck requires <prefix>-{${miss# }} but"
+    echo "    scripts/lib/xpam-launchers.sh has no write_*_launcher that creates it."
+    echo "    An update would delete/never write the command and then fail its own postcheck."
+    die "updater-postcheck gate failed"
+  fi
 
   info "verify_tree OK: $root"
 }

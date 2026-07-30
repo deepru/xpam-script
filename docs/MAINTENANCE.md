@@ -30,7 +30,11 @@ sudo <prefix>-weekly-maintenance.sh
 
 ## Network diagnostics
 
-Network diagnostics no longer has its own command — it is run from the menu:
+```bash
+sudo <prefix>-netdiag
+```
+
+The same check is available from the menu:
 
 ```bash
 sudo <prefix>-xpam

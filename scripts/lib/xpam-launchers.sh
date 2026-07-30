@@ -93,16 +93,52 @@ EOF_REPAIR_LAUNCHER
 }
 
 
-# The standalone `-status` and `-netdiag` commands were folded into the menu (state → item 3, network
-# diagnostics → «Дополнительно»). Idempotently remove any launchers an earlier install left so existing
-# boxes don't keep dead commands. Menu access to both remains via `<prefix>-xpam`.
-remove_legacy_status_netdiag_launchers(){
+# The standalone `-status` command was folded into the menu (state → item 2). Idempotently remove any
+# launcher an earlier install left so existing boxes don't keep a dead command.
+#
+# `-netdiag` is deliberately NOT removed. The self-updater shipped in v1.3.9 and earlier verifies,
+# AFTER applying an update, that `<prefix>-netdiag` exists — and that check runs from the OLD code
+# still loaded in the shell, so no new release can change it. Deleting the launcher therefore made
+# every 1.3.9 -> 1.4.0 update fail its postcheck and roll back. The command stays as a thin wrapper
+# around the same menu action; it costs nothing and it keeps the upgrade path open. See
+# write_netdiag_launcher.
+remove_legacy_status_launcher(){
   [[ -n "${SERVER_PREFIX:-}" ]] || return 0
   local safe_prefix
   safe_prefix="$(printf '%s' "$SERVER_PREFIX" | tr -cd 'A-Za-z0-9_-')"
   [[ -n "$safe_prefix" ]] || return 0
-  rm -f "/usr/local/sbin/${safe_prefix}-status" "/usr/local/bin/${safe_prefix}-status" \
-        "/usr/local/sbin/${safe_prefix}-netdiag" "/usr/local/bin/${safe_prefix}-netdiag" 2>/dev/null || true
+  rm -f "/usr/local/sbin/${safe_prefix}-status" "/usr/local/bin/${safe_prefix}-status" 2>/dev/null || true
+}
+
+
+# Network diagnostics. Kept as a command purely so the pre-1.4.0 updater's postcheck can find it
+# (see remove_legacy_status_launcher). It runs the same stage the menu runs, so it is a real command,
+# not a stub.
+write_netdiag_launcher(){
+  [[ -n "${SERVER_PREFIX:-}" ]] || return 0
+  local safe_prefix launcher bin_link kit_dir_real
+  safe_prefix="$(printf '%s' "$SERVER_PREFIX" | tr -cd 'A-Za-z0-9_-')"
+  launcher="/usr/local/sbin/${safe_prefix}-netdiag"
+  bin_link="/usr/local/bin/${safe_prefix}-netdiag"
+  kit_dir_real="$RUNTIME_KIT_DIR"
+  cat > "$launcher" <<EOF_NETDIAG_LAUNCHER
+#!/usr/bin/env bash
+set -euo pipefail
+LAUNCHER="/usr/local/sbin/${safe_prefix}-netdiag"
+KIT_DIR="${kit_dir_real}"
+if [ "\$(id -u)" -ne 0 ]; then exec sudo "\$LAUNCHER" "\$@"; fi
+if [ ! -f "\$KIT_DIR/scripts/xpam-core.sh" ]; then
+  echo "ERROR: XPAM Script runtime missing: \$KIT_DIR/scripts/xpam-core.sh" >&2
+  exit 1
+fi
+export XPAM_SCRIPT_QUIET_LOAD_CONFIG=1
+# shellcheck source=/dev/null
+source "\$KIT_DIR/scripts/xpam-core.sh"
+stage_netdiag
+EOF_NETDIAG_LAUNCHER
+  chmod 755 "$launcher"
+  ln -sf "$launcher" "$bin_link" 2>/dev/null || true
+  ok "Диагностика сети доступна: sudo ${safe_prefix}-netdiag"
 }
 
 

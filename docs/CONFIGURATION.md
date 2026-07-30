@@ -17,6 +17,7 @@ sudo <prefix>-links --safe         # summary without secrets
 sudo <prefix>-health               # quick health check
 sudo <prefix>-health --deep        # extended health check
 sudo <prefix>-repair               # repair XPAM runtime glue
+sudo <prefix>-netdiag               # network / provider diagnostics
 sudo <prefix>-weekly-maintenance.sh # run the weekly maintenance pass by hand
 ```
 

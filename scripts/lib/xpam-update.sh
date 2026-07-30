@@ -599,7 +599,11 @@ xpam_update_postcheck(){
     xpam_update_log "postcheck: old install launcher exists"
     return 1
   fi
-  for c in health links repair netdiag; do
+  # Only the commands the kit guarantees to write. `netdiag` used to be in this list and was not
+  # taken out when the launcher was dropped, so the updater demanded a file the same release had just
+  # deleted — every update failed its own postcheck and rolled back. Whatever is listed here MUST be
+  # written by write_health_weekly; make-release.sh enforces that as a gate.
+  for c in health links repair; do
     [[ -x "/usr/local/sbin/${prefix}-${c}" ]] || { xpam_update_log "postcheck: ${prefix}-${c} missing"; return 1; }
     bash -n "/usr/local/sbin/${prefix}-${c}" || return 1
   done

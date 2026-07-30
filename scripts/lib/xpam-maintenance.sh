@@ -107,7 +107,8 @@ final_production_cleanup(){
   remove_legacy_vless_launcher || true
   remove_legacy_tg_launcher || true
   write_repair_launcher || true
-  remove_legacy_status_netdiag_launchers || true
+  remove_legacy_status_launcher || true
+  write_netdiag_launcher || true
   write_health_weekly || true
 
   post_install_cleanup || true
