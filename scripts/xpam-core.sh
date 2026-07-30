@@ -4942,11 +4942,13 @@ xpam_setup_menu(){
 # sub-areas (Telegram, WARP, DoubleHop, sites, advanced→transports) keep their OWN internal loop, which
 # is where "do something, then continue with another item" belongs. Only invalid input re-prompts.
 xpam_operational_menu(){
-  local choice prefix
-  prefix="$(xpam_menu_prefix)"
+  local choice
   while true; do
     printf '\033[0m'
-    echo "XPAM Script ${prefix:+$prefix }${KIT_VERSION}"
+    # Product name and version only. The server prefix used to be spliced in here
+    # ("XPAM Script lt v1.4.0"), which read as if "lt" were part of the name or the version rather
+    # than the name of the box. The prefix is already visible in every command the menu documents.
+    echo "XPAM Script ${KIT_VERSION}"
     echo "1) Показать данные для подключения"
     echo "2) Проверить состояние сервера"
     echo "3) Telegram-уведомления"
