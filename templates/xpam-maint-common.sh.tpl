@@ -2003,28 +2003,23 @@ xpam_xui_version_compat_check(){
     else
         echo "WARNING: /usr/local/x-ui/bin/xray-linux-amd64 missing or not executable"
     fi
-    # XPAM last-validated baseline. INFO only -- NO warn/fail/notify: a newer 3x-ui/Xray that
-    # still passes the functional checks above is fine, so the version number alone never alarms
-    # the user. This line is diagnostic (maintainer + auto-test). BUMP both values after a
-    # fresh-install + deep-health test passes on a newer 3x-ui.
-    local LV_XUI="3.5.0" LV_XRAY="26.7.11" xui_sem xray_sem
-    xui_sem="$(printf '%s' "${xui_ver:-}"  | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
-    xray_sem="$(printf '%s' "${xray_ver:-}" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
-    echo "INFO: XPAM last-validated baseline: 3x-ui ${LV_XUI} / Xray ${LV_XRAY} (functional checks above are authoritative)"
-    if [ -n "$xui_sem" ]; then
-        if [ "$xui_sem" = "$LV_XUI" ]; then
-            echo "INFO: installed 3x-ui ${xui_sem} matches XPAM last-validated baseline"
-        else
-            echo "INFO: installed 3x-ui ${xui_sem} differs from baseline ${LV_XUI}"
-        fi
-    fi
-    if [ -n "$xray_sem" ]; then
-        if [ "$xray_sem" = "$LV_XRAY" ]; then
-            echo "INFO: installed Xray ${xray_sem} matches XPAM last-validated baseline"
-        else
-            echo "INFO: installed Xray ${xray_sem} differs from baseline ${LV_XRAY}"
-        fi
-    fi
+    # NO "last-validated baseline" here, deliberately — do not reintroduce one.
+    #
+    # There used to be hardcoded LV_XUI/LV_XRAY values plus four lines comparing them to what is
+    # installed. Removed 2026-07-30 because they were pure decoration with a real maintenance cost:
+    #   * XPAM neither installs, pins nor controls Xray — 3x-ui pulls it, and the operator can change
+    #     it from the panel. Xray's version is a detail of 3x-ui's implementation, not our contract.
+    #   * Nothing in this kit ever branched on either version. All six references were `echo`.
+    #   * 3x-ui updates Xray on its own schedule, so "differs from baseline" would be the NORMAL
+    #     state — an INFO line that is wrong by default is noise, which is what D-8 exists to prevent.
+    #   * A functional break (Vision, fallbacks, xhttp, grpc) surfaces in the checks above, not in a
+    #     version string. The old comment admitted this: "functional checks above are authoritative".
+    #   * It cost a release step: the pair was bump place #6 and dragged the "only after a clean-box
+    #     run on the new 3x-ui" constraint into the version bump.
+    # Provenance of the kit itself lives where it belongs: BUILD_INFO inside the archive (version,
+    # commit, tag, dirty), plus CHANGELOG and git history. Which OS releases are supported is a
+    # product property stated once in README/docs/TESTING.md, not a per-release fact.
+    # What DOES belong here is the observed state of THIS box — printed above, unconditionally.
     if [ -f "$cfg" ]; then
         mode="$(stat -c '%a' "$cfg" 2>/dev/null || echo unknown)"
         case "$mode" in

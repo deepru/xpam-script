@@ -12,7 +12,6 @@ XPAM Script прошёл полное тестирование на:
 - установка на чистый VPS;
 - создание и использование основной команды `sudo <prefix>-xpam`;
 - получение данных подключения через `sudo <prefix>-links` и краткой сводки через `sudo <prefix>-links --safe`;
-- получение полных данных подключения через `sudo <prefix>-links`;
 - VLESS-подключение;
 - отображение VLESS links из текущей конфигурации 3x-ui;
 - Telegram proxy / MTG-подключение;
@@ -36,7 +35,7 @@ XPAM Script прошёл полное тестирование на:
 sudo <prefix>-health
 sudo <prefix>-health --deep
 sudo <prefix>-links
-sudo <prefix>-links
+sudo <prefix>-links --safe
 ```
 
 `sudo <prefix>-links` показывает актуальные VLESS/Telegram links из текущей конфигурации 3x-ui и содержит приватные данные. `sudo <prefix>-links --safe` печатает краткую сводку без секретов.
