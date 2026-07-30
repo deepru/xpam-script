@@ -72,4 +72,8 @@ tg.example.com
 
 ## Release documentation
 
-For public testing wording, state that the release was tested on Ubuntu and Debian, including Debian 13 and Ubuntu 26.04. Do not expose internal stage names or validation stage matrices as the public testing story.
+State supported platforms as **Ubuntu and Debian**, with no version numbers. That matches what the code actually enforces: `require_os` accepts a distribution by `ID` only and applies no version floor or ceiling, and health checks deliberately avoid pinning to a `VERSION_ID` so newer releases cannot false-FAIL. Naming specific releases would therefore understate real compatibility, and it decays — a pair of version numbers that reads as "current" today reads as "abandoned" once the next releases ship, while the code keeps working. Supported platforms are a **product property**: state them once (README, `docs/`, `TESTING.md`), not per release.
+
+Do not expose internal stage names, validation stage matrices, or "what we tested against" as the public testing story — that includes third-party component versions such as the 3x-ui or Xray build a release happened to be developed on. The user's concern is whether the product works on their server, not our test log. Kit provenance belongs in `BUILD_INFO`, the changelog and git history.
+
+Dated version numbers are fine in two places: historical changelog entries (a past release legitimately describes what it was verified against) and examples inside an error message aimed at someone who has already hit the problem.
