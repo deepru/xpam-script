@@ -103,7 +103,7 @@ if ! xpam_failed_units_check; then
     FAIL=1
 fi
 
-uptime
+printf 'Аптайм: %s\n' "$(uptime -p 2>/dev/null || uptime)"
 svc_fail_before="$FAIL"
 for svc in nginx x-ui fail2ban certbot.timer cron; do check_active "$svc"; done
 if ! xpam_ufw_runtime_check; then FAIL=1; fi

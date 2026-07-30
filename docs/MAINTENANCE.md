@@ -34,15 +34,18 @@ sudo <prefix>-weekly-maintenance.sh
 sudo <prefix>-netdiag
 ```
 
-The same check is available from the menu:
+The same action is available from the menu: `sudo <prefix>-xpam` →
+`Дополнительно / обслуживание` → `Диагностика сети Debian/провайдера`.
 
-```bash
-sudo <prefix>-xpam
-```
+This does not diagnose anything by itself and prints no verdict: it collects a snapshot of the
+server's network state — OS, failed units, `networking.service` and its journal, interfaces,
+addresses, routes, `/etc/network/interfaces`, resolver state and the XPAM DNS-policy check — into
+`/var/log/xpam-script/netdiag/<prefix>-<timestamp>/netdiag.txt`, mode `600`, and prints the path. Read
+that file.
 
-Open `Дополнительно / обслуживание` → `Диагностика сети Debian/провайдера`.
-
-Use it when DNS, TLS, routing or connectivity checks fail.
+Use it when the server misbehaves specifically on the network, or when you need to hand someone the
+whole picture at once. The file contains the server and gateway IPs, DNS addresses and your domains —
+review it before sharing. For a plain "is the server healthy" verdict use `sudo <prefix>-health --deep`.
 
 ## Safe self-update
 

@@ -4842,8 +4842,45 @@ stage_netdiag(){
     echo "===== DNS check ====="; /usr/local/sbin/check-dns-policy.sh 2>&1 || true
   } > "$log"
   chmod 600 "$log" 2>/dev/null || true
-  ok "Диагностика сети сохранена: $log"
-  echo "Файл может содержать IP-адреса и имена доменов. Не публикуйте его без проверки."
+
+  # On-screen summary. The command used to print only the path, so it looked like it had done
+  # nothing while the answers people actually want were sitting in the file. The full dump still
+  # goes to the file (it is what you hand to someone else); the essentials are shown here.
+  # Every extraction is `|| true`: the kit runs under `set -Eeuo pipefail`, and a grep that finds
+  # nothing is a normal outcome here, not a failure.
+  local nd_if nd_ip nd_gw nd_dns nd_net nd_failed nd_dnsres nd_domres
+  nd_if="$(ip -4 route show default 2>/dev/null | awk '{print $5; exit}' || true)"
+  nd_ip="$(ip -4 -br addr show "${nd_if:-lo}" 2>/dev/null | awk '{print $3; exit}' || true)"
+  nd_gw="$(ip -4 route show default 2>/dev/null | awk '{print $3; exit}' || true)"
+  nd_dns="$(resolvectl status 2>/dev/null | sed -n 's/^[[:space:]]*DNS Servers:[[:space:]]*//p' | head -1 || true)"
+  [[ -n "$nd_dns" ]] || nd_dns="$(sed -n 's/^nameserver[[:space:]]*//p' /etc/resolv.conf 2>/dev/null | tr '\n' ' ' || true)"
+  nd_net="$(systemctl is-active networking 2>/dev/null || true)"
+  nd_failed="$(systemctl --failed --no-legend --no-pager 2>/dev/null | grep -c . || true)"
+  nd_dnsres="$(grep -q 'DNS-проверка пройдена' "$log" 2>/dev/null && echo 'пройдена' || echo 'см. отчёт')"
+  # Count real complaints instead of asserting a verdict. An earlier draft grepped for
+  # "привязан к localhost", which matches BOTH the OK line ("не привязан…") and the failure — it
+  # would have reported "проверены" while the check was failing.
+  nd_domres="$(grep -cE '^(FAIL|WARN|WARNING):' "$log" 2>/dev/null || true)"
+
+  # Labels are padded with literal spaces, NOT `printf %-Ns`: bash printf counts BYTES, and Cyrillic
+  # is two bytes per character in UTF-8, so a %-22s column skews by the length of the label. That is
+  # exactly how the first version of this summary came out crooked.
+  echo
+  echo "===== Кратко ====="
+  echo "  Интерфейс:      ${nd_if:-?}${nd_ip:+ — $nd_ip}"
+  echo "  Шлюз:           ${nd_gw:-не найден}"
+  echo "  DNS-серверы:    ${nd_dns:-не определены}"
+  echo "  networking:     ${nd_net:-unknown}"
+  echo "  Упавшие юниты:  $([[ "${nd_failed:-0}" -eq 0 ]] && echo 'нет' || echo "${nd_failed}")"
+  echo "  Проверка DNS:   ${nd_dnsres}"
+  echo "  Замечания:      $([[ "${nd_domres:-0}" -eq 0 ]] && echo 'нет' || echo "${nd_domres} — см. отчёт")"
+  if [[ "${nd_failed:-0}" -ne 0 ]]; then
+    echo
+    systemctl --failed --no-legend --no-pager 2>/dev/null | sed 's/^/  ! /' || true
+  fi
+  echo
+  ok "Полный отчёт сохранён: $log"
+  echo "В нём есть IP-адреса, шлюз, DNS и ваши домены. Не публикуйте его без проверки."
 }
 
 stage_advanced_menu(){

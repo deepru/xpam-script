@@ -191,8 +191,7 @@ xpam_config_snapshot(){
 
     chmod 600 "$snapshot"
 
-    echo "OK: config snapshot created: $snapshot"
-    ls -lh "$snapshot"
+    echo "OK: config snapshot created: $snapshot ($(du -h "$snapshot" 2>/dev/null | cut -f1))"
     find "$backup_dir" -maxdepth 1 -type f -name "${prefix}-config-*.tar.gz" -printf '%T@ %p
 ' 2>/dev/null | sort -nr | awk -v keep="$keep" 'NR>keep {print $2}' | xargs -r rm -f
     echo "OK: keeping latest $keep snapshots for prefix $prefix"
@@ -528,16 +527,52 @@ xpam_debian_networking_provider_warning_ok(){
 }
 
 xpam_tls_endpoint_check(){
+    # One aligned row per endpoint instead of the previous six-line `openssl x509` dump. On a
+    # root-profile box four of the five endpoints serve the SAME certificate, so the old output
+    # repeated one subject/issuer/dates/SAN block four times — about 30 lines saying the same thing.
+    # The checks are unchanged; failures still print an explicit FAIL line with the detail.
+    # Column padding is ASCII-only (bash printf pads by bytes, so a Cyrillic column would skew).
     local label="$1" host="$2" port="$3" sni="$4" expected_dns="$5" cert_file info_file fail=0
-    echo; echo "--- $label: ${host}:${port} SNI ${sni}, expect DNS:${expected_dns}"
+    local not_after days_left note=""
     cert_file="$(mktemp /tmp/tls-cert.XXXXXX)"; info_file="$(mktemp /tmp/tls-info.XXXXXX)"
     timeout 12 bash -c "echo | openssl s_client -connect '${host}:${port}' -servername '${sni}' -showcerts 2>/dev/null" | awk '/-----BEGIN CERTIFICATE-----/ {p=1} p {print} /-----END CERTIFICATE-----/ {exit}' > "$cert_file" || true
-    [ -s "$cert_file" ] || { echo "FAIL: no certificate received"; rm -f "$cert_file" "$info_file"; return 1; }
-    openssl x509 -in "$cert_file" -noout -subject -issuer -dates -ext subjectAltName > "$info_file" 2>&1 || { echo "FAIL: cannot parse certificate"; cat "$info_file"; rm -f "$cert_file" "$info_file"; return 1; }
-    cat "$info_file"
-    grep -Fq "DNS:${expected_dns}" "$info_file" && echo "OK: expected DNS name found: ${expected_dns}" || { echo "FAIL: expected DNS name not found: ${expected_dns}"; fail=1; }
-    openssl x509 -in "$cert_file" -checkend 1209600 -noout >/dev/null 2>&1 && echo "OK: certificate is valid for more than 14 days" || { echo "FAIL: certificate expires within 14 days"; fail=1; }
-    openssl x509 -in "$cert_file" -checkend 2592000 -noout >/dev/null 2>&1 || echo "WARNING: certificate expires within 30 days"
+    if [ ! -s "$cert_file" ]; then
+        printf '  %-22s %-24s %s\n' "$label" "$sni" "FAIL"
+        echo "FAIL: no certificate received from ${host}:${port} (SNI ${sni})"
+        rm -f "$cert_file" "$info_file"; return 1
+    fi
+    if ! openssl x509 -in "$cert_file" -noout -subject -issuer -dates -ext subjectAltName > "$info_file" 2>&1; then
+        printf '  %-22s %-24s %s\n' "$label" "$sni" "FAIL"
+        echo "FAIL: cannot parse certificate from ${host}:${port}"; cat "$info_file"
+        rm -f "$cert_file" "$info_file"; return 1
+    fi
+
+    if ! grep -Fq "DNS:${expected_dns}" "$info_file"; then
+        fail=1; note="нет имени ${expected_dns}"
+    fi
+    if ! openssl x509 -in "$cert_file" -checkend 1209600 -noout >/dev/null 2>&1; then
+        fail=1; note="${note:+$note; }истекает в течение 14 дней"
+    elif ! openssl x509 -in "$cert_file" -checkend 2592000 -noout >/dev/null 2>&1; then
+        note="${note:+$note; }истекает в течение 30 дней"
+    fi
+
+    not_after="$(sed -n 's/^notAfter=//p' "$info_file" | head -1)"
+    days_left=""
+    if [ -n "$not_after" ]; then
+        local end_ts now_ts
+        end_ts="$(date -d "$not_after" +%s 2>/dev/null || true)"
+        now_ts="$(date +%s)"
+        [ -n "$end_ts" ] && days_left="$(( (end_ts - now_ts) / 86400 ))"
+    fi
+
+    printf '  %-22s %-24s %-4s %s\n' "$label" "$sni" \
+        "$([ "$fail" -eq 0 ] && echo OK || echo FAIL)" \
+        "${days_left:+ещё ${days_left} дн.}${note:+ — $note}"
+
+    # Keep an explicit, greppable line for anything that is not clean.
+    [ "$fail" -eq 0 ] || echo "FAIL: certificate problem for ${label} (SNI ${sni}): ${note}"
+    if [ "$fail" -eq 0 ] && [ -n "$note" ]; then echo "WARNING: ${label} (SNI ${sni}): ${note}"; fi
+
     rm -f "$cert_file" "$info_file"; return "$fail"
 }
 xpam_tls_cert_check(){
@@ -545,6 +580,7 @@ xpam_tls_cert_check(){
     # shellcheck disable=SC1090
     . "$cfg"
     echo; echo "===== TLS / CERTIFICATE CONSISTENCY CHECK ====="
+    printf '  %-22s %-24s %-4s %s\n' "endpoint" "SNI" "" "срок действия"
     xpam_tls_endpoint_check "x-ui panel" "127.0.0.1" "$XUI_PANEL_PORT" "$PRIMARY_DOMAIN" "$PRIMARY_DOMAIN" || fail=1
     xpam_tls_endpoint_check "xray vless" "127.0.0.1" "$XRAY_LOCAL_PORT" "$PRIMARY_DOMAIN" "$PRIMARY_DOMAIN" || fail=1
     if [ "$PROFILE" = "root_mtproto" ]; then
@@ -558,12 +594,11 @@ xpam_tls_cert_check(){
 xpam_port_exposure_check(){
     local cfg="$1"
     echo; echo "===== PORT EXPOSURE CHECK ====="
-    echo "--- IPv4 TCP listeners ---"
-    ss -H -4 -lntp 2>/dev/null || true
-    echo "--- IPv6 TCP listeners ---"
-    ss -H -6 -lntp 2>/dev/null || true
-    echo "--- UDP listeners ---"
-    ss -H -lnup 2>/dev/null || true
+    # The listener listing is produced inside the Python block below, where the config is already
+    # parsed and each port can be named. It used to be three raw `ss` dumps here, which printed
+    # Recv-Q/Send-Q, a constant peer column and a `users:(("proc",pid=…,fd=…))` tail for every
+    # socket — far past the terminal width and padded with trailing spaces. None of the checks
+    # changed; only how the listeners are shown.
     python3 - "$cfg" <<'PY_PORT'
 import re, subprocess, sys
 from pathlib import Path
@@ -675,6 +710,76 @@ tcp4_rows=parse_ss(['ss','-H','-4','-lnt'], 'ipv4', 'tcp')
 tcp6_rows=parse_ss(['ss','-H','-6','-lnt'], 'ipv6', 'tcp')
 udp_rows=parse_ss(['ss','-H','-lnup'], 'any', 'udp')
 tcp_rows=tcp4_rows+tcp6_rows
+
+# --- listener listing (display only; every verdict below is unchanged) ---------------------
+# Padding is done by Python's %-formatting, which counts CHARACTERS. Shell printf pads by BYTES
+# and would misalign the Cyrillic column, which is exactly how the old summary broke.
+def _proc_by_port():
+    m={}
+    try:
+        out=subprocess.check_output(['ss','-H','-lntup'], text=True, stderr=subprocess.DEVNULL)
+    except Exception:
+        return m
+    for line in out.splitlines():
+        pm=re.search(r'users:\(\("([^"]+)"', line)
+        if not pm:
+            continue
+        for cand in line.split()[3:7]:
+            pp=re.search(r':(\d+)$', cand)
+            if pp:
+                m.setdefault(int(pp.group(1)), pm.group(1))
+                break
+    return m
+
+_procs=_proc_by_port()
+_labels={}
+for _key,_text in (('SSH_PUBLIC_PORT','SSH'),
+                   ('HTTP_PUBLIC_PORT','HTTP, выпуск сертификатов'),
+                   ('XRAY_PUBLIC_PORT','HTTPS: VLESS, Telegram, сайты'),
+                   ('XUI_PANEL_PORT','панель 3x-ui'),
+                   ('XRAY_LOCAL_PORT','VLESS'),
+                   ('SITE_BACKEND_PORT','сайт-маскировка'),
+                   ('SYNC_BACKEND_PORT','TLS для Telegram'),
+                   ('MTPROTO_PORT','Telegram proxy'),
+                   ('XRAY_ALT_PORT','запасной транспорт'),
+                   ('NGINX_ALT_TLS_PORT','запасной транспорт, TLS')):
+    try:
+        _labels[int(cfg[_key])]=_text
+    except (KeyError, ValueError):
+        pass
+
+# `ss` truncates the process name to 15 characters ("xray-linux-amd6"), and a port with no config
+# entry would otherwise show a blank purpose, which reads like something unaccounted for. Both are
+# cosmetic only.
+_short={'xray-linux-amd6':'xray','xray-linux-amd64':'xray','mtg-linux-amd64':'mtg',
+        'systemd-resolve':'systemd-resolved'}
+_by_proc={'xray':'служебный порт Xray','mtg':'служебный порт Telegram proxy',
+          'systemd-resolved':'локальный DNS'}
+
+def _listing(want_public):
+    seen=set(); out=[]
+    for r in sorted(tcp_rows+udp_rows, key=lambda x:(x['port'], x['proto'], x['local'])):
+        if (not loop(r['host'])) != want_public:
+            continue
+        key=(r['port'], r['proto'])
+        if key in seen:
+            continue
+        seen.add(key)
+        proc=_procs.get(r['port'],'—')
+        proc=_short.get(proc, proc)
+        purpose=_labels.get(r['port']) or _by_proc.get(proc,'')
+        out.append((r['port'], r['proto'], proc, purpose))
+    return out
+
+for _title,_pub in (('Публичные', True), ('Локальные, только 127.0.0.1', False)):
+    print(f'  {_title}:')
+    _rows=_listing(_pub)
+    if not _rows:
+        print('    (нет)')
+    for _p,_proto,_proc,_text in _rows:
+        print('    %-8s %-4s %-17s %s' % (':%d' % _p, _proto, _proc, _text))
+    print('')
+
 fail=False
 
 def public_ipv4_host(h):
@@ -787,10 +892,12 @@ if allow_v6:
     print(f'  IPv6: {tls}/tcp allowed; {ssh}/tcp and {http}/tcp should be absent unless intentionally opened')
 else:
     print('  IPv6: no public TCP rules expected from XPAM Script')
+# `ufw status` pads every rule to a fixed width, so printing its lines verbatim left a ragged block
+# with trailing spaces. Same information, squeezed.
 print('\nCurrent relevant UFW rules:')
 for ln in status.splitlines():
     if any(tok in ln for tok in (f'{ssh}/tcp', f'{http}/tcp', f'{tls}/tcp')):
-        print(ln)
+        print('  ' + ' '.join(ln.split()))
 lines=status.splitlines()
 def has_rule(port, v6=None):
     needle=f'{port}/tcp'
