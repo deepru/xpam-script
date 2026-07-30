@@ -894,7 +894,7 @@ EOF_ROOT_SITE_BLOCK
     # which serves our themed 404 (that headline is identical in every archetype). A bring-your-own
     # site has no such marker, so the check stays silent rather than crying wolf.
     export ALT_HEALTH_BLOCK="check_http \"${VLESS_ALT_DOMAIN}/ (${VLESS_ALT_TRANSPORT} decoy)\" 200 \"https://${VLESS_ALT_DOMAIN}/\"
-ss -ltn 2>/dev/null | grep -q '127.0.0.1:${XRAY_ALT_PORT}' && echo \"OK: alt ${VLESS_ALT_TRANSPORT} inbound listening on 127.0.0.1:${XRAY_ALT_PORT}\" || warn_fail \"alt ${VLESS_ALT_TRANSPORT} inbound not listening on 127.0.0.1:${XRAY_ALT_PORT}\"
+if ss -ltn 2>/dev/null | grep -q '127.0.0.1:${XRAY_ALT_PORT}'; then echo \"OK: alt ${VLESS_ALT_TRANSPORT} inbound listening on 127.0.0.1:${XRAY_ALT_PORT}\"; elif [ \"\$(sqlite3 /etc/x-ui/x-ui.db 'select count(*) from inbounds where port=${XRAY_ALT_PORT};' 2>/dev/null || echo 0)\" = \"0\" ]; then warn_fail \"запасной транспорт ${VLESS_ALT_TRANSPORT} настроен в config.env, но его инбаунда НЕТ в базе 3x-ui. Обычно это следствие 'repair --full' из снапшота, снятого до включения транспорта: база восстанавливается, а config.env — нет. Включите транспорт заново (меню: Дополнительно → Транспорты VLESS; ссылка обновится) либо выключите его там же. Основные VLESS/Telegram-подключения не затронуты.\"; else warn_fail \"alt ${VLESS_ALT_TRANSPORT} inbound not listening on 127.0.0.1:${XRAY_ALT_PORT} (инбаунд есть в базе — проверьте, запущен ли x-ui и перечитал ли Xray конфигурацию)\"; fi
 if curl -ksS --max-time 12 \"https://${VLESS_ALT_DOMAIN}/${VLESS_ALT_PATH}\" 2>/dev/null | grep -q 'This page could not be found'; then warn_fail \"alt secret path falls through to the decoy — nginx is NOT routing it to Xray\"; else echo \"OK: alt secret path is routed to Xray (not the decoy)\"; fi"
   else
     export HAPROXY_ALT_ACL=""
@@ -4005,6 +4005,12 @@ warp_auto_register(){
   ok "Backup 3x-ui DB создан: $backup"
   prune_keep_latest "$backup_dir" "x-ui.db.*" 4
 
+  # A clean 3x-ui install has no settings.xrayTemplateConfig row yet, and the outbound writer below
+  # requires it. DoubleHop has always materialized it; WARP did not, which made WARP impossible to
+  # configure on a fresh box (account registered, outbound not created). Idempotent no-op when the
+  # row already exists. Guard tag "warp" so we never materialize from an already-WARPed runtime.
+  dh_materialize_xray_template_if_missing warp || { rm -f -- "$reg_file"; fail "Не удалось подготовить xrayTemplateConfig для WARP"; }
+
   export XPAM_XUI_DB="$db" XPAM_WARP_REG_FILE="$reg_file"
   python3 <<'PY_XPAM_WARP_INJECT'
 import base64, json, os, sqlite3, sys
@@ -4330,6 +4336,11 @@ xui_warp_youtube_fix(){
   chmod 600 "$backup" 2>/dev/null || true
   ok "Backup 3x-ui DB создан: $backup"
   prune_keep_latest "$backup_dir" "x-ui.db.*" 4
+
+  # Same reason as in warp_auto_register: this normalizer is reachable on its own (WARP menu item 2
+  # "only verify/normalize", and repair's drift healing) and it reads settings.xrayTemplateConfig,
+  # which a clean 3x-ui install has not created yet. Idempotent when the row already exists.
+  dh_materialize_xray_template_if_missing warp || fail "Не удалось подготовить xrayTemplateConfig для WARP"
 
   export XPAM_XUI_DB="$db" XPAM_EXPECTED_XRAY_PORT="$expected_port"
   python3 <<'PY_XUI_WARP_FIX'
@@ -4667,6 +4678,25 @@ xpam_repair_restore_db_from_snapshot(){
 
   warn "Full restore will REPLACE the current 3x-ui database with snapshot: $label"
   warn "Clients / inbounds / secrets created AFTER that snapshot will be LOST."
+  # Spare transport is the one thing a DB-only restore cannot bring back consistently: config.env
+  # (which says the transport is on, and holds its secret path) is NOT restored here, while the
+  # inbound and its client UUID live only in the DB. If this snapshot predates the transport, the
+  # box would come back with "configured but no inbound" and deep-health would fail until the
+  # operator acts. Say so BEFORE the confirmation instead of after the fact. We deliberately do not
+  # auto-recreate the inbound: a new inbound means a new client UUID, i.e. silently changing a link
+  # the user already has — worse than failing loudly.
+  if [[ -n "${VLESS_ALT_TRANSPORT:-}" && -n "${XRAY_ALT_PORT:-}" ]]; then
+    local snap_alt_rows
+    snap_alt_rows="$(sqlite3 "$restored" "select count(*) from inbounds where port=${XRAY_ALT_PORT};" 2>/dev/null || echo 0)"
+    if [[ "${snap_alt_rows:-0}" == "0" ]]; then
+      echo
+      warn "В этом снапшоте НЕТ инбаунда запасного транспорта (${VLESS_ALT_TRANSPORT} на ${VLESS_ALT_DOMAIN:-<домен>})."
+      warn "После восстановления запасной транспорт придётся включить заново через меню:"
+      warn "  Дополнительно → Транспорты VLESS. Ссылка запасного транспорта при этом ОБНОВИТСЯ."
+      warn "Основные VLESS/Telegram-подключения из снапшота не затрагиваются."
+      echo
+    fi
+  fi
   read -r -p "Type restore-full to confirm: " confirm || true
   [[ "$confirm" == "restore-full" ]] || { rm -rf "$tmp"; fail "Full restore cancelled"; }
 

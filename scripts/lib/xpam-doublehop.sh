@@ -477,14 +477,25 @@ dh_prompt_and_save_exit_link(){
 
 # ---------- DB mutation ----------
 
+# Materialize settings.xrayTemplateConfig when 3x-ui has not created it yet.
+#
+# A clean 3x-ui install (confirmed on 3.6.0, 2026-07-30) runs Xray normally while that persistent row
+# is still absent — it only appears once something saves the Xray config. Every XPAM feature that
+# mutates the template needs it to exist first: DoubleHop (routing rules) and WARP (the tag=warp
+# outbound). DoubleHop always called this; WARP did not, so on a fresh box WARP registered the
+# Cloudflare account and then died with "setting xrayTemplateConfig не найден в 3x-ui DB", leaving an
+# account with no outbound. Found by the clean-box acceptance run.
+#
+# Keeps only the API inbound (tag 'api', any protocol); proxy inbounds stay owned by the 3x-ui
+# inbounds table and get re-rendered by 3x-ui. Preserves outbounds/routing/policy/log/stats.
+# Idempotent: if the row already exists and parses, it prints "already present" and returns 0.
+#
+# $1 = guard tag: refuse to materialize from a generated config that already contains this tag (i.e.
+# from an already-mutated runtime). Defaults to the DoubleHop exit tag so existing callers are
+# unchanged; the WARP path passes "warp".
 dh_materialize_xray_template_if_missing(){
-  # Some current/clean 3x-ui installs can run Xray normally while the
-  # persistent settings.xrayTemplateConfig row is still absent. DoubleHop
-  # mutates that persistent template, so materialize a safe template from the
-  # generated config before DH mutation.  Keep only the API inbound (identified by
-  # tag 'api', any protocol) in the template; proxy inbounds remain managed by the 3x-ui inbounds table and
-  # will be re-rendered by 3x-ui. Preserve outbounds/routing/policy/log/stats.
-  XPAM_DH_EXIT_TAG="$DH_EXIT_TAG" python3 - <<'PY_DH_MATERIALIZE'
+  local guard_tag="${1:-$DH_EXIT_TAG}"
+  XPAM_DH_EXIT_TAG="$guard_tag" python3 - <<'PY_DH_MATERIALIZE'
 import json, os, sqlite3, sys
 from pathlib import Path
 
@@ -523,7 +534,7 @@ try:
 
     # Do not materialize from an already-mutated DoubleHop runtime config.
     if tag in json.dumps(cfg, ensure_ascii=False):
-        fail('generated config already contains DoubleHop state; refusing automatic materialize')
+        fail(f'generated config already contains {tag!r} state; refusing automatic materialize')
 
     generated_inbounds=cfg.get('inbounds')
     if not isinstance(generated_inbounds, list):
