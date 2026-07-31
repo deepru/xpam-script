@@ -221,7 +221,12 @@ verify_tree(){
       echo "       documents the migration on purpose."
       fail=1
     fi
+  # Internal, git-ignored files are not public documentation and are exempt: handoff/ is the private
+  # context set, and CLAUDE.md is the agent briefing — both legitimately name removed commands while
+  # explaining the migration, and neither ships to anyone.
   done < <(find "$root" -path "$root/handoff" -prune -o \
+                        -name 'CLAUDE.md' -prune -o \
+                        -name 'CLAUDE.local.md' -prune -o \
                         -type f \( -name '*.md' -o -name '*.yml' -o -name '*.yaml' \) \
                         -not -path "*/sites/*" -print0)
   [[ "$fail" -eq 0 ]] || die "public-docs gate failed (see above)"
