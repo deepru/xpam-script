@@ -259,7 +259,7 @@ def check_alt_vision_gates(where, settings, clients):
     #   1. decryption == "none"  -> vlessEncryptionEnabled() is false -> xhttp is not eligible;
     #   2. the alt client's email differs from the primary's (checked across payloads below)
     #      -> there is no sibling row to inherit Vision from.
-    # See handoff/3XUI_3.5.0_VS_XPAM.md §6.6 and PROJECT_AUDIT.md §6 row 19.
+    # See handoff/3XUI_VS_XPAM.md §6.6 and PROJECT_AUDIT.md §6 row 19.
     if settings.get("decryption") != "none":
         fail(where, "alt inbound settings.decryption must be 'none' (VLESS encryption would make "
                     "an xhttp inbound flow-eligible and 3x-ui would inject xtls-rprx-vision, which "

@@ -1643,7 +1643,7 @@ if db_inb:
 # or xhttp WITH VLESS-level encryption, so `decryption:"none"` is what keeps us out — and a distinct
 # client email means there is no sibling row to inherit Vision from either. Assert both on the LIVE
 # row, because the offline payload gate (tests/payload-smoke.sh) only covers what we create, not what
-# the panel may have rewritten since. Details: handoff/3XUI_3.5.0_VS_XPAM.md §6.6.
+# the panel may have rewritten since. Details: handoff/3XUI_VS_XPAM.md §6.6.
 alt_port_raw=str(cfg.get('XRAY_ALT_PORT') or '').strip()
 if cfg.get('VLESS_ALT_TRANSPORT') and cfg.get('VLESS_ALT_DOMAIN') and alt_port_raw.isdigit():
     alt_port=int(alt_port_raw)
