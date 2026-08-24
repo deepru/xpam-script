@@ -272,6 +272,7 @@ xpam_release_upgrade_guard(){
 
 xpam_guarded_full_upgrade(){
     local prefix="${1:-server}"
+    local sim_log sim_rc
     xpam_apt_dpkg_recovery "$prefix full-upgrade" || return 1
 
     echo
@@ -279,8 +280,35 @@ xpam_guarded_full_upgrade(){
     xpam_apt_get_safe "$prefix apt update" update || return 1
 
     echo
-    echo "===== APT FULL-UPGRADE SIMULATION ====="
-    apt-get -s full-upgrade | tail -120 || return 1
+    echo "===== APT FULL-UPGRADE SIMULATION (informational) ====="
+    # NEVER fatal. `apt-get -s` runs apt's own simulator (pkgSimulate), which models
+    # Breaks/Replaces far more crudely than real dpkg and rejects orderings dpkg then
+    # carries out without trouble. Seen 2026-08-24: the archive had just gained
+    # sudo-common (Breaks: sudo << 1.9.17p2-1ubuntu2~) while the box still had the older
+    # sudo, apt ordered `Conf sudo-common` ahead of `Inst sudo`, and the simulator
+    # aborted with "Conf Broken sudo-common" -- yet the real transaction then ran to
+    # completion with exit 0 and left both packages configured. Treating that prediction
+    # as fatal aborted the whole install on a perfectly healthy system, and would do so
+    # on any Ubuntu/Debian caught mid package-split. The real full-upgrade below is the
+    # authoritative operation and carries its own retry/recovery via xpam_apt_get_safe.
+    #
+    # Output goes through a file rather than a pipe on purpose: the exit status must not
+    # depend on whether the caller happens to have `pipefail` set (xpam-core.sh does,
+    # weekly.sh does not -- which is why the identical line used to be fatal at install
+    # time and harmless during weekly maintenance). Folding stderr in also keeps apt's
+    # E: lines in order with the plan instead of racing ahead of it.
+    sim_log="$(mktemp /tmp/${prefix}-full-upgrade-sim.XXXXXX)"
+    sim_rc=0
+    apt-get -s full-upgrade > "$sim_log" 2>&1 || sim_rc=$?
+    tail -120 "$sim_log"
+    rm -f "$sim_log"
+    if [ "$sim_rc" -eq 0 ]; then
+        echo "OK: upgrade plan simulated cleanly"
+    else
+        echo "INFO: apt's simulator rejected the plan (exit $sim_rc) - NOT fatal"
+        echo "INFO: pkgSimulate models Breaks/Replaces more crudely than dpkg; the real"
+        echo "INFO: full-upgrade below decides, and a genuine failure is reported there"
+    fi
 
     echo
     echo "===== GUARDED APT FULL-UPGRADE ====="

@@ -4,7 +4,7 @@ set -Eeuo pipefail
 KIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Derive the displayed version from the VERSION file so it never goes stale between releases.
 KIT_VERSION="v$(head -n1 "${KIT_DIR}/VERSION" 2>/dev/null | tr -d '[:space:]' || true)"
-[[ "$KIT_VERSION" == v?* ]] || KIT_VERSION="v1.4.0"
+[[ "$KIT_VERSION" == v?* ]] || KIT_VERSION="v1.4.1"
 CONFIG_DIR="/etc/xpam-script"
 CONFIG_FILE="${CONFIG_DIR}/config.env"
 PREFIX_BOOTSTRAP_FILE="${CONFIG_DIR}/prefix.env"
@@ -246,8 +246,8 @@ xui_assert_sqlite_backend(){
 # Why this exists: `cp` of a database a running process is writing to is only sound while SQLite is
 # in rollback-journal mode, where every committed transaction is already inside x-ui.db. 3x-ui v3.5.0
 # pins `_journal_mode=DELETE`, so plain copies were fine — but upstream has since made the mode
-# configurable and defaults it to **WAL** (internal/database/db.go, sqliteJournalMode(); no release
-# tag yet). Under WAL recent commits live in x-ui.db-wal until a checkpoint, so a plain copy silently
+# configurable and defaults it to **WAL** (internal/database/db.go, sqliteJournalMode()); that default
+# shipped in a tagged release and is still in force, so this helper is load-bearing, not insurance. Under WAL recent commits live in x-ui.db-wal until a checkpoint, so a plain copy silently
 # yields a database that is MISSING the newest clients/inbounds — a backup that restores an older
 # state than the operator believes, which is the worst possible failure for a restore path.
 #
@@ -817,6 +817,25 @@ show_config(){
   fi
 }
 
+# nginx 1.25.1 deprecated `listen ... http2` in favour of a standalone `http2 on;`
+# directive, and newer builds log a warning for every such listen line. Older nginx
+# does not know `http2 on;` AT ALL and refuses to start on it -- so the two forms
+# cannot simply be swapped: our supported platforms (Ubuntu and Debian, no version
+# floor) span both sides of that boundary. Detect what is installed and emit the
+# form it understands.
+#
+# Fail-safe by construction: anything other than a positively parsed version >=
+# 1.25.1 (nginx absent, unexpected `nginx -v` output, parse failure) falls back to
+# the legacy form, which every nginx accepts -- at worst a deprecation warning.
+# The alt front is re-rendered behind `nginx -t` with rollback on failure
+# (alt_nginx_write_front / alt_enable_abort), so a bad guess cannot go live.
+xpam_nginx_supports_http2_directive(){
+  local v
+  v="$(nginx -v 2>&1 | sed -n 's#.*nginx/\([0-9][0-9.]*\).*#\1#p' | head -n1)"
+  [[ -n "$v" ]] || return 1
+  [[ "$(printf '%s\n%s\n' "1.25.1" "$v" | sort -V | head -n1)" == "1.25.1" ]]
+}
+
 render_template(){
   local src="$1" dst="$2"
   python3 - "$src" "$dst" <<'PY'
@@ -832,6 +851,11 @@ export_vars(){
   export PROFILE SERVER_PREFIX ROOT_DOMAIN WWW_DOMAIN PRIMARY_DOMAIN SYNC_DOMAIN WEB_CERT_NAME CERT_EMAIL PANEL_PATH XUI_PANEL_PORT XUI_AUTO_SETUP XUI_ADMIN_USER XUI_INSTALLED_TAG XRAY_PUBLIC_PORT XRAY_LOCAL_PORT SSH_PUBLIC_PORT HTTP_PUBLIC_PORT SITE_BACKEND_PORT SYNC_BACKEND_PORT MTPROTO_PORT MTPROTO_BACKEND ALLOW_IPV6_443 BASIC_USER MASK_PRESET VLESS_ALT_TRANSPORT VLESS_ALT_DOMAIN VLESS_ALT_PATH XRAY_ALT_PORT NGINX_ALT_TLS_PORT TELEGRAM_RELAY_PATH TELEGRAM_RELAY_SOCKET XPAM_DNS_POLICY_MODE XPAM_OUTPUT_MODE XPAM_MAINT_APT_MODE XPAM_SERVICE_HYGIENE_MODE XPAM_BACKUP_KEEP XPAM_HEALTH_LOG_KEEP XPAM_WEEKLY_LOG_KEEP XPAM_PROVIDER_NETWORKING_WARN_ONLY
   export WEB_SERVER_NAMES="$(web_domains)" CERTONLY_SERVER_NAMES="$(web_domains)${SYNC_DOMAIN:+ $SYNC_DOMAIN}" SERVICE_SITE_DIR="$(service_site_dir)" ROOT_SITE_DIR="$(root_site_dir)" SERVER_PREFIX_UP="$(printf '%s' "$SERVER_PREFIX" | tr '[:lower:]' '[:upper:]')"
   export HAPROXY_BACKEND_ORDER_UNITS="network-online.target nginx.service x-ui.service"
+  if xpam_nginx_supports_http2_directive; then
+    export NGINX_HTTP2_LISTEN="" NGINX_HTTP2_ON="    http2 on;"
+  else
+    export NGINX_HTTP2_LISTEN=" http2" NGINX_HTTP2_ON=""
+  fi
   if [[ "$PROFILE" == "root_mtproto" ]]; then
     ROOT_SITE_BLOCK="$(cat <<EOF_ROOT_SITE_BLOCK
 server {

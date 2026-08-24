@@ -94,10 +94,19 @@ xpam_xui_read_stored_api_token(){
   printf '%s\n' "$token"
 }
 
+# Reads the text to scan from the FILE named by $1 -- never from stdin.
+# `python3 -` takes its own program from stdin, so the heredoc below shadows
+# whatever stdin the caller supplied: sys.stdin.read() then hits EOF and returns
+# "". That was true from v1.3.0 until 2026-08-24, when a live box showed the
+# function returning empty on a perfectly good installer transcript -- so every
+# install quietly fell through to the session-token path, left two unused admin
+# tokens behind, and reduced four apparent fallbacks to one real one.
 xpam_xui_extract_api_token_from_output(){
-  python3 - <<'PY_XPAM_XUI_EXTRACT_TOKEN'
+  local src="${1:-}"
+  [[ -s "$src" ]] || return 1
+  python3 - "$src" <<'PY_XPAM_XUI_EXTRACT_TOKEN'
 import re, sys
-text=sys.stdin.read()
+text=open(sys.argv[1], encoding='utf-8', errors='replace').read()
 # Prefer labelled token lines. The 3x-ui CLI/installer wording has changed across releases,
 # so keep this parser deliberately conservative and verify the candidate with Bearer API later.
 labelled=[]
@@ -147,9 +156,29 @@ PY_XPAM_XUI_TOKEN_USABLE
 
 xpam_xui_get_cli_api_token(){
   [[ -x /usr/local/x-ui/x-ui ]] || return 1
-  local out token
-  out="$(/usr/local/x-ui/x-ui setting -getApiToken true 2>&1 || true)"
-  token="$(printf '%s' "$out" | xpam_xui_extract_api_token_from_output || true)"
+  local token tmp
+  tmp="$(mktemp /tmp/xpam-xui-cli-token.XXXXXX)" || return 1
+  chmod 600 "$tmp" 2>/dev/null || true
+  /usr/local/x-ui/x-ui setting -getApiToken true > "$tmp" 2>&1 || true
+  token="$(xpam_xui_extract_api_token_from_output "$tmp" 2>/dev/null || true)"
+  # The transcript carries a live admin token: shred it, never plain rm.
+  shred -u "$tmp" 2>/dev/null || rm -f "$tmp"
+  [[ -n "$token" ]] || return 1
+  printf '%s\n' "$token"
+}
+
+# The 3x-ui installer writes /etc/x-ui/install-result.env (mode 0600) carrying a
+# structured XUI_API_TOKEN= line. Present upstream since v3.4.2 -- the whole range
+# XPAM supports -- and verified on a live 3.7.0 box to hold exactly the token
+# stored under the name "install". Reading that beats scraping the installer's
+# coloured stdout, so it is tried first and the transcript parser stays only as a
+# fallback for a box where the file is missing.
+xpam_xui_get_install_result_api_token(){
+  local f="/etc/x-ui/install-result.env" token
+  [[ -s "$f" ]] || return 1
+  token="$(sed -n 's/^XUI_API_TOKEN=//p' "$f" | head -n1 | tr -d '\r\n')"
+  token="${token%\'}"; token="${token#\'}"
+  token="${token%\"}"; token="${token#\"}"
   [[ -n "$token" ]] || return 1
   printf '%s\n' "$token"
 }
@@ -311,6 +340,16 @@ xui_ensure_api_token(){
 
   say "Ensuring XPAM-owned 3x-ui API token storage"
 
+  # Adopt the token the installer already created and recorded before minting a
+  # new one. Cheap, non-mutating, and it keeps a box on ONE API token instead of
+  # accumulating one per acquisition path.
+  token="$(xpam_xui_get_install_result_api_token 2>/dev/null || true)"
+  if [[ -n "$token" ]] && xpam_xui_api_token_usable "$token"; then
+    if ! xpam_xui_store_api_token "$token"; then warn "Could not store 3x-ui API token in $file"; return 1; fi
+    ok "3x-ui API token adopted from the installer result file and saved to root-only XPAM storage: $file"
+    return 0
+  fi
+
   token="$(xpam_xui_get_cli_api_token 2>/dev/null || true)"
   if [[ -n "$token" ]] && xpam_xui_api_token_usable "$token"; then
     if ! xpam_xui_store_api_token "$token"; then warn "Could not store 3x-ui API token in $file"; return 1; fi
@@ -392,7 +431,8 @@ PY_XPAM_XUI_API_POST_FORM
 }
 
 # Call one 3x-ui WARP API action: /panel/api/xray/warp/<action> (POST, form-encoded).
-# Actions and their params (verified against 3x-ui v3.5.0 controller/xray_setting.go):
+# Actions and their params (read from 3x-ui controller/xray_setting.go; the route and its
+# parameters were re-confirmed unchanged at every tag through the current upstream release):
 #   data | config | del | changeIp        — no params
 #   reg                                   — privateKey=<b64> publicKey=<b64>
 #   license                               — license=<key>
@@ -640,7 +680,8 @@ xpam_xui_run_installer_sanitized(){
   chmod 600 "$redacted_out" 2>/dev/null || true
 
   if [[ $rc -eq 0 ]]; then
-    token="$(xpam_xui_extract_api_token_from_output < "$raw_out" 2>/dev/null || true)"
+    token="$(xpam_xui_get_install_result_api_token 2>/dev/null || true)"
+    [[ -n "$token" ]] || token="$(xpam_xui_extract_api_token_from_output "$raw_out" 2>/dev/null || true)"
     if [[ -n "$token" ]]; then
       file="$(xpam_xui_api_token_file)"
       if xpam_xui_store_api_token "$token"; then

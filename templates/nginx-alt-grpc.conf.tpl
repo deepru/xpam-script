@@ -5,7 +5,8 @@ server {
     location / { return 301 https://{{VLESS_ALT_DOMAIN}}$request_uri; }
 }
 server {
-    listen 127.0.0.1:{{NGINX_ALT_TLS_PORT}} ssl http2 default_server;
+    listen 127.0.0.1:{{NGINX_ALT_TLS_PORT}} ssl{{NGINX_HTTP2_LISTEN}} default_server;
+{{NGINX_HTTP2_ON}}
     server_name _;
     ssl_certificate {{ALT_CERT}};
     ssl_certificate_key {{ALT_KEY}};
@@ -13,7 +14,8 @@ server {
     return 444;
 }
 server {
-    listen 127.0.0.1:{{NGINX_ALT_TLS_PORT}} ssl http2;
+    listen 127.0.0.1:{{NGINX_ALT_TLS_PORT}} ssl{{NGINX_HTTP2_LISTEN}};
+{{NGINX_HTTP2_ON}}
     server_name {{VLESS_ALT_DOMAIN}};
     ssl_certificate {{ALT_CERT}};
     ssl_certificate_key {{ALT_KEY}};

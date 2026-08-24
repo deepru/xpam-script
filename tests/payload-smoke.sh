@@ -3,8 +3,9 @@
 #
 # Runs the three 3x-ui inbound-payload builders offline and asserts the emitted
 # JSON against the field/type contract of 3x-ui's Go model.Client / model.Inbound
-# (pinned tag v3.5.0). Catches the class of bug that ships silently otherwise:
-#   * a client field sent with the wrong JSON type (e.g. tgId as a string) — 3.5.0
+# (field lists read from upstream tag v3.7.0). Catches the class of bug that ships
+# silently otherwise:
+#   * a client field sent with the wrong JSON type (e.g. tgId as a string) — 3x-ui
 #     strict-parses clients into model.Client and rejects a type mismatch;
 #   * a phantom top-level inbound key (e.g. allocate) that 3.x silently drops;
 #   * the xHTTP-behind-nginx share-link contract (security=none inbound, but the
@@ -78,24 +79,30 @@ VLESS_ALT_TRANSPORT="grpc" VLESS_ALT_PATH="v1/streams/0123456789abcdef" alt_buil
 SMOKE_VLESS="$vless_json" SMOKE_MTG="$mtg_json" SMOKE_XHTTP="$xhttp_json" SMOKE_GRPC="$grpc_json" python3 - <<'PY_SMOKE_VALIDATE'
 import json, os, sys
 
-# --- 3x-ui contract, pinned to tag v3.5.0 -----------------------------------
+# --- 3x-ui contract, field lists read from tag v3.7.0 -----------------------
 # internal/database/model/model.go, type Client (JSON key -> type category).
+# Fields XPAM never sends are listed anyway: an unknown key is only a warning, but
+# keeping the list complete is what makes that warning mean "we invented a key"
+# rather than "upstream moved on".
 CLIENT_FIELDS = {
     "id": "str", "security": "str", "password": "str", "flow": "str",
     "reverse": "obj", "auth": "str", "privateKey": "str", "publicKey": "str",
-    "allowedIPs": "list", "preSharedKey": "str", "keepAlive": "int",
+    "allowedIPs": "list", "allowedIPsByInbound": "obj", "preSharedKey": "str",
+    "keepAlive": "int", "forwardedPorts": "str",
     "secret": "str", "adTag": "str", "email": "str", "limitIp": "int",
     "totalGB": "int", "expiryTime": "int", "enable": "bool", "tgId": "int",
     "subId": "str", "group": "str", "comment": "str", "reset": "int",
+    "resetDay": "int", "resetMax": "int",
+    "trafficReset": "str", "trafficResetDay": "int",
     "created_at": "int", "updated_at": "int",
 }
 # internal/database/model/model.go, type Inbound (json/form keys; UserId is json:"-").
 INBOUND_TOP_FIELDS = {
     "id", "up", "down", "total", "remark", "subSortIndex", "enable",
-    "expiryTime", "trafficReset", "lastTrafficResetTime", "clientStats",
-    "listen", "port", "protocol", "settings", "streamSettings", "tag",
-    "sniffing", "nodeId", "shareAddrStrategy", "shareAddr", "originNodeGuid",
-    "fallbackParent",
+    "expiryTime", "trafficReset", "trafficResetDay", "lastTrafficResetTime",
+    "clientStats", "listen", "port", "protocol", "settings", "streamSettings",
+    "tag", "sniffing", "nodeId", "shareAddrStrategy", "shareAddr", "disableFlow",
+    "originNodeGuid", "fallbackParent",
 }
 
 fails, warns = [], []

@@ -1,6 +1,6 @@
-XPAM_VERSION=1.4.0
-XPAM_STAGE=stage13-v140
-XPAM_BUILD=alt-transport+warp-automation+unique-decoys+weekly-auto-reboot
-XPAM_BASE_STAGE=stage12-v139
-XPAM_BASE_BUILD=v1.3.9
+XPAM_VERSION=1.4.1
+XPAM_STAGE=stage14-v141
+XPAM_BUILD=install-path-fixes
+XPAM_BASE_STAGE=stage13-v140
+XPAM_BASE_BUILD=v1.4.0
 XPAM_ARCHIVE_SHA256_SOURCE=external-sha256-file
