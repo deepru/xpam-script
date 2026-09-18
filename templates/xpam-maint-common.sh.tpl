@@ -739,6 +739,24 @@ tcp6_rows=parse_ss(['ss','-H','-6','-lnt'], 'ipv6', 'tcp')
 udp_rows=parse_ss(['ss','-H','-lnup'], 'any', 'udp')
 tcp_rows=tcp4_rows+tcp6_rows
 
+# UDP ports UFW actually lets in. Read once: the verdict loop below used to shell out to
+# `ufw status` per row, and the listing needs the same answer.
+def _ufw_udp_allow_set():
+    allowed=set()
+    try:
+        status=subprocess.check_output(['ufw','status'], text=True, stderr=subprocess.DEVNULL)
+    except Exception:
+        return allowed
+    for line in status.splitlines():
+        low=line.lower()
+        if 'allow' not in low:
+            continue
+        for m in re.finditer(r'(\d{1,5})/udp', low):
+            allowed.add(int(m.group(1)))
+    return allowed
+
+_ufw_udp_allowed=_ufw_udp_allow_set()
+
 # --- listener listing (display only; every verdict below is unchanged) ---------------------
 # Padding is done by Python's %-formatting, which counts CHARACTERS. Shell printf pads by BYTES
 # and would misalign the Cyrillic column, which is exactly how the old summary broke.
@@ -784,10 +802,23 @@ _short={'xray-linux-amd6':'xray','xray-linux-amd64':'xray','mtg-linux-amd64':'mt
 _by_proc={'xray':'служебный порт Xray','mtg':'служебный порт Telegram proxy',
           'systemd-resolved':'локальный DNS'}
 
-def _listing(want_public):
+# Which of the three groups a socket belongs in. The split used to be loopback-vs-not, which
+# filed an OUTBOUND socket under "Публичные": Xray binds a wildcard UDP socket per active client
+# session, so a box carrying traffic listed an ephemeral high port next to 22/80/443 and read as
+# an open service. It is not reachable — UFW has no UDP allow rule for it — and it disappears when
+# the session ends, which also made the table differ between two consecutive runs. The verdict was
+# always correct (that case prints OK below); only this listing was misleading.
+def _row_group(r):
+    if loop(r['host']):
+        return 'local'
+    if r['proto'] == 'udp' and r['port'] not in _ufw_udp_allowed:
+        return 'outbound'
+    return 'public'
+
+def _listing(group):
     seen=set(); out=[]
     for r in sorted(tcp_rows+udp_rows, key=lambda x:(x['port'], x['proto'], x['local'])):
-        if (not loop(r['host'])) != want_public:
+        if _row_group(r) != group:
             continue
         key=(r['port'], r['proto'])
         if key in seen:
@@ -799,9 +830,15 @@ def _listing(want_public):
         out.append((r['port'], r['proto'], proc, purpose))
     return out
 
-for _title,_pub in (('Публичные', True), ('Локальные, только 127.0.0.1', False)):
+for _title,_group in (('Публичные', 'public'),
+                      ('Локальные, только 127.0.0.1', 'local'),
+                      ('Исходящие, наружу закрыты UFW', 'outbound')):
+    _rows=_listing(_group)
+    # The outbound group exists only while a client is passing UDP, so it is printed only when
+    # it has rows: a quiet box keeps exactly the output it had before this change.
+    if _group == 'outbound' and not _rows:
+        continue
     print(f'  {_title}:')
-    _rows=_listing(_pub)
     if not _rows:
         print('    (нет)')
     for _p,_proto,_proc,_text in _rows:
@@ -868,15 +905,7 @@ for r in sorted(tcp_rows, key=lambda x:(x['port'], x['family'], x['local'])):
     fail=True
 
 def ufw_udp_allowed(port):
-    try:
-        status=subprocess.check_output(['ufw','status'], text=True, stderr=subprocess.DEVNULL)
-    except Exception:
-        return False
-    for line in status.splitlines():
-        low=line.lower()
-        if f'{port}/udp' in low and 'allow' in low:
-            return True
-    return False
+    return port in _ufw_udp_allowed
 
 for r in sorted(udp_rows, key=lambda x:(x['port'], x['local'])):
     port, host, local = r['port'], r['host'], r['local']
@@ -1129,23 +1158,27 @@ remark=f'{prefix}-mtproto'
 sync_domain=cfg.get('SYNC_DOMAIN','')
 mtproto_port=int(cfg.get('MTPROTO_PORT','0') or 0)
 sync_backend_port=int(cfg.get('SYNC_BACKEND_PORT','0') or 0)
+public_port=int(cfg.get('XRAY_PUBLIC_PORT','443') or 443)
 panel_port=cfg.get('XUI_PANEL_PORT','57827')
 panel_path=(cfg.get('PANEL_PATH','') or '').strip('/')
 token_path=Path('/etc/xpam-script/x-ui-api-token')
 
-def api_list():
+def api_obj(path, label):
+    # Returns the response's `obj`, or None when anything went wrong (already reported).
+    # Shared by the inbound list and the managed-hosts read so both speak to the panel
+    # exactly the same way.
     if not token_path.exists():
-        bad('3x-ui API token storage missing for MTG invariant check')
-        return []
+        bad(f'3x-ui API token storage missing for {label}')
+        return None
     try:
         token=token_path.read_text(errors='ignore').splitlines()[0].strip()
     except Exception as exc:
-        bad(f'3x-ui API token unreadable for MTG invariant check: {exc}')
-        return []
+        bad(f'3x-ui API token unreadable for {label}: {exc}')
+        return None
     if not token:
-        bad('3x-ui API token empty for MTG invariant check')
-        return []
-    url=f'https://127.0.0.1:{panel_port}/{panel_path}/panel/api/inbounds/list'
+        bad(f'3x-ui API token empty for {label}')
+        return None
+    url=f'https://127.0.0.1:{panel_port}/{panel_path}/panel/api/{path}'
     req=urllib.request.Request(url, headers={
         'Authorization':'Bearer '+token,
         'Accept':'application/json',
@@ -1157,18 +1190,91 @@ def api_list():
         with urllib.request.urlopen(req, timeout=10, context=ssl._create_unverified_context()) as resp:
             data=json.loads(resp.read(1024*1024).decode('utf-8','replace'))
     except Exception as exc:
-        bad(f'3x-ui API list failed for MTG invariant check: {exc}')
-        return []
+        bad(f'3x-ui API call failed for {label}: {exc}')
+        return None
     if data.get('success') is not True:
-        bad('3x-ui API list did not return success=true for MTG invariant check')
+        bad(f'3x-ui API did not return success=true for {label}')
+        return None
+    return data.get('obj')
+
+def api_list():
+    items=api_obj('inbounds/list', 'MTG invariant check')
+    if items is None:
         return []
-    items=data.get('obj') or []
     if isinstance(items, dict):
         items=items.get('inbounds') or items.get('items') or []
     if not isinstance(items, list):
         bad('3x-ui API list obj is not a list for MTG invariant check')
         return []
     return items
+
+def split_host_addr(value, default_port):
+    # Mirrors 3x-ui parseHostAndPort: a trailing :<digits> is the port, [v6] is
+    # unwrapped, and a bare IPv6 literal keeps the group's port.
+    s=str(value or '').strip()
+    if not s:
+        return '', default_port
+    if s.count(':') > 1 and '[' not in s:
+        return s, default_port
+    head, sep, tail = s.rpartition(':')
+    if sep and tail.isdigit() and 0 <= int(tail) <= 65535:
+        addr, parsed_port = head, int(tail)
+    else:
+        addr, parsed_port = s, default_port
+    if addr.startswith('[') and addr.endswith(']'):
+        addr = addr[1:-1]
+    return addr, parsed_port
+
+def check_mtg_share_host(inbound_id):
+    # D-3/D-4. Since 3x-ui 3.8.0 (#6369, which closed #5126) the panel builds the
+    # mtproto share link from managed `hosts` rows, so exactly one enabled row must
+    # advertise SYNC_DOMAIN on the PUBLIC port. A row without a port inherits the
+    # inbound's INTERNAL one -- that is the wrong-port panel link D-4 describes, and
+    # it is the shape 3.8.0's own migration leaves behind. Two rows make the panel
+    # emit two links. On 3.6.0/3.7.0 the row is inert but still required, so the
+    # fleet holds one shape whichever version a box is on.
+    if not isinstance(inbound_id, int):
+        bad('MTG inbound id missing; cannot verify the panel share-link host row')
+        return
+    groups=api_obj(f'hosts/byInbound/{inbound_id}', 'MTG panel share-link host row')
+    if groups is None:
+        return
+    if not isinstance(groups, list):
+        groups=[]
+    matches=[]
+    others=[]
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        ids=[i for i in (group.get('inboundIds') or []) if isinstance(i, int)]
+        if inbound_id not in ids:
+            continue
+        group_port=int(group.get('port') or 0)
+        for entry in ((group.get('hosts') or []) or ['']):
+            addr, entry_port = split_host_addr(entry, group_port)
+            if addr.lower() == sync_domain.lower():
+                matches.append((group, entry_port))
+            elif addr:
+                others.append(addr)
+    if len(matches) == 1:
+        group, entry_port = matches[0]
+        excluded=[str(x).lower() for x in (group.get('excludeFromSubTypes') or [])]
+        if entry_port != public_port:
+            bad(f'MTG panel share-link host row advertises port {entry_port}, expected {public_port}; the panel link would carry the internal port')
+        elif str(group.get('security') or '').lower() != 'same':
+            bad(f'MTG panel share-link host row security expected "same", got {group.get("security")!r}')
+        elif group.get('isDisabled'):
+            bad('MTG panel share-link host row is disabled; the panel link falls back to the internal port')
+        elif 'raw' in excluded:
+            bad('MTG panel share-link host row excludes the "raw" share type; the panel link falls back to the internal port')
+        else:
+            ok(f'MTG panel share link points at {sync_domain}:{public_port} (agrees with the links launcher)')
+    elif not matches:
+        bad(f'MTG panel share-link host row missing: no managed hosts row advertises {sync_domain} for the MTG inbound')
+    else:
+        bad(f'expected exactly one MTG panel share-link host row for {sync_domain}, found {len(matches)}')
+    for addr in sorted(set(others)):
+        print(f'INFO: MTG inbound also advertises {addr} through managed hosts; XPAM does not manage that row')
 
 def boolish(v):
     if isinstance(v, bool): return v
@@ -1206,8 +1312,6 @@ if len(matches) == 1:
     checks=[
         ('MTG inbound protocol', str(item.get('protocol') or '').lower(), 'mtproto'),
         ('MTG inbound listen', str(item.get('listen') or ''), '127.0.0.1'),
-        ('MTG inbound shareAddrStrategy', str(item.get('shareAddrStrategy') or ''), 'custom'),
-        ('MTG inbound shareAddr', str(item.get('shareAddr') or ''), sync_domain),
         ('MTG inbound tag', str(item.get('tag') or ''), f'in-{mtproto_port}-tcp'),
     ]
     for label, got, exp in checks:
@@ -1215,6 +1319,21 @@ if len(matches) == 1:
             ok(f'{label} = {exp}')
         else:
             bad(f'{label} expected {exp!r}, got {got!r}')
+    # Two valid shapes, not one. Up to 3x-ui 3.7.0 the public address lives on the
+    # inbound (shareAddrStrategy 'custom' + shareAddr). 3.8.0 moved mtproto to managed
+    # hosts and now FORCES 'listen' with an empty shareAddr on every add and update, so
+    # demanding the old pair would fail every 3.8.0 box for a field the panel no longer
+    # lets anyone store. Where the panel actually points is checked separately, against
+    # the hosts row, which is the thing that reaches the user.
+    strategy=str(item.get('shareAddrStrategy') or '')
+    share_addr=str(item.get('shareAddr') or '')
+    if strategy == 'custom' and share_addr == sync_domain:
+        ok(f'MTG inbound shareAddr = {sync_domain} (3x-ui below 3.8.0 shape)')
+    elif strategy == 'listen' and share_addr == '':
+        ok('MTG inbound share address moved to managed hosts (3x-ui 3.8.0+ shape)')
+    else:
+        bad(f'MTG inbound shareAddrStrategy/shareAddr matches neither supported shape: got {strategy!r}/{share_addr!r}, expected custom/{sync_domain!r} or listen/empty')
+    check_mtg_share_host(item.get('id'))
     try:
         got_port=int(item.get('port'))
     except Exception:
@@ -1863,6 +1982,52 @@ try:
         ok('wg0 has no resolvectl DNS block')
 except Exception as e:
     ok(f'resolvectl wg0 state check skipped: {e}')
+
+# --- client identity: the settings mirror vs the clients table ------------------------
+# Since 3x-ui 3.5.0 a client is a row in `clients` + `client_inbounds`, and the copy in
+# inbounds.settings.clients[] is a MIRROR that can fall behind (upstream #6436). 3.8.0
+# moved its own link generators onto the table for exactly that reason (#6458). XPAM
+# builds `<prefix>-links` from the mirror, so a divergence means the printed UUID is not
+# the identity Xray is running -- a link that looks right and does not connect.
+# WireGuard/AmneziaWG are excluded on purpose: upstream keeps those on settings identity
+# because the shared clients.wg_* columns collapse across tunnel inbounds.
+try:
+    drift=[]
+    compared=0
+    for inb_id, proto, settings_text in cur.execute('select id, protocol, settings from inbounds').fetchall():
+        if str(proto or '').lower() in ('wireguard', 'amneziawg'):
+            continue
+        mirror={}
+        for c in (jloads(settings_text, {}) or {}).get('clients') or []:
+            if not isinstance(c, dict):
+                continue
+            email=str(c.get('email') or '').strip()
+            if email:
+                mirror[email]=str(c.get('id') or '').strip()
+        if not mirror:
+            continue
+        for email, table_uuid in cur.execute(
+                'select c.email, c.uuid from clients c '
+                'join client_inbounds ci on ci.client_id = c.id '
+                'where ci.inbound_id = ?', (inb_id,)).fetchall():
+            email=str(email or '').strip()
+            table_uuid=str(table_uuid or '').strip()
+            mirror_uuid=mirror.get(email, '')
+            if not email or not table_uuid or not mirror_uuid:
+                continue
+            compared+=1
+            if mirror_uuid != table_uuid:
+                drift.append((inb_id, email))
+    if drift:
+        for inb_id, email in drift[:5]:
+            bad(f'client identity drift on inbound {inb_id}, client {email}: inbounds.settings carries a different id than the clients table, so generated links would use the stale one')
+    elif compared:
+        ok(f'client identity mirror agrees with the clients table ({compared} client(s) compared)')
+    else:
+        print('INFO: no comparable client rows between inbounds.settings and the clients table')
+except Exception as e:
+    print(f'INFO: client identity mirror comparison skipped: {e}')
+
 if errs: sys.exit(1)
 print('\nOK: 3x-ui / Xray config looks correct')
 EOF_PY_XUI

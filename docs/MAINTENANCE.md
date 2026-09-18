@@ -57,7 +57,7 @@ sudo <prefix>-xpam
 
 Open `Дополнительно` → `Проверить обновления XPAM`.
 
-The updater verifies the release checksum, runs preflight checks on the staged copy, backs up the current version, applies the update and re-checks the server. If the result is not healthy it rolls back to the previous version. Connection links are captured before and after and must match, so an update never silently changes a link your clients already hold.
+The updater verifies the release checksum, runs preflight checks on the staged copy, backs up the current version, applies the update and re-checks the server. A server that already reports problems is still updated — the update is often what fixes them — and the check afterwards compares the two results: the update is rolled back only if it introduced problems that were not there before, or if a command, the connection links or the DoubleHop mode changed. Connection links are captured before and after and must match, so an update never silently changes a link your clients already hold.
 
 ## Small-VPS policy
 

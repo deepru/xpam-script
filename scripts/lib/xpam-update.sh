@@ -270,24 +270,46 @@ xpam_update_preflight_runtime(){
     return 1
   fi
 
+  # A failing health check does NOT block the update, and must not: the update is
+  # frequently the thing that fixes it. 3x-ui 3.8 moved the mtproto share address,
+  # which turned health red on every box that upgraded the panel first — and the
+  # release carrying the fix could not be installed, because this very gate refused
+  # to start. A gate that locks a server out of its own repair is worse than no gate.
+  #
+  # What replaces it: the failures are RECORDED here and the postcheck rolls back
+  # only if the update ADDED failures. Both quick and deep are captured, because the
+  # postcheck compares against both and a deep-only failure would otherwise read as
+  # new. That costs one deep-health run before the download.
   if [[ -x "/usr/local/sbin/${prefix}-health" ]]; then
-    if ! "/usr/local/sbin/${prefix}-health" >/tmp/xpam-update-pre-health.$$ 2>&1; then
+    local pre_dir failures
+    pre_dir="${XPAM_UPDATE_WORKDIR}/pre-state"
+    mkdir -p "$pre_dir"
+    "/usr/local/sbin/${prefix}-health" > "$pre_dir/health.txt" 2>&1 || true
+    "/usr/local/sbin/${prefix}-health" --deep > "$pre_dir/health-deep.txt" 2>&1 || true
+    xpam_update_health_failures "$pre_dir/health.txt" "$pre_dir/health-deep.txt" \
+      > "$pre_dir/health-failures.txt"
+    failures="$(wc -l < "$pre_dir/health-failures.txt" | tr -d ' ')"
+    if [[ "${failures:-0}" -gt 0 ]]; then
       echo
-      echo "Перед обновлением XPAM обнаружил проблему в текущем состоянии сервера."
+      echo "Внимание: сервер уже сообщает о проблемах (${failures})."
+      echo "Обновление продолжится — оно часто и является их исправлением."
+      echo "XPAM откатится только в том случае, если обновление добавит НОВЫЕ проблемы."
       echo
-      echo "Рекомендуется сначала выполнить:"
-      echo "  sudo ${prefix}-health --deep"
-      echo "  sudo ${prefix}-repair"
-      echo
-      echo "Обновление не начато."
-      echo "Изменения не внесены."
-      xpam_update_log "pre-update health failed; abort before mutation"
-      rm -f /tmp/xpam-update-pre-health.$$
-      return 1
+      xpam_update_log "pre-update health reports ${failures} failure(s); continuing, judged on new failures only"
     fi
-    rm -f /tmp/xpam-update-pre-health.$$
   fi
   return 0
+}
+
+# The FAIL lines of one or more health transcripts: colour stripped, deduplicated,
+# sorted. Used on both sides of the update so the two sets can be compared.
+xpam_update_health_failures(){
+  [[ "$#" -gt 0 ]] || return 0
+  cat "$@" 2>/dev/null \
+    | sed -E 's/\x1B\[[0-9;]*[a-zA-Z]//g' \
+    | grep -E '^[[:space:]]*FAIL:' \
+    | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
+    | sort -u
 }
 
 xpam_update_download_assets(){
@@ -610,9 +632,33 @@ xpam_update_postcheck(){
   [[ -x /usr/local/sbin/xpam-maint-common.sh ]] || { xpam_update_log "postcheck: xpam-maint-common missing"; return 1; }
   bash -n /usr/local/sbin/xpam-maint-common.sh || return 1
 
-  "/usr/local/sbin/${prefix}-health" >/tmp/xpam-update-post-health.$$ 2>&1 || return 1
-  "/usr/local/sbin/${prefix}-health" --deep >/tmp/xpam-update-post-deep-health.$$ 2>&1 || return 1
-  rm -f /tmp/xpam-update-post-health.$$ /tmp/xpam-update-post-deep-health.$$
+  # Health is judged as a DELTA, never as an absolute. Requiring green here would
+  # undo the preflight's whole point: a box red for a reason the update does not
+  # touch (an expiring certificate, a disk threshold, an upstream panel change)
+  # would download, apply, see the same old red and roll the update straight back.
+  # Only failures the update INTRODUCED are grounds for rollback. The structural
+  # checks above stay absolute — those really do mean the update broke something.
+  local post_dir pre_failures post_failures new_failures
+  post_dir="${XPAM_UPDATE_WORKDIR}/post-state"
+  mkdir -p "$post_dir"
+  "/usr/local/sbin/${prefix}-health" > "$post_dir/health.txt" 2>&1 || true
+  "/usr/local/sbin/${prefix}-health" --deep > "$post_dir/health-deep.txt" 2>&1 || true
+  xpam_update_health_failures "$post_dir/health.txt" "$post_dir/health-deep.txt" \
+    > "$post_dir/health-failures.txt"
+  pre_failures="${XPAM_UPDATE_WORKDIR}/pre-state/health-failures.txt"
+  [[ -f "$pre_failures" ]] || pre_failures=/dev/null
+  post_failures="$post_dir/health-failures.txt"
+  new_failures="$(comm -13 "$pre_failures" "$post_failures" 2>/dev/null || true)"
+  if [[ -n "$new_failures" ]]; then
+    xpam_update_log "postcheck: update introduced new health failures:"
+    printf '%s\n' "$new_failures" | while IFS= read -r line; do
+      xpam_update_log "postcheck:   ${line}"
+    done
+    return 1
+  fi
+  if [[ -s "$post_failures" ]]; then
+    xpam_update_log "postcheck: $(wc -l < "$post_failures" | tr -d ' ') pre-existing failure(s) remain; none introduced by this update"
+  fi
 
   xpam_update_compare_link_hashes "$prefix" || { xpam_update_log "postcheck: link hash changed"; return 1; }
 
@@ -630,13 +676,22 @@ xpam_update_postcheck(){
 }
 
 xpam_update_success_message(){
-  local version
+  local version remaining=0 post_failures
   version="$(xpam_update_current_version)"
+  post_failures="${XPAM_UPDATE_WORKDIR}/post-state/health-failures.txt"
+  [[ -s "$post_failures" ]] && remaining="$(wc -l < "$post_failures" | tr -d ' ')"
   echo
   echo "XPAM успешно обновлён."
   echo
   echo "Версия: ${version}"
-  echo "Состояние сервера: OK"
+  # "OK" would be a lie on a box that was already reporting problems: the update
+  # is judged on not making things worse, not on curing what it never touched.
+  if [[ "${remaining:-0}" -gt 0 ]]; then
+    echo "Состояние сервера: обновление ничего не сломало, но ${remaining} проблем(ы) остаются."
+    echo "Подробности: sudo ${SERVER_PREFIX:-<prefix>}-health --deep"
+  else
+    echo "Состояние сервера: OK"
+  fi
   echo "Ваши ссылки подключения не изменились."
 }
 

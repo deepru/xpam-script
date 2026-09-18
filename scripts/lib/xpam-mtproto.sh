@@ -84,14 +84,15 @@ secret=os.environ['XPAM_MTG_SECRET']
 # subId: gives the client a subscription id like the VLESS client has, so 3.5.0's
 # Clients page can render its link/QR (the panel builds those from subId via its
 # own API — no public subscription listener needed, which XPAM keeps disabled).
-# comment: the panel's mtproto copy-link/QR hardcodes the inbound's INTERNAL port
-# (genMtprotoLink uses inbound.Port; 3x-ui has no externalProxy for mtproto), so
-# it is display-only and does not connect. Point whoever reads it in the panel at
-# the authoritative :443 link from the XPAM links launcher.
+# comment: below 3x-ui 3.8.0 the panel's mtproto copy-link/QR hardcode the inbound's
+# INTERNAL port (genMtprotoLink uses inbound.Port and mtproto has no externalProxy
+# there), so the panel link is display-only and does not connect. From 3.8.0 the link
+# is built from the managed `hosts` row XPAM maintains, so it is correct -- but the
+# XPAM links launcher stays the authoritative source either way.
 prefix=os.environ.get('XPAM_MTG_PREFIX','').strip()
-comment=('Рабочая MTG-ссылка (:443): sudo %s-links --show-secrets. '
-         'Панельная copy-ссылка/QR имеют внутренний порт и не подключаются.' % prefix) if prefix \
-        else 'Рабочая MTG-ссылка (:443) — в выводе XPAM links --show-secrets; панельный QR имеет внутренний порт.'
+comment=('Рабочая ссылка Telegram proxy / MTG (:443): sudo %s-links. '
+         'На 3x-ui ниже 3.8.0 панельные copy-ссылка и QR имеют внутренний порт.' % prefix) if prefix \
+        else 'Рабочая ссылка Telegram proxy / MTG (:443) — в выводе XPAM links; на 3x-ui ниже 3.8.0 панельный QR имеет внутренний порт.'
 settings={
     'fakeTlsDomain': os.environ['XPAM_MTG_SYNC_DOMAIN'],
     'secret': secret,
@@ -127,6 +128,13 @@ payload={
     'sniffing': '',
     # No 'allocate' key: not a field of 3x-ui v3.x model.Inbound (silently dropped); "always" is Xray's
     # default for this fixed-port inbound anyway.
+    # Both shapes again, like the secret above. Up to 3x-ui 3.7.0 these two fields are
+    # what points the panel's link at the public domain. 3.8.0 (#6369) stopped storing
+    # them for mtproto -- AddInbound/UpdateInbound force strategy 'listen' and an empty
+    # shareAddr -- but it first CAPTURES the custom value into a managed `hosts` row, so
+    # keeping them here is what seeds that row on a fresh 3.8.0 install. The dup check in
+    # CreateHostFromMtprotoCustomShareAddr keys on the address, so the row XPAM maintains
+    # with the public port suppresses a second, portless one on every later update.
     'shareAddrStrategy': 'custom',
     'shareAddr': os.environ['XPAM_MTG_SYNC_DOMAIN'],
 }
@@ -257,6 +265,228 @@ print(str(data.get('msg') or data.get('message') or data)[:500])
 sys.exit(1)
 PY_XPAM_3XUI_MTG_API_SUCCESS
   )" || fail "$label failed: ${msg:-unknown API error}"
+}
+
+mtproto_3xui_mtg_hosts_api_base(){
+  printf '%s/panel/api/hosts' "$(xpam_xui_panel_base_url)"
+}
+
+# Resolve the id of the single XPAM-managed MTG inbound, or return 1. Callers that
+# already hold a list use mtproto_3xui_mtg_extract_managed_id directly.
+mtproto_3xui_mtg_resolve_managed_id(){
+  local tmp list err id=""
+  tmp="$(mktemp -d /tmp/xpam-3xui-mtg-id.XXXXXX)" || return 1
+  list="$tmp/list.json"; err="$tmp/err.txt"
+  if mtproto_3xui_mtg_api_list "$list" "$err" 2>/dev/null; then
+    id="$(mtproto_3xui_mtg_extract_managed_id "$list" 2>/dev/null || true)"
+  fi
+  rm -rf "$tmp"
+  [[ -n "$id" ]] || return 1
+  printf '%s\n' "$id"
+}
+
+# Make the PANEL's Telegram link agree with `<prefix>-links` (D-3/D-4, 3x-ui#5126).
+#
+# 3x-ui 3.8.0 builds the mtproto share link from managed `hosts` rows (#6369):
+# hostEndpoints -> linkFromHosts -> genMtprotoLink reads the row's address and port,
+# so one row carrying <SYNC_DOMAIN>:<XRAY_PUBLIC_PORT> finally makes the panel's
+# copy-link, QR, Export and Clients page emit the real public :443 endpoint. The row
+# 3.8.0's own seeder writes from our legacy shareAddr carries NO port, and a portless
+# row inherits the inbound's INTERNAL port -- which is exactly the defect D-4 names.
+#
+# Written unconditionally, NOT gated on the 3x-ui version: genMtprotoLink in 3.6.0 and
+# 3.7.0 uses inbound.Port and never reads hosts (verified in both tags), so the row is
+# inert there and the fleet lands on one shape whenever a box moves to 3.8.0.
+#
+# The reconciliation key is (inbound_id, address == SYNC_DOMAIN), not a group id --
+# the panel mints group ids itself. Rows advertising any OTHER address belong to the
+# operator and are reported, never rewritten or deleted. Failure is never fatal: the
+# row is panel cosmetics, and deep-health is what enforces it.
+mtproto_3xui_mtg_ensure_share_host(){
+  local inbound_id="${1:-}" tmp list err out payload plan action arg rc=0
+  [[ "$inbound_id" =~ ^[0-9]+$ ]] || { warn "3x-ui hosts: no XPAM-managed MTG inbound id; panel share-link row not reconciled"; return 1; }
+  # Soft guards on purpose: validate_domain/validate_port call fail(), which would abort the caller.
+  # This row is panel cosmetics -- it must never take an install or a repair down with it.
+  [[ -n "${SYNC_DOMAIN:-}" ]] || { warn "3x-ui hosts: SYNC_DOMAIN is unset; panel share-link row not reconciled"; return 1; }
+  [[ "${XRAY_PUBLIC_PORT:-}" =~ ^[0-9]+$ ]] || { warn "3x-ui hosts: XRAY_PUBLIC_PORT is unset; panel share-link row not reconciled"; return 1; }
+
+  tmp="$(mktemp -d /tmp/xpam-3xui-mtg-hosts.XXXXXX)" || return 1
+  list="$tmp/list.json"; err="$tmp/err.txt"; out="$tmp/out.json"; payload="$tmp/payload.json"
+
+  if ! xpam_xui_api_get_json "$(mtproto_3xui_mtg_hosts_api_base)/byInbound/${inbound_id}" "$list" "$err"; then
+    warn "3x-ui hosts API unreachable; panel share-link row not reconciled"
+    rm -rf "$tmp"
+    return 1
+  fi
+
+  plan="$(XPAM_MTG_HOSTS_JSON="$list" \
+          XPAM_MTG_SYNC_DOMAIN="$SYNC_DOMAIN" \
+          XPAM_MTG_PUBLIC_PORT="$XRAY_PUBLIC_PORT" \
+          XPAM_MTG_INBOUND_ID="$inbound_id" \
+          python3 <<'PY_XPAM_3XUI_MTG_HOST_PLAN'
+import json, os, sys
+
+path = os.environ['XPAM_MTG_HOSTS_JSON']
+domain = os.environ['XPAM_MTG_SYNC_DOMAIN'].strip().lower()
+port = int(os.environ['XPAM_MTG_PUBLIC_PORT'])
+inbound_id = int(os.environ['XPAM_MTG_INBOUND_ID'])
+
+
+def split_host(value, default_port):
+    # Mirrors 3x-ui parseHostAndPort: a trailing :<digits> is the port, [v6] is unwrapped,
+    # and a bare IPv6 literal (more than one colon, no brackets) keeps the group's port.
+    s = str(value or '').strip()
+    if not s:
+        return '', default_port
+    if s.count(':') > 1 and '[' not in s:
+        return s, default_port
+    head, sep, tail = s.rpartition(':')
+    if sep and tail.isdigit() and 0 <= int(tail) <= 65535:
+        addr, parsed_port = head, int(tail)
+    else:
+        addr, parsed_port = s, default_port
+    if addr.startswith('[') and addr.endswith(']'):
+        addr = addr[1:-1]
+    return addr, parsed_port
+
+
+try:
+    data = json.load(open(path, encoding='utf-8'))
+except Exception as exc:
+    print('hosts API response is not JSON: %s' % exc, file=sys.stderr)
+    sys.exit(1)
+if data.get('success') is not True:
+    print('hosts API did not return success=true', file=sys.stderr)
+    sys.exit(1)
+
+groups = data.get('obj') or []
+if not isinstance(groups, list):
+    groups = []
+
+mine = []     # groups advertising SYNC_DOMAIN and owned by this inbound alone
+shared = []   # groups advertising SYNC_DOMAIN but spanning other inbounds too
+foreign = []  # other addresses advertised for this inbound -- operator-owned
+for group in groups:
+    if not isinstance(group, dict):
+        continue
+    ids = [i for i in (group.get('inboundIds') or []) if isinstance(i, int)]
+    if inbound_id not in ids:
+        continue
+    group_port = int(group.get('port') or 0)
+    entries = [split_host(h, group_port) for h in (group.get('hosts') or [])]
+    if not entries:
+        entries = [('', group_port)]
+    if any(addr.lower() == domain for addr, _ in entries):
+        (mine if ids == [inbound_id] else shared).append((group, entries))
+    else:
+        foreign.extend(addr for addr, _ in entries if addr)
+
+
+def is_desired(group, entries):
+    if len(entries) != 1:
+        return False
+    addr, parsed_port = entries[0]
+    if addr.lower() != domain or parsed_port != port:
+        return False
+    if str(group.get('security') or '').lower() != 'same':
+        return False
+    if group.get('isDisabled'):
+        return False
+    excluded = [str(x).lower() for x in (group.get('excludeFromSubTypes') or [])]
+    return 'raw' not in excluded
+
+
+for addr in sorted(set(foreign)):
+    print('FOREIGN %s' % addr)
+for group, _ in shared:
+    print('SHARED %s' % (group.get('groupId') or ''))
+if shared:
+    # Something we do not exclusively own already advertises our address. Adding a
+    # second row would make 3.8.0 emit two links; rewriting theirs would touch another
+    # inbound. Report and change nothing.
+    print('SKIP')
+    sys.exit(0)
+
+for group, _ in mine[1:]:
+    print('DELETE %s' % (group.get('groupId') or ''))
+if not mine:
+    print('ADD')
+elif is_desired(*mine[0]):
+    print('OK')
+else:
+    print('UPDATE %s' % (mine[0][0].get('groupId') or ''))
+PY_XPAM_3XUI_MTG_HOST_PLAN
+  )" || { warn "3x-ui hosts: cannot read the MTG inbound's host rows; panel share-link row not reconciled"; rm -rf "$tmp"; return 1; }
+
+  XPAM_MTG_HOST_PAYLOAD_PATH="$payload" \
+  XPAM_MTG_SYNC_DOMAIN="$SYNC_DOMAIN" \
+  XPAM_MTG_PUBLIC_PORT="$XRAY_PUBLIC_PORT" \
+  XPAM_MTG_INBOUND_ID="$inbound_id" \
+  XPAM_MTG_REMARK="$(mtproto_3xui_mtg_managed_remark)" \
+  python3 <<'PY_XPAM_3XUI_MTG_HOST_PAYLOAD'
+import json, os
+# entity.HostGroup: inboundIds is required/min=1, remark is required/max=256, security
+# is one of same|tls|none|reality. buildHostRows turns one address plus the group port
+# into exactly one `hosts` row. 'same' keeps the client's own TLS behaviour, which for
+# a tg:// link is simply unused.
+payload = {
+    'inboundIds': [int(os.environ['XPAM_MTG_INBOUND_ID'])],
+    'hosts': [os.environ['XPAM_MTG_SYNC_DOMAIN']],
+    'port': int(os.environ['XPAM_MTG_PUBLIC_PORT']),
+    'security': 'same',
+    'remark': os.environ['XPAM_MTG_REMARK'],
+    'isDisabled': False,
+    'excludeFromSubTypes': [],
+}
+with open(os.environ['XPAM_MTG_HOST_PAYLOAD_PATH'], 'w', encoding='utf-8') as f:
+    json.dump(payload, f, ensure_ascii=False, indent=2)
+PY_XPAM_3XUI_MTG_HOST_PAYLOAD
+
+  while read -r action arg; do
+    [[ -n "$action" ]] || continue
+    case "$action" in
+      FOREIGN)
+        warn "3x-ui hosts: MTG inbound also advertises '${arg}'; XPAM leaves operator-owned rows alone"
+        ;;
+      SHARED)
+        warn "3x-ui hosts: group '${arg}' advertises ${SYNC_DOMAIN} for several inbounds; XPAM will not rewrite it"
+        ;;
+      SKIP)
+        rm -rf "$tmp"
+        return 1
+        ;;
+      DELETE)
+        if xpam_xui_api_post_json "$(mtproto_3xui_mtg_hosts_api_base)/del/${arg}" "$payload" "$out" "$err"; then
+          ok "3x-ui hosts: removed duplicate MTG share-link row (group ${arg})"
+        else
+          warn "3x-ui hosts: could not remove duplicate MTG share-link row (group ${arg})"
+          rc=1
+        fi
+        ;;
+      UPDATE)
+        if xpam_xui_api_post_json "$(mtproto_3xui_mtg_hosts_api_base)/update/${arg}" "$payload" "$out" "$err"; then
+          ok "3x-ui hosts: MTG panel share link repointed to ${SYNC_DOMAIN}:${XRAY_PUBLIC_PORT}"
+        else
+          warn "3x-ui hosts: could not update the MTG share-link row (group ${arg})"
+          rc=1
+        fi
+        ;;
+      ADD)
+        if xpam_xui_api_post_json "$(mtproto_3xui_mtg_hosts_api_base)/add" "$payload" "$out" "$err"; then
+          ok "3x-ui hosts: MTG panel share link set to ${SYNC_DOMAIN}:${XRAY_PUBLIC_PORT}"
+        else
+          warn "3x-ui hosts: could not create the MTG share-link row"
+          rc=1
+        fi
+        ;;
+      OK)
+        ok "3x-ui hosts: MTG panel share link already ${SYNC_DOMAIN}:${XRAY_PUBLIC_PORT}"
+        ;;
+    esac
+  done <<< "$plan"
+
+  rm -rf "$tmp"
+  return "$rc"
 }
 
 mtproto_3xui_mtg_extract_secret_from_json(){
@@ -440,6 +670,11 @@ mtproto_3xui_mtg_repair_if_needed(){
   # listeners by t+1s. The helper already exists and bounds the wait at 60s, after which a genuinely
   # dead runtime still fails the invariant and gets repaired exactly as before.
   mtproto_3xui_mtg_wait_runtime >/dev/null 2>&1 || true
+  # The panel share-link row is NOT a runtime invariant, so it is reconciled on every
+  # repair rather than only on the branch that reinstalls. Without this a box that
+  # updated from an older XPAM would never grow the row: its runtime is already fine,
+  # so the check below returns early and the reinstall never runs.
+  mtproto_3xui_mtg_ensure_share_host "$(mtproto_3xui_mtg_resolve_managed_id 2>/dev/null || true)" || true
   if mtproto_3xui_mtg_runtime_invariants_ok; then
     ok "3x-ui MTG runtime invariants already OK; repair skipped"
     return 0
@@ -560,7 +795,12 @@ mtproto_3xui_mtg_install(){
   else
     mtproto_3xui_mtg_api_add "$payload" "$out" "$err" || { cat "$err" >&2 2>/dev/null || true; rm -rf "$tmp"; fail "3x-ui MTG API add failed"; }
     mtproto_3xui_mtg_assert_api_success "$out" "3x-ui MTG API add"
+    # The add response shape has changed across 3x-ui releases; re-resolve the id from
+    # the list instead of parsing it, which is also what the repair path does.
+    id="$(mtproto_3xui_mtg_resolve_managed_id 2>/dev/null || true)"
   fi
+
+  mtproto_3xui_mtg_ensure_share_host "$id" || true
 
   mtproto_3xui_mtg_write_notes "$full_secret"
   if ! mtproto_3xui_mtg_wait_runtime; then

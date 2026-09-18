@@ -4,7 +4,7 @@ set -Eeuo pipefail
 KIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Derive the displayed version from the VERSION file so it never goes stale between releases.
 KIT_VERSION="v$(head -n1 "${KIT_DIR}/VERSION" 2>/dev/null | tr -d '[:space:]' || true)"
-[[ "$KIT_VERSION" == v?* ]] || KIT_VERSION="v1.4.1"
+[[ "$KIT_VERSION" == v?* ]] || KIT_VERSION="v1.4.2"
 CONFIG_DIR="/etc/xpam-script"
 CONFIG_FILE="${CONFIG_DIR}/config.env"
 PREFIX_BOOTSTRAP_FILE="${CONFIG_DIR}/prefix.env"
@@ -3705,7 +3705,7 @@ print_connection_summary(){
   echo "  VLESS/Telegram links: формируются из актуальной базы 3x-ui"
   echo
   echo "Показать секреты:"
-  echo "  Все данные подключения: sudo ${SERVER_PREFIX}-links --show-secrets"
+  echo "  Все данные подключения: sudo ${SERVER_PREFIX}-links"
   echo
   echo "Проверка сервера:"
   echo "  Быстрая:              sudo ${SERVER_PREFIX}-health"
