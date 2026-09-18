@@ -587,6 +587,15 @@ xpam_update_apply(){
     write_install_launcher
     write_health_weekly
     write_common_library
+    # 3x-ui's own one-shot 3.8 migration rewrites the MTG share address into a `hosts` row
+    # WITHOUT a port, and a portless row inherits the inbound's INTERNAL port. A panel upgrade
+    # never runs XPAM, so nothing reconciled it and the next health run went red on a box the
+    # operator had done nothing wrong to. Heal it here as well as in repair.
+    # Narrow on purpose: NOT mtproto_backend_repair_after_update, which may decide to reinstall
+    # the MTG runtime and re-mint the managed client's id/subId — an update must not do that.
+    if uses_mtproto; then
+      mtproto_3xui_mtg_ensure_share_host "$(mtproto_3xui_mtg_resolve_managed_id 2>/dev/null || true)" || true
+    fi
     if [[ -f /usr/local/sbin/xpam-maint-common.sh ]]; then
       # shellcheck source=/dev/null
       . /usr/local/sbin/xpam-maint-common.sh
