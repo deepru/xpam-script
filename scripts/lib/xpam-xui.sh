@@ -13,6 +13,60 @@ xpam_xui_panel_base_url(){
   printf 'https://127.0.0.1:%s/%s' "${XUI_PANEL_PORT}" "${panel_path_clean}"
 }
 
+# Explicit repair migration; self-update never applies it through an old updater.
+xpam_xui_reconcile_ocsp(){
+  XPAM_COMPAT_PATH="$KIT_DIR/scripts/lib" python3 - "${XRAY_LOCAL_PORT}" <<'PY_XPAM_OCSP'
+import sys, os
+sys.path.insert(0, os.environ['XPAM_COMPAT_PATH'])
+from xpam_xray_compat import reconcile_ocsp
+try:
+    if reconcile_ocsp('/etc/x-ui/x-ui.db', sys.argv[1], '/root/manual-backups/xui-ocsp'):
+        print('OK: unsupported OCSP stapling disabled on the XPAM VLESS certificate')
+except Exception as exc:
+    print('ERROR: OCSP reconciliation failed: ' + type(exc).__name__, file=sys.stderr)
+    sys.exit(1)
+PY_XPAM_OCSP
+  local rc=$?
+  [[ "$rc" -eq 0 ]] || return "$rc"
+  prune_keep_latest /root/manual-backups/xui-ocsp 'x-ui.db.*' 2
+}
+
+xpam_xui_delete_unshared_client(){
+  local email="$1" excluding="${2:-0}" encoded tmp rc
+  encoded="$(XPAM_COMPAT_PATH="$KIT_DIR/scripts/lib" python3 - "$email" "$excluding" <<'PY_XPAM_CLIENT_OWNER'
+import os, sys, urllib.parse
+sys.path.insert(0, os.environ['XPAM_COMPAT_PATH'])
+from xpam_xray_compat import client_is_unshared
+try:
+    if not client_is_unshared('/etc/x-ui/x-ui.db', sys.argv[1], sys.argv[2]):
+        sys.exit(2)
+    print(urllib.parse.quote(sys.argv[1], safe=''))
+except Exception:
+    sys.exit(1)
+PY_XPAM_CLIENT_OWNER
+  )"; rc=$?
+  [[ "$rc" -ne 2 ]] || return 0
+  [[ "$rc" -eq 0 && -n "$encoded" ]] || { warn "Не удалось подтвердить владение клиентом; удаление пропущено"; return 1; }
+  tmp="$(mktemp -d /tmp/xpam-client-cleanup.XXXXXX)" || return 1
+  chmod 700 "$tmp"
+  printf '{}' > "$tmp/body"
+  rc=0
+  xpam_xui_api_post_json "$(xpam_xui_panel_base_url)/panel/api/clients/del/${encoded}" \
+    "$tmp/body" "$tmp/response" "$tmp/error" || rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    python3 - "$tmp/response" <<'PY_XPAM_CLIENT_DELETE_RESULT' || rc=$?
+import json,sys
+try:
+    sys.exit(0 if json.load(open(sys.argv[1])).get('success') is True else 1)
+except Exception:
+    sys.exit(1)
+PY_XPAM_CLIENT_DELETE_RESULT
+  fi
+  rm -rf -- "$tmp"
+  [[ "$rc" -eq 0 ]] || warn "Панель не подтвердила удаление клиента; прямое удаление SQL не выполнялось"
+  return "$rc"
+}
+
 
 xpam_xui_download_url(){
   local url="$1" out="$2" label="${3:-3x-ui file}" ip
@@ -452,8 +506,11 @@ xpam_xui_warp_api(){
   chmod 600 "$payload" "$out" "$err" 2>/dev/null || true
 
   if ! python3 - "$@" >"$payload" 2>/dev/null <<'PY_XPAM_WARP_FORM'
-import sys, urllib.parse
+import sys, os, urllib.parse
 pairs=[]
+for field, variable in (('privateKey','XPAM_WARP_PRIVATE_KEY'),('publicKey','XPAM_WARP_PUBLIC_KEY')):
+    if os.environ.get(variable):
+        pairs.append((field, os.environ[variable]))
 for arg in sys.argv[1:]:
     if '=' not in arg:
         continue
@@ -905,9 +962,68 @@ stage_warp_change_ip(){
   local confirm
   read -r -p "Сменить WARP-IP? [y/N]: " confirm || true
   case "$confirm" in
-    y|Y|yes|YES|д|Д) warp_change_ip ;;
+    y|Y|yes|YES|д|Д) warp_with_rollback warp_change_ip ;;
     *) echo "Отменено. Изменений не внесено."; return 0 ;;
   esac
+}
+
+warp_with_rollback(){
+  local backup_dir=/root/manual-backups/xui-warp-operation backup rc
+  systemctl is-active --quiet x-ui || { warn "Сначала восстановите работающую службу 3x-ui"; return 1; }
+  mkdir -p "$backup_dir"; chmod 700 "$backup_dir"
+  backup="$backup_dir/x-ui.db.$(date +%Y%m%d-%H%M%S)"
+  xui_db_safe_copy "$backup" || return 1
+  if ( "$@" ); then
+    prune_keep_latest "$backup_dir" 'x-ui.db.*' 2
+    return 0
+  else
+    rc=$?
+  fi
+  warn "Операция WARP не завершилась; восстанавливаем прежний аккаунт и маршруты"
+  XPAM_COMPAT_PATH="$KIT_DIR/scripts/lib" python3 - "$backup" <<'PY_XPAM_WARP_RESTORE' || return 1
+import os,sys
+sys.path.insert(0, os.environ['XPAM_COMPAT_PATH'])
+from xpam_xray_compat import restore_warp_state
+try:
+    restore_warp_state(sys.argv[1], '/etc/x-ui/x-ui.db')
+except Exception as exc:
+    print('ERROR: WARP rollback failed: ' + type(exc).__name__, file=sys.stderr)
+    sys.exit(1)
+PY_XPAM_WARP_RESTORE
+  systemctl restart x-ui || return 1
+  /usr/local/sbin/wait-for-local-port.sh 127.0.0.1 "$XUI_PANEL_PORT" 30 xui-panel || return 1
+  wait_for_xray_vless 30 || return 1
+  prune_keep_latest "$backup_dir" 'x-ui.db.*' 2
+  return "$rc"
+}
+
+warp_setup_and_enable(){ warp_auto_register && xui_warp_youtube_fix; }
+warp_import_and_enable(){ warp_install_registration_file "$1" yes && xui_warp_youtube_fix; }
+
+stage_warp_import(){
+  local file
+  load_config
+  xui_assert_sqlite_backend
+  echo "Импорт полного аккаунта WARP из ответа регистрации 3x-ui."
+  echo "После проверки туннеля будут включены маршруты WARP; Xray перезапустится."
+  read -r -p "Путь к файлу регистрации (root, права 600): " file || return 1
+  XPAM_COMPAT_PATH="$KIT_DIR/scripts/lib" python3 - "$file" <<'PY_XPAM_WARP_IMPORT_VALIDATE' || return 1
+import json,os,stat,sys
+sys.path.insert(0, os.environ['XPAM_COMPAT_PATH'])
+from xpam_xray_compat import validated_warp_registration
+try:
+    fd=os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd) as source:
+        info=os.fstat(source.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid!=0 or info.st_mode & 0o077 or info.st_size>1024*1024:
+            raise ValueError('file ownership, permissions or size')
+        validated_warp_registration(json.load(source))
+except Exception:
+    print('ERROR: нужен корректный полный ответ регистрации в обычном файле root с правами 600', file=sys.stderr)
+    sys.exit(1)
+PY_XPAM_WARP_IMPORT_VALIDATE
+  say "Проверяем аккаунт и реальное соединение WARP перед применением маршрутов"
+  warp_with_rollback warp_import_and_enable "$file"
 }
 
 stage_warp_menu(){
@@ -922,13 +1038,15 @@ stage_warp_menu(){
   echo "2) Сменить WARP-IP (новый выходной адрес)"
   echo "3) Отключить WARP и вернуть VLESS в обычный режим"
   echo "4) Выйти"
+  echo "5) Импортировать аккаунт и включить WARP"
   local choice
-  read -r -p "Выберите пункт [1-4]: " choice || true
+  read -r -p "Выберите пункт [1-5]: " choice || true
   case "$choice" in
     1) stage_warp_3xui_youtube ;;
     2) stage_warp_change_ip ;;
     3) stage_warp_3xui_disable ;;
     4) return 0 ;;
+    5) stage_warp_import ;;
     *) fail "Неизвестный пункт меню" ;;
   esac
 }

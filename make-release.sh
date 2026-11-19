@@ -48,6 +48,7 @@ REQUIRED_FILES=(
   scripts/lib/xpam-sites.sh
   scripts/lib/xpam-update.sh
   scripts/lib/xpam-xui.sh
+  scripts/lib/xpam_xray_compat.py
   # Every template the code renders. The nginx/haproxy ones are load-bearing for masking and for
   # the front layer; repair re-renders them, so a kit without them cannot self-heal.
   templates/backend-order.conf.tpl
@@ -347,8 +348,11 @@ build_info="${build_info_dir}/BUILD_INFO"
 # Archive the WORKING TREE (tracked files, current on-disk content) under the
 # wrapper prefix. git stash create yields a tree object for the working tree
 # without touching the stash list; falls back to HEAD when the tree is clean.
-tree="$(git stash create 2>/dev/null || true)"
-[[ -n "$tree" ]] || tree="HEAD"
+tree="HEAD"
+if [[ "$dirty" == "yes" ]]; then
+  tree="$(git stash create)" || die "cannot snapshot the working tree"
+  [[ -n "$tree" ]] || die "working-tree snapshot is empty; refusing to archive stale HEAD"
+fi
 git archive --format=tar.gz --prefix="${prefix}/" --add-file="$build_info" -o "$tarball" "$tree"
 rm -rf "$build_info_dir"
 ( cd "$out_dir" && sha256sum "${prefix}.tar.gz" > "${prefix}.tar.gz.sha256" )

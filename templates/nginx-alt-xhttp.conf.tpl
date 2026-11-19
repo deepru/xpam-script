@@ -48,8 +48,10 @@ server {
         proxy_pass http://127.0.0.1:{{XRAY_ALT_PORT}};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # HAProxy forwards TLS without PROXY protocol; nginx sees its loopback peer.
+        # Do not forward client-supplied address headers as trusted identities.
+        proxy_set_header X-Real-IP "";
+        proxy_set_header X-Forwarded-For "";
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header Connection "";
         proxy_buffering off;

@@ -17,6 +17,7 @@ Do not publish or paste publicly:
 - Telegram bot tokens;
 - relay tokens;
 - WARP/WireGuard credentials;
+- full WARP registration JSON files and account exports;
 - private keys;
 - certificate private keys;
 - `/etc/xpam-script/config.env`;
@@ -42,9 +43,9 @@ XPAM configures DoubleHop Mode on the Entry server only. It does not automatical
 
 ## Update safety
 
-XPAM safe self-update must verify the downloaded archive, run preflight checks, create a backup, run post-update health checks and roll back on failure.
+XPAM safe self-update verifies the downloaded archive, runs preflight checks, creates a backup, runs post-update health checks and rolls back if the update introduces a failure.
 
-Update logs must not contain live connection links, tokens or private keys.
+Update logs omit live connection links, tokens and private keys.
 
 ## Logs
 

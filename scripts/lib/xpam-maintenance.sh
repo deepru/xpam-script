@@ -33,9 +33,10 @@ run_health_quiet(){
     prune_keep_latest "$log_dir" "${SERVER_PREFIX}-*.log" 4
     ok "Краткая health-проверка пройдена. Подробный лог: $log"
     return 0
+  else
+    rc=$?
   fi
 
-  rc=$?
   prune_keep_latest "$log_dir" "${SERVER_PREFIX}-*.log" 4
   warn "Health-check завершился ошибкой. Подробный лог: $log"
   echo "Последние строки health-лога:"

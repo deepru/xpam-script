@@ -26,5 +26,8 @@ jobs:
       - name: Payload smoke-harness (VLESS/MTG/xhttp vs 3x-ui model.Client/model.Inbound)
         run: bash tests/payload-smoke.sh
 
+      - name: Compatibility and update safety regression tests
+        run: python3 tests/test_compatibility.py
+
       - name: shellcheck (advisory — errors only)
         run: shellcheck -S error install.sh bootstrap.sh scripts/xpam-core.sh scripts/lib/*.sh || true

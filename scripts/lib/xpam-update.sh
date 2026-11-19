@@ -378,6 +378,7 @@ xpam_update_static_preflight(){
     "scripts/lib/xpam-sites.sh"
     "scripts/lib/xpam-update.sh"
     "scripts/lib/xpam-xui.sh"
+    "scripts/lib/xpam_xray_compat.py"
     "templates/backend-order.conf.tpl"
     "templates/check-dns-policy.sh.tpl"
     "templates/check-network-tuning-policy.sh.tpl"
@@ -439,14 +440,20 @@ xpam_update_link_hashes_capture(){
   mkdir -p "$dest"
   : > "$dest/link-hashes.env"
   if [[ ! -x "/usr/local/sbin/${prefix}-links" ]]; then
-    return 0
+    return 1
   fi
-  out="$(mktemp /tmp/xpam-update-links.XXXXXX)"
-  if "/usr/local/sbin/${prefix}-links" --show-secrets > "$out" 2>/dev/null; then
-    v="$(grep -Eo 'vless://[^[:space:]]+' "$out" | head -n1 | sha256sum | awk '{print $1}' || true)"
-    tg="$(grep -Eo 'tg://proxy\?[^[:space:]]+' "$out" | head -n1 | sha256sum | awk '{print $1}' || true)"
+  out="$(mktemp /tmp/xpam-update-links.XXXXXX)" || return 1
+  chmod 600 "$out" || { rm -f "$out"; return 1; }
+  if "/usr/local/sbin/${prefix}-links" > "$out" 2>/dev/null; then
+    # Compare every connection, including spare transports and additional clients.
+    # Ordering in the summary is presentation only; changing a connection is not.
+    v="$(grep -Eo 'vless://[^[:space:]]+' "$out" | LC_ALL=C sort -u | sha256sum | awk '{print $1}' || true)"
+    tg="$(grep -Eo 'tg://proxy\?[^[:space:]]+' "$out" | LC_ALL=C sort -u | sha256sum | awk '{print $1}' || true)"
     [[ -n "$v" ]] && printf 'XPAM_UPDATE_VLESS_HASH=%s\n' "$v" >> "$dest/link-hashes.env"
     [[ -n "$tg" ]] && printf 'XPAM_UPDATE_TG_HASH=%s\n' "$tg" >> "$dest/link-hashes.env"
+  else
+    rm -f "$out"
+    return 1
   fi
   rm -f "$out"
 }
@@ -466,14 +473,14 @@ xpam_update_snapshot_create(){
   b="${XPAM_UPDATE_WORKDIR}/backup"
   mkdir -p "$b/usr-local-sbin" "$b/usr-local-bin" "$b/opt" "$b/etc"
 
-  xpam_update_link_hashes_capture "$prefix" "${XPAM_UPDATE_WORKDIR}/pre-state"
+  xpam_update_link_hashes_capture "$prefix" "${XPAM_UPDATE_WORKDIR}/pre-state" || return 1
   xpam_update_dh_mode_capture "${XPAM_UPDATE_WORKDIR}/pre-state"
 
   if [[ -d "$RUNTIME_KIT_DIR" ]]; then
-    cp -a "$RUNTIME_KIT_DIR" "$b/opt/xpam-script"
+    cp -a "$RUNTIME_KIT_DIR" "$b/opt/xpam-script" || return 1
   fi
   if [[ -d "$CONFIG_DIR" ]]; then
-    cp -a "$CONFIG_DIR" "$b/etc/xpam-script"
+    cp -a "$CONFIG_DIR" "$b/etc/xpam-script" || return 1
   fi
 
   for p in \
@@ -483,17 +490,29 @@ xpam_update_snapshot_create(){
     "/usr/local/sbin/${prefix}-netdiag" "/usr/local/sbin/${prefix}-weekly-maintenance.sh" \
     "/usr/local/sbin/${prefix}-post-reboot-maint.sh" "/etc/systemd/system/${prefix}-post-reboot-maint.service" \
     "/usr/local/sbin/xpam-maint-common.sh" \
+    "/usr/local/sbin/check-dns-policy.sh" "/usr/local/sbin/check-network-tuning-policy" \
+    "/usr/local/sbin/telegram-https-relay.py" "/usr/bin/x-ui" \
+    "/usr/local/bin/${prefix}-health" "/usr/local/bin/${prefix}-links" \
+    "/usr/local/bin/${prefix}-repair" "/usr/local/bin/${prefix}-netdiag" \
+    "/usr/local/bin/${prefix}-weekly-maintenance" \
+    "/etc/hosts" "/etc/default/x-ui" \
+    "/etc/systemd/journald.conf.d/90-xpam-script.conf" "/etc/logrotate.d/xpam-script" \
+    "/etc/cron.d/${prefix}-weekly-maintenance" \
     "/usr/local/sbin/${prefix}-install" "/usr/local/bin/${prefix}-install"
   do
     safe="${p#/}"
     mkdir -p "$b/$(dirname "$safe")"
     if [[ -e "$p" || -L "$p" ]]; then
-      cp -a "$p" "$b/$safe"
+      cp -a "$p" "$b/$safe" || return 1
       printf 'present %s\n' "$p" >> "$b/manifest.txt"
     else
       printf 'absent %s\n' "$p" >> "$b/manifest.txt"
     fi
   done
+  mkdir -p "$b/etc/x-ui" || return 1
+  xui_db_safe_copy "$b/etc/x-ui/x-ui.db" || return 1
+  systemctl is-active x-ui > "$b/x-ui-state" 2>/dev/null || true
+  systemctl is-enabled "${prefix}-post-reboot-maint.service" > "$b/post-reboot-state" 2>/dev/null || true
   xpam_update_log "backup created at $b"
 }
 
@@ -535,13 +554,25 @@ xpam_update_rollback(){
       "/usr/local/sbin/${prefix}-netdiag" "/usr/local/sbin/${prefix}-weekly-maintenance.sh" \
       "/usr/local/sbin/${prefix}-post-reboot-maint.sh" "/etc/systemd/system/${prefix}-post-reboot-maint.service" \
       "/usr/local/sbin/xpam-maint-common.sh" \
+    "/usr/local/sbin/check-dns-policy.sh" "/usr/local/sbin/check-network-tuning-policy" \
+    "/usr/local/sbin/telegram-https-relay.py" "/usr/bin/x-ui" \
+    "/usr/local/bin/${prefix}-health" "/usr/local/bin/${prefix}-links" \
+    "/usr/local/bin/${prefix}-repair" "/usr/local/bin/${prefix}-netdiag" \
+    "/usr/local/bin/${prefix}-weekly-maintenance" \
+    "/etc/hosts" "/etc/default/x-ui" \
+    "/etc/systemd/journald.conf.d/90-xpam-script.conf" "/etc/logrotate.d/xpam-script" \
+    "/etc/cron.d/${prefix}-weekly-maintenance" \
       "/usr/local/sbin/${prefix}-install" "/usr/local/bin/${prefix}-install"
     do
       xpam_update_restore_path "$p" "$b"
     done
     # A rolled-back (pre-1.4.0) runtime has no post-reboot unit; make sure a
     # leftover armed unit from the new version cannot linger enabled.
-    systemctl disable "${prefix}-post-reboot-maint.service" >/dev/null 2>&1 || true
+    if grep -qx enabled "$b/post-reboot-state" 2>/dev/null; then
+      systemctl enable "${prefix}-post-reboot-maint.service" >/dev/null 2>&1 || true
+    else
+      systemctl disable "${prefix}-post-reboot-maint.service" >/dev/null 2>&1 || true
+    fi
     systemctl daemon-reload >/dev/null 2>&1 || true
   fi
 
@@ -559,6 +590,17 @@ xpam_update_rollback(){
     ) >>"$XPAM_UPDATE_LOG" 2>&1 || true
   fi
 
+  if [[ -s "$b/etc/x-ui/x-ui.db" ]]; then
+    systemctl stop x-ui || return 1
+    install -m 600 "$b/etc/x-ui/x-ui.db" /etc/x-ui/x-ui.db || return 1
+    rm -f /etc/x-ui/x-ui.db-wal /etc/x-ui/x-ui.db-shm
+    if grep -qx active "$b/x-ui-state"; then
+      systemctl start x-ui || return 1
+      /usr/local/sbin/wait-for-local-port.sh 127.0.0.1 "$XUI_PANEL_PORT" 30 xui-panel || return 1
+      wait_for_xray_vless 30 || return 1
+    fi
+  fi
+  systemctl restart systemd-journald >/dev/null 2>&1 || true
   xpam_update_log "rollback finished"
 }
 
@@ -568,10 +610,10 @@ xpam_update_apply(){
   say "Применение обновления XPAM"
   cd /
   if command -v rsync >/dev/null 2>&1; then
-    rsync -a --delete --exclude '.git' --exclude '*.log' "$root"/ "$RUNTIME_KIT_DIR"/
+    rsync -a --delete --exclude '.git' --exclude '*.log' "$root"/ "$RUNTIME_KIT_DIR"/ || return 1
   else
     find "$RUNTIME_KIT_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-    (cd "$root" && tar --exclude='.git' --exclude='*.log' -cf - .) | (cd "$RUNTIME_KIT_DIR" && tar -xf -)
+    (cd "$root" && tar --exclude='.git' --exclude='*.log' -cf - .) | (cd "$RUNTIME_KIT_DIR" && tar -xf -) || return 1
   fi
   chmod 755 "$RUNTIME_KIT_DIR" "$RUNTIME_KIT_DIR/install.sh" 2>/dev/null || true
 
@@ -579,14 +621,14 @@ xpam_update_apply(){
     cd /
     export XPAM_SCRIPT_QUIET_LOAD_CONFIG=1
     # shellcheck source=/dev/null
-    source "$RUNTIME_KIT_DIR/scripts/xpam-core.sh"
-    load_config
+    source "$RUNTIME_KIT_DIR/scripts/xpam-core.sh" || exit 1
+    load_config || exit 1
     fix_managed_hosts || true
-    install_runtime_kit
+    install_runtime_kit || exit 1
     xpam_xui_apply_fail2ban_optout || true
-    write_install_launcher
-    write_health_weekly
-    write_common_library
+    write_install_launcher || exit 1
+    write_health_weekly || exit 1
+    write_common_library || exit 1
     # 3x-ui's own one-shot 3.8 migration rewrites the MTG share address into a `hosts` row
     # WITHOUT a port, and a portless row inherits the inbound's INTERNAL port. A panel upgrade
     # never runs XPAM, so nothing reconciled it and the next health run went red on a box the
@@ -609,7 +651,7 @@ xpam_update_compare_link_hashes(){
   prefix="$1"
   before="${XPAM_UPDATE_WORKDIR}/pre-state/link-hashes.env"
   after="${XPAM_UPDATE_WORKDIR}/post-state"
-  xpam_update_link_hashes_capture "$prefix" "$after"
+  xpam_update_link_hashes_capture "$prefix" "$after" || return 1
   b_v="$(awk -F= '$1=="XPAM_UPDATE_VLESS_HASH"{print $2}' "$before" 2>/dev/null || true)"
   b_t="$(awk -F= '$1=="XPAM_UPDATE_TG_HASH"{print $2}' "$before" 2>/dev/null || true)"
   a_v="$(awk -F= '$1=="XPAM_UPDATE_VLESS_HASH"{print $2}' "$after/link-hashes.env" 2>/dev/null || true)"
@@ -650,10 +692,22 @@ xpam_update_postcheck(){
   local post_dir pre_failures post_failures new_failures
   post_dir="${XPAM_UPDATE_WORKDIR}/post-state"
   mkdir -p "$post_dir"
-  "/usr/local/sbin/${prefix}-health" > "$post_dir/health.txt" 2>&1 || true
-  "/usr/local/sbin/${prefix}-health" --deep > "$post_dir/health-deep.txt" 2>&1 || true
+  local quick_rc=0 deep_rc=0
+  "/usr/local/sbin/${prefix}-health" > "$post_dir/health.txt" 2>&1 || quick_rc=$?
+  "/usr/local/sbin/${prefix}-health" --deep > "$post_dir/health-deep.txt" 2>&1 || deep_rc=$?
+  # An interrupted/failed checker is not an empty set of failures. The result
+  # section is emitted only after every deep-health check has finished.
+  if ! grep -qx '===== RESULT =====' "$post_dir/health-deep.txt" || \
+      [[ "$quick_rc" -gt 1 || "$deep_rc" -gt 1 ]]; then
+    xpam_update_log "postcheck: health did not finish normally"
+    return 1
+  fi
   xpam_update_health_failures "$post_dir/health.txt" "$post_dir/health-deep.txt" \
     > "$post_dir/health-failures.txt"
+  if [[ "$quick_rc" -ne 0 || "$deep_rc" -ne 0 ]] && [[ ! -s "$post_dir/health-failures.txt" ]]; then
+    xpam_update_log "postcheck: health failed without an actionable failure summary"
+    return 1
+  fi
   pre_failures="${XPAM_UPDATE_WORKDIR}/pre-state/health-failures.txt"
   [[ -f "$pre_failures" ]] || pre_failures=/dev/null
   post_failures="$post_dir/health-failures.txt"
@@ -784,7 +838,10 @@ xpam_update_run(){
     return 1
   fi
 
-  xpam_update_snapshot_create >>"$XPAM_UPDATE_LOG" 2>&1
+  if ! xpam_update_snapshot_create >>"$XPAM_UPDATE_LOG" 2>&1; then
+    warn "Не удалось создать полную резервную копию; обновление не применено"
+    return 1
+  fi
 
   if xpam_update_apply && xpam_update_postcheck >>"$XPAM_UPDATE_LOG" 2>&1; then
     xpam_update_log "update successful"
@@ -793,8 +850,7 @@ xpam_update_run(){
   fi
 
   xpam_update_log "update failed after mutation; rollback required"
-  xpam_update_rollback
-  if xpam_update_postcheck >>"$XPAM_UPDATE_LOG" 2>&1; then
+  if xpam_update_rollback && xpam_update_postcheck >>"$XPAM_UPDATE_LOG" 2>&1; then
     xpam_update_failure_message yes
     return 1
   fi

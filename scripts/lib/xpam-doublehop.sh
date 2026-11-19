@@ -697,6 +697,8 @@ try:
     cfg=jloads(row[0], {})
     if not isinstance(cfg,dict):
         fail('xrayTemplateConfig invalid')
+    if (cfg.get('routing') or {}).get('script'):
+        fail('custom routing script is configured; DoubleHop routing was not changed')
     outbounds=cfg.setdefault('outbounds', [])
     if not isinstance(outbounds,list):
         outbounds=[]; cfg['outbounds']=outbounds

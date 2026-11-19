@@ -4,7 +4,7 @@ set -Eeuo pipefail
 KIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Derive the displayed version from the VERSION file so it never goes stale between releases.
 KIT_VERSION="v$(head -n1 "${KIT_DIR}/VERSION" 2>/dev/null | tr -d '[:space:]' || true)"
-[[ "$KIT_VERSION" == v?* ]] || KIT_VERSION="v1.4.2"
+[[ "$KIT_VERSION" == v?* ]] || KIT_VERSION="v1.5.0"
 CONFIG_DIR="/etc/xpam-script"
 CONFIG_FILE="${CONFIG_DIR}/config.env"
 PREFIX_BOOTSTRAP_FILE="${CONFIG_DIR}/prefix.env"
@@ -256,25 +256,45 @@ xui_assert_sqlite_backend(){
 # mirrors dh_snapshot_create() in xpam-doublehop.sh, which has done it this way since the Stage 9A
 # WAL/SHM incident — this helper generalizes that proven pattern to every other backup site.
 #
-# Falls back to `cp -a` when sqlite3 is absent so behaviour is never worse than before.
+# A failed online backup is a failure: copying only the live main file can omit
+# committed WAL transactions while passing integrity_check.
 # Usage: xui_db_safe_copy <destination>   (returns non-zero on failure; caller decides how loud)
 xui_db_safe_copy(){
   local dest="${1:-}" db="/etc/x-ui/x-ui.db"
   [[ -n "$dest" ]] || return 1
   [[ -s "$db" ]] || return 1
   mkdir -p "$(dirname -- "$dest")" 2>/dev/null || true
-  if command -v sqlite3 >/dev/null 2>&1; then
-    sqlite3 "$db" "PRAGMA wal_checkpoint(FULL);" >/dev/null 2>&1 || true
-    if sqlite3 "$db" ".timeout 5000" ".backup '${dest}'" 2>/dev/null; then
-      chmod 600 "$dest" 2>/dev/null || true
-      return 0
-    fi
-    # .backup can legitimately lose a race with a busy writer; fall through rather than fail the
-    # caller, since a plain copy is still strictly better than no backup at all.
-  fi
-  cp -a "$db" "$dest" || return 1
-  chmod 600 "$dest" 2>/dev/null || true
-  return 0
+  python3 - "$db" "$dest" <<'PY_XPAM_DB_BACKUP'
+import os, sqlite3, sys, tempfile, time
+from contextlib import closing
+from pathlib import Path
+
+source, destination = map(Path, sys.argv[1:])
+temporary = None
+try:
+    fd, temporary = tempfile.mkstemp(prefix='.xpam-db-', dir=str(destination.parent))
+    os.close(fd)
+    deadline = time.monotonic() + 30
+    def progress(status, remaining, total):
+        if time.monotonic() > deadline:
+            raise TimeoutError('database backup timed out')
+    with closing(sqlite3.connect(source.resolve().as_uri() + '?mode=ro', uri=True, timeout=5)) as src:
+        with closing(sqlite3.connect(temporary)) as dst:
+            src.backup(dst, pages=256, progress=progress, sleep=0.1)
+            if dst.execute('PRAGMA integrity_check').fetchall() != [('ok',)]:
+                raise ValueError('backup integrity check failed')
+    os.replace(temporary, destination)
+    temporary = None
+except Exception as exc:
+    print('ERROR: consistent 3x-ui database backup failed: ' + type(exc).__name__, file=sys.stderr)
+    sys.exit(1)
+finally:
+    if temporary is not None:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+PY_XPAM_DB_BACKUP
 }
 
 xui_validate_sqlite_contract(){
@@ -2240,7 +2260,7 @@ write_manual_3xui_note(){
   xray_listen="127.0.0.1"
   sniffing="OFF by default. If you later enable WARP/domain routing inside 3x-ui/Xray, XPAM Script can switch sniffing to Route only for that routing use-case."
   proxy_protocol_note="Proxy Protocol: OFF. Do not enable it unless HAProxy backend is also changed to send-proxy and health checks/nginx are adjusted.\nFallback PROXY/xVer: OFF / 0. Do not enable unless nginx fallback listens with proxy_protocol.\nFallback SNI/name: empty. Empty means catch-all fallback to the masked website; do not narrow it to one domain unless you intentionally maintain several fallback destinations.\nAuthentication: None / empty. Do not enable X25519/ML-KEM auth for this VLESS+TLS+fallback layout."
-  warp_block="Optional WARP notes:\n  WARP is configured by XPAM Script from its WARP menu (registration + outbound are automatic).\n  Recommended outbound values: tag=warp, protocol=wireguard, MTU=1420, domainStrategy=ForceIPv4, noKernelTun=false. Do not use the removed WireGuard workers field on current Xray/3x-ui builds.\n  reserved is derived automatically from the WARP account client_id; peer keepAlive=25.\n  Peer allowedIPs should be IPv4-only: 0.0.0.0/0. Do not add ::/0.\n  Address should be IPv4-only, for example 172.16.0.2/32. Do not add Cloudflare IPv6 address 2606:.../128 on this IPv4-only public layout.\n  Endpoint is usually engage.cloudflareclient.com:2408, but follow your actual WARP profile if it differs.\n  Use routing rules for selected domains only; keep system DNS independent from wg0/WARP.\n  wg0 may be lazy/absent immediately after reboot; health treats that as acceptable when WireGuard outbound exists.\n  Never paste WARP private keys into XPAM Script files, notes, screenshots or support messages."
+  warp_block="Optional WARP notes:\n  WARP is configured by XPAM Script from its WARP menu (registration + outbound are automatic).\n  Recommended outbound values: tag=warp, protocol=wireguard, MTU=1420. XPAM selects IPv4-only DNS settings for the installed Xray and preserves the kernel/userspace mode chosen in 3x-ui. Do not use the removed WireGuard workers field on current Xray/3x-ui builds.\n  reserved is derived automatically from the WARP account client_id; peer keepAlive=25.\n  Peer allowedIPs should be IPv4-only: 0.0.0.0/0. Do not add ::/0.\n  Address should be IPv4-only, for example 172.16.0.2/32. Do not add Cloudflare IPv6 address 2606:.../128 on this IPv4-only public layout.\n  Endpoint is usually engage.cloudflareclient.com:2408, but follow your actual WARP profile if it differs.\n  Use routing rules for selected domains only; keep system DNS independent from wg0/WARP.\n  wg0 may be lazy/absent immediately after reboot; health treats that as acceptable when WireGuard outbound exists.\n  Never paste WARP private keys into XPAM Script files, notes, screenshots or support messages."
   cat > "$note" <<EOF
 Manual 3x-ui setup for XPAM Script
 =========================================================
@@ -2469,7 +2489,7 @@ stream={
     "minVersion":"1.2",
     "maxVersion":"1.3",
     "cipherSuites":"",
-    "certificates":[{"certificateFile":os.environ["XPAM_CERT"],"keyFile":os.environ["XPAM_KEY"],"ocspStapling":3600}],
+    "certificates":[{"certificateFile":os.environ["XPAM_CERT"],"keyFile":os.environ["XPAM_KEY"]}],
     "alpn":["http/1.1"],
     "settings":{"allowInsecure":False,"fingerprint":"firefox"}
   },
@@ -4000,6 +4020,15 @@ warp_auto_register(){
   xui_assert_sqlite_backend
   [[ -s "$db" ]] || fail "3x-ui DB не найден: $db"
 
+  # Registration itself replaces the panel's saved credentials; back up first.
+  backup_dir="/root/manual-backups/xui-warp-register"
+  mkdir -p "$backup_dir"
+  chmod 700 "$backup_dir"
+  backup="${backup_dir}/x-ui.db.$(date +%Y%m%d-%H%M%S)"
+  xui_db_safe_copy "$backup" || fail "Не удалось создать backup 3x-ui DB"
+  ok "Backup 3x-ui DB создан: $backup"
+  prune_keep_latest "$backup_dir" "x-ui.db.*" 4
+
   say "Генерируем WireGuard-ключи для WARP"
   keypair="$(warp_gen_wg_keypair)" || fail "Не удалось сгенерировать WireGuard-ключи (нужен openssl с поддержкой X25519 или wireguard-tools)"
   priv="${keypair%% *}"
@@ -4011,7 +4040,7 @@ warp_auto_register(){
 
   say "Регистрируем аккаунт WARP в Cloudflare через 3x-ui"
   # The reg response embeds the private key, so it goes to a 600 temp file — never to stdout/logs.
-  if ! xpam_xui_warp_api reg "privateKey=${priv}" "publicKey=${pub}" >"$reg_file" 2>"${reg_file}.err"; then
+  if ! XPAM_WARP_PRIVATE_KEY="$priv" XPAM_WARP_PUBLIC_KEY="$pub" xpam_xui_warp_api reg >"$reg_file" 2>"${reg_file}.err"; then
     warn "Не удалось зарегистрировать аккаунт WARP: сервер не смог связаться с Cloudflare (api.cloudflareclient.com)."
     warn "Причина обычно в маршрутизации провайдера до диапазона WARP API. Конфигурация НЕ изменена."
     [[ -s "${reg_file}.err" ]] && sed -e 's/^/  /' "${reg_file}.err" >&2 || true
@@ -4021,25 +4050,32 @@ warp_auto_register(){
   rm -f -- "${reg_file}.err"
   ok "Аккаунт WARP зарегистрирован"
 
-  backup_dir="/root/manual-backups/xui-warp-register"
-  mkdir -p "$backup_dir"
-  chmod 700 "$backup_dir"
-  backup="${backup_dir}/x-ui.db.$(date +%Y%m%d-%H%M%S)"
-  xui_db_safe_copy "$backup" || { rm -f -- "$reg_file"; fail "Не удалось создать backup 3x-ui DB"; }
-  chmod 600 "$backup" 2>/dev/null || true
-  ok "Backup 3x-ui DB создан: $backup"
-  prune_keep_latest "$backup_dir" "x-ui.db.*" 4
+  if warp_install_registration_file "$reg_file" no; then
+    rc=0
+  else
+    rc=$?
+  fi
+  rm -f -- "$reg_file"
+  priv=""; pub=""; keypair=""
+  return "$rc"
+}
 
+# A root-only registration response can be imported without calling Cloudflare
+# from this server. Credential storage and outbound replacement share one transaction.
+warp_install_registration_file(){
+  local reg_file="$1" store_account="${2:-no}" db=/etc/x-ui/x-ui.db rc
   # A clean 3x-ui install has no settings.xrayTemplateConfig row yet, and the outbound writer below
   # requires it. DoubleHop has always materialized it; WARP did not, which made WARP impossible to
   # configure on a fresh box (account registered, outbound not created). Idempotent no-op when the
   # row already exists. Guard tag "warp" so we never materialize from an already-WARPed runtime.
-  dh_materialize_xray_template_if_missing warp || { rm -f -- "$reg_file"; fail "Не удалось подготовить xrayTemplateConfig для WARP"; }
+  dh_materialize_xray_template_if_missing warp || return 1
 
   export XPAM_XUI_DB="$db" XPAM_WARP_REG_FILE="$reg_file"
-  python3 <<'PY_XPAM_WARP_INJECT'
+  XPAM_COMPAT_PATH="$KIT_DIR/scripts/lib" XPAM_WARP_STORE_ACCOUNT="$store_account" python3 <<'PY_XPAM_WARP_INJECT'
 import base64, json, os, sqlite3, sys
 from pathlib import Path
+sys.path.insert(0, os.environ['XPAM_COMPAT_PATH'])
+from xpam_xray_compat import core_version, warp_policy, validated_warp_registration, probe_warp
 
 db=Path(os.environ['XPAM_XUI_DB'])
 reg=Path(os.environ['XPAM_WARP_REG_FILE'])
@@ -4056,57 +4092,17 @@ try:
 except Exception as e:
     fail(f"не удалось разобрать ответ регистрации WARP: {e}")
 
-data=envelope.get('data') or {}
-# `config` is the raw Cloudflare /reg body; the interesting part is its own 'config' object
-# (same access path the panel's WarpModal uses: resp.config.config).
-cf=(envelope.get('config') or {}).get('config') or {}
-if not isinstance(cf, dict) or not cf:
-    fail("ответ Cloudflare не содержит секцию config")
-
-private_key=data.get('private_key') or ''
-if not private_key:
-    fail("в ответе регистрации нет private_key")
-
-peers=cf.get('peers') or []
-if not isinstance(peers, list) or not peers or not isinstance(peers[0], dict):
-    fail("ответ Cloudflare не содержит peer")
-peer=peers[0]
-peer_pub=peer.get('public_key') or ''
-endpoint_host=((peer.get('endpoint') or {}) if isinstance(peer.get('endpoint'), dict) else {}).get('host') or ''
-if not peer_pub or not endpoint_host:
-    fail("ответ Cloudflare не содержит publicKey/endpoint для peer")
-
-addrs=(cf.get('interface') or {}).get('addresses') or {}
-v4=addrs.get('v4') or ''
-if not v4:
-    fail("ответ Cloudflare не содержит IPv4-адрес интерфейса")
-# IPv4-ONLY on purpose: the public layout is IPv4-only, and an IPv6 address here would make
-# health warn and could black-hole the handshake on a half-configured-IPv6 host.
-address=[f"{v4}/32"]
-
-client_id=cf.get('client_id') or data.get('client_id') or ''
-reserved=[]
-if client_id:
-    try:
-        reserved=[b for b in base64.b64decode(client_id)]
-    except Exception:
-        reserved=[]
-
-settings={
-    'mtu': 1420,
-    'secretKey': private_key,
-    'address': address,
-    'domainStrategy': 'ForceIPv4',
-    'noKernelTun': False,
-    'peers': [{
-        'publicKey': peer_pub,
-        'endpoint': endpoint_host if ':' in endpoint_host else f"{endpoint_host}:2408",
-        'allowedIPs': ['0.0.0.0/0'],
-        'keepAlive': 25,
-    }],
-}
-if len(reserved)==3:
-    settings['reserved']=reserved
+try:
+    account, settings=validated_warp_registration(envelope)
+except Exception as exc:
+    fail('некорректный ответ регистрации WARP: ' + type(exc).__name__)
+reserved=settings['reserved']
+candidate={'tag':'warp','protocol':'wireguard','settings':settings}
+try:
+    warp_policy(candidate, core_version())
+    probe_warp(candidate)
+except Exception as exc:
+    fail('Туннель WARP не прошёл проверку; outbound и маршруты не применены: ' + type(exc).__name__)
 
 conn=sqlite3.connect(str(db))
 cur=conn.cursor()
@@ -4120,6 +4116,8 @@ except Exception as e:
     conn.close()
     fail(f"xrayTemplateConfig не является валидным JSON: {e}")
 
+if (cfg.get('routing') or {}).get('script'):
+    fail('Настроен пользовательский routing script; автоматическое изменение маршрутизации WARP остановлено')
 outbounds=cfg.setdefault('outbounds', [])
 if not isinstance(outbounds, list):
     conn.close()
@@ -4128,6 +4126,9 @@ if not isinstance(outbounds, list):
 replaced=False
 for ob in outbounds:
     if isinstance(ob, dict) and ob.get('tag')=='warp':
+        old_mode=(ob.get('settings') or {}).get('noKernelTun')
+        if isinstance(old_mode, bool):
+            settings['noKernelTun']=old_mode
         ob['protocol']='wireguard'
         ob['settings']=settings
         replaced=True
@@ -4135,6 +4136,13 @@ for ob in outbounds:
 if not replaced:
     outbounds.append({'tag':'warp','protocol':'wireguard','settings':settings})
 
+warp_policy(next(ob for ob in outbounds if ob.get('tag')=='warp'), core_version())
+if os.environ.get('XPAM_WARP_STORE_ACCOUNT')=='yes':
+    current=cur.execute("SELECT 1 FROM settings WHERE key='warp'").fetchone()
+    if current:
+        cur.execute("UPDATE settings SET value=? WHERE key='warp'", (json.dumps(account),))
+    else:
+        cur.execute("INSERT INTO settings(key,value) VALUES('warp',?)", (json.dumps(account),))
 cur.execute("UPDATE settings SET value=? WHERE key='xrayTemplateConfig'",
             (json.dumps(cfg, ensure_ascii=False, separators=(',',':')),))
 conn.commit()
@@ -4143,7 +4151,6 @@ ok("WARP outbound " + ("обновлён" if replaced else "создан") + " �
 ok("reserved bytes " + ("получены из client_id" if len(reserved)==3 else "не получены (WARP будет работать, health предупредит)"))
 PY_XPAM_WARP_INJECT
   rc=$?
-  rm -f -- "$reg_file"
   unset XPAM_WARP_REG_FILE
   if [[ $rc -ne 0 ]]; then
     warn "Аккаунт WARP зарегистрирован, но outbound создать не удалось. Повторите настройку WARP из меню."
@@ -4208,9 +4215,11 @@ warp_reassert_settings_quiet(){
   db="/etc/x-ui/x-ui.db"
   [[ -s "$db" ]] || return 0
   command -v python3 >/dev/null 2>&1 || return 0
-  XPAM_XUI_DB="$db" python3 <<'PY_XPAM_WARP_REASSERT' || true
+  XPAM_XUI_DB="$db" XPAM_COMPAT_PATH="$KIT_DIR/scripts/lib" python3 <<'PY_XPAM_WARP_REASSERT' || true
 import base64, json, sqlite3, os, sys
 from pathlib import Path
+sys.path.insert(0, os.environ['XPAM_COMPAT_PATH'])
+from xpam_xray_compat import core_version, warp_policy
 
 db=Path(os.environ['XPAM_XUI_DB'])
 try:
@@ -4241,10 +4250,10 @@ if not isinstance(st, dict):
 changed=[]
 if st.get('mtu')!=1420:
     st['mtu']=1420; changed.append('mtu')
-if st.get('domainStrategy')!='ForceIPv4':
-    st['domainStrategy']='ForceIPv4'; changed.append('domainStrategy')
-if st.get('noKernelTun') is not False:
-    st['noKernelTun']=False; changed.append('noKernelTun')
+before_policy=json.dumps(ob, sort_keys=True)
+warp_policy(ob, core_version())
+if json.dumps(ob, sort_keys=True)!=before_policy:
+    changed.append('IPv4 policy')
 for legacy in ('workers','num_workers','NumWorkers'):
     if legacy in st:
         st.pop(legacy, None); changed.append(legacy)
@@ -4327,9 +4336,9 @@ warp_print_3xui_manual_steps(){
   echo "  tag=warp"
   echo "  protocol=wireguard"
   echo "  mtu=1420"
-  echo "  domainStrategy=ForceIPv4"
+  echo "  IPv4-only: параметры DNS выбираются под установленный Xray"
   echo "  WireGuard workers field is intentionally not used on current Xray/3x-ui builds"
-  echo "  noKernelTun=false"
+  echo "  режим WireGuard: сохраняется выбранный в 3x-ui (kernel/userspace)"
   echo "  address=IPv4-only"
   echo "  peer allowedIPs=0.0.0.0/0"
   echo "  peer keepAlive=25"
@@ -4368,9 +4377,11 @@ xui_warp_youtube_fix(){
   dh_materialize_xray_template_if_missing warp || fail "Не удалось подготовить xrayTemplateConfig для WARP"
 
   export XPAM_XUI_DB="$db" XPAM_EXPECTED_XRAY_PORT="$expected_port"
-  python3 <<'PY_XUI_WARP_FIX'
+  XPAM_COMPAT_PATH="$KIT_DIR/scripts/lib" python3 <<'PY_XUI_WARP_FIX' || return 1
 import json, os, sqlite3, sys
 from pathlib import Path
+sys.path.insert(0, os.environ['XPAM_COMPAT_PATH'])
+from xpam_xray_compat import core_version, warp_policy, probe_warp
 
 db=Path(os.environ['XPAM_XUI_DB'])
 expected_port=int(os.environ['XPAM_EXPECTED_XRAY_PORT'])
@@ -4413,6 +4424,8 @@ try:
 except Exception as e:
     fail(f"xrayTemplateConfig не является валидным JSON: {e}")
 
+if (cfg.get('routing') or {}).get('script'):
+    fail('Настроен пользовательский routing script; автоматическое изменение маршрутизации WARP остановлено')
 outbounds=cfg.setdefault('outbounds', [])
 wg=[ob for ob in outbounds if isinstance(ob, dict) and ob.get('protocol')=='wireguard']
 if not wg:
@@ -4434,8 +4447,7 @@ settings['mtu']=1420
 # XPAM must not create that legacy field and should clean old raw JSON keys.
 for _legacy_key in ('workers', 'num_workers', 'NumWorkers'):
     settings.pop(_legacy_key, None)
-settings['domainStrategy']='ForceIPv4'
-settings['noKernelTun']=False
+warp_policy(ob, core_version())
 
 addrs=settings.get('address') or []
 if not isinstance(addrs, list):
@@ -4458,6 +4470,10 @@ if valid_reserved(settings.get('reserved')) or valid_reserved(peers[0].get('rese
 elif 'cloudflareclient.com' in str(peers[0].get('endpoint') or '').lower():
     print("WARNING: WARP reserved bytes отсутствуют. XPAM их не генерирует и не выдумывает; если текущий 3x-ui создал WARP без reserved, health покажет WARN.")
 ok("WARP outbound приведён к настройкам XPAM Script")
+try:
+    probe_warp(ob)
+except Exception as exc:
+    fail('WARP не прошёл проверку соединения; маршруты не применены: ' + type(exc).__name__)
 
 routing=cfg.setdefault('routing', {})
 rules=routing.setdefault('rules', [])
@@ -4553,8 +4569,8 @@ stage_warp_3xui_youtube(){
   case "$choice" in
     # Register + create the outbound, then hand over to the SAME normalization the manual
     # path used, so both routes converge on identical settings.
-    1) warp_auto_register && xui_warp_youtube_fix ;;
-    2) xui_warp_youtube_fix ;;
+    1) warp_with_rollback warp_setup_and_enable ;;
+    2) warp_with_rollback xui_warp_youtube_fix ;;
     3) return 0 ;;
     *) fail "Неизвестный пункт меню" ;;
   esac
@@ -4783,6 +4799,7 @@ stage_repair(){
     xpam_repair_restore_db_from_snapshot
   fi
   xui_assert_sqlite_backend
+  xpam_xui_reconcile_ocsp || fail "Не удалось безопасно обновить настройки OCSP"
   xpam_xui_cleanup_legacy_warp_workers || true
   xui_ensure_api_token || true
   xui_enforce_direct_ipv4_bind || true

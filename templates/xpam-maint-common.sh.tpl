@@ -124,21 +124,28 @@ xpam_config_snapshot(){
         mkdir -p "$db_stage/etc/x-ui"
         if command -v sqlite3 >/dev/null 2>&1; then
             sqlite3 "$db_src" "PRAGMA wal_checkpoint(FULL);" >/dev/null 2>&1 || true
-            sqlite3 "$db_src" ".timeout 5000" ".backup '$db_stage/etc/x-ui/x-ui.db'" 2>/dev/null \
-              || cp -a "$db_src" "$db_stage/etc/x-ui/x-ui.db" 2>/dev/null || true
+            if ! sqlite3 "$db_src" ".timeout 5000" ".backup '$db_stage/etc/x-ui/x-ui.db'" 2>/dev/null; then
+                echo "ERROR: consistent 3x-ui DB backup failed; snapshot aborted"
+                rm -rf -- "$db_stage"; rm -f -- "$list_file"
+                return 1
+            fi
         else
-            cp -a "$db_src" "$db_stage/etc/x-ui/x-ui.db" 2>/dev/null || true
+            echo "ERROR: sqlite3 is required for a consistent database snapshot"
+            rm -rf -- "$db_stage"; rm -f -- "$list_file"
+            return 1
         fi
         if [ -s "$db_stage/etc/x-ui/x-ui.db" ]; then
             # Verify at CAPTURE time, not months later at restore time when it is the only copy left.
             if command -v sqlite3 >/dev/null 2>&1 \
                && ! sqlite3 "$db_stage/etc/x-ui/x-ui.db" 'PRAGMA integrity_check;' 2>/dev/null | grep -qi '^ok$'; then
-                echo "WARNING: staged 3x-ui DB copy failed integrity_check; snapshot will not contain a database"
-                rm -rf -- "$db_stage"; db_stage=""
+                echo "ERROR: staged 3x-ui DB copy failed integrity_check; snapshot aborted"
+                rm -rf -- "$db_stage"; rm -f -- "$list_file"
+                return 1
             fi
         else
-            echo "WARNING: could not stage a consistent copy of $db_src; snapshot will not contain a database"
-            rm -rf -- "$db_stage"; db_stage=""
+            echo "ERROR: could not stage a consistent database copy; snapshot aborted"
+            rm -rf -- "$db_stage"; rm -f -- "$list_file"
+            return 1
         fi
     fi
 
@@ -744,18 +751,33 @@ tcp_rows=tcp4_rows+tcp6_rows
 def _ufw_udp_allow_set():
     allowed=set()
     try:
-        status=subprocess.check_output(['ufw','status'], text=True, stderr=subprocess.DEVNULL)
+        status=subprocess.check_output(['ufw','status','verbose'], text=True, stderr=subprocess.DEVNULL)
     except Exception:
         return allowed
     for line in status.splitlines():
         low=line.lower()
-        if 'allow' not in low:
+        if low.startswith('default:') or 'allow' not in low or re.search(r'\ballow\s+out\b', low):
             continue
-        for m in re.finditer(r'(\d{1,5})/udp', low):
-            allowed.add(int(m.group(1)))
+        target=low.split()[0]
+        if target.endswith('/tcp'):
+            continue
+        match=re.fullmatch(r'(\d{1,5})(?::(\d{1,5}))?(?:/udp)?', target)
+        if match:
+            first=int(match.group(1)); last=int(match.group(2) or first)
+            if 1 <= first <= last <= 65535:
+                allowed.update(range(first,last+1))
+                continue
+        # Application profiles and broad/address rules cannot be disproved by
+        # this port-only view. Never label their sockets protected by default.
+        allowed.update(range(1,65536))
     return allowed
 
 _ufw_udp_allowed=_ufw_udp_allow_set()
+try:
+    _ufw_policy=subprocess.check_output(['ufw','status','verbose'], text=True, stderr=subprocess.DEVNULL).lower()
+except Exception:
+    _ufw_policy=''
+_ufw_blocks_incoming='status: active' in _ufw_policy and 'deny (incoming)' in _ufw_policy
 
 # --- listener listing (display only; every verdict below is unchanged) ---------------------
 # Padding is done by Python's %-formatting, which counts CHARACTERS. Shell printf pads by BYTES
@@ -811,7 +833,7 @@ _by_proc={'xray':'служебный порт Xray','mtg':'служебный п
 def _row_group(r):
     if loop(r['host']):
         return 'local'
-    if r['proto'] == 'udp' and r['port'] not in _ufw_udp_allowed:
+    if r['proto'] == 'udp' and 'xray' in r.get('raw','').lower() and _ufw_blocks_incoming and r['port'] not in _ufw_udp_allowed:
         return 'outbound'
     return 'public'
 
@@ -841,6 +863,12 @@ for _title,_group in (('Публичные', 'public'),
     print(f'  {_title}:')
     if not _rows:
         print('    (нет)')
+    if _group == 'outbound':
+        from collections import Counter
+        for (_proto, _proc), _count in sorted(Counter((r[1],r[2]) for r in _rows).items()):
+            print(f'    {_count} {_proto}-сокетов {_proc}: пересылаемый трафик, не публичные входы')
+        print('')
+        continue
     for _p,_proto,_proc,_text in _rows:
         print('    %-8s %-4s %-17s %s' % (':%d' % _p, _proto, _proc, _text))
     print('')
@@ -907,6 +935,7 @@ for r in sorted(tcp_rows, key=lambda x:(x['port'], x['family'], x['local'])):
 def ufw_udp_allowed(port):
     return port in _ufw_udp_allowed
 
+xray_udp_closed=0
 for r in sorted(udp_rows, key=lambda x:(x['port'], x['local'])):
     port, host, local = r['port'], r['host'], r['local']
     raw = r.get('raw','')
@@ -914,11 +943,16 @@ for r in sorted(udp_rows, key=lambda x:(x['port'], x['local'])):
         continue
     if 'xray' in raw.lower():
         if ufw_udp_allowed(port):
-            print(f'WARNING: Xray/WARP UDP socket {local} is also allowed by UFW; verify this is intentional')
+            print(f'WARNING: Xray UDP socket {local} has a potentially matching UFW allow rule; verify this is intentional')
+        elif _ufw_blocks_incoming:
+            xray_udp_closed+=1
         else:
-            print(f'OK: Xray/WARP UDP socket detected at {local}; no public UFW UDP allow rule found')
+            print(f'WARNING: Xray UDP socket {local}; incoming UFW protection could not be confirmed')
         continue
     print(f'WARNING: public UDP listener {local}; verify it is intentional and firewalled as expected')
+
+if xray_udp_closed:
+    print(f'OK: {xray_udp_closed} Xray UDP socket(s); incoming UFW policy is deny and no matching UDP allow rule was found')
 
 if fail:
     sys.exit(1)
@@ -1611,6 +1645,8 @@ xpam_xui_xray_config_check(){
     python3 - "$cfg" <<'EOF_PY_XUI'
 import json, re, sqlite3, subprocess, sys
 from pathlib import Path
+sys.path.insert(0, '/opt/xpam-script/scripts/lib')
+from xpam_xray_compat import core_version, warp_policy_matches
 
 def xui_env_value(key):
     path=Path('/etc/default/x-ui')
@@ -1899,8 +1935,11 @@ else:
             ok(f'WARP {tag}: address is IPv4-only')
         else:
             warn(f'WARP {tag}: address should be IPv4-only, got {addrs!r}')
-        if settings.get('domainStrategy')=='ForceIPv4': ok(f'WARP {tag}: domainStrategy=ForceIPv4')
-        else: warn_setting(f'{tag}.domainStrategy', settings.get('domainStrategy'), 'ForceIPv4')
+        try:
+            if warp_policy_matches(ob, core_version()): ok(f'WARP {tag}: IPv4 policy matches installed Xray')
+            else: warn(f'WARP {tag}: IPv4 policy does not match installed Xray; run XPAM WARP check/normalize')
+        except (OSError, ValueError, subprocess.SubprocessError):
+            bad(f'WARP {tag}: cannot determine installed Xray compatibility')
         legacy_worker_keys=[k for k in ('workers','num_workers','NumWorkers') if k in settings]
         if legacy_worker_keys:
             warn(f'WARP {tag}: legacy WireGuard worker field(s) present: {legacy_worker_keys!r}; run XPAM WARP check/normalize to clean them')
@@ -1924,8 +1963,9 @@ else:
             warn(f'WARP {tag}: peer allowedIPs should include 0.0.0.0/0 and not ::/0, got {allowed!r}')
         if peer.get('keepAlive')==25: ok(f'WARP {tag}: peer keepAlive=25')
         else: warn_setting(f'{tag}.peer.keepAlive', peer.get('keepAlive'), 25)
-        if settings.get('noKernelTun') is False: ok(f'WARP {tag}: noKernelTun=false')
-        else: warn_setting(f'{tag}.noKernelTun', settings.get('noKernelTun'), False)
+        if isinstance(settings.get('noKernelTun'), bool):
+            ok(f'WARP {tag}: noKernelTun={str(settings["noKernelTun"]).lower()}')
+        else: warn(f'WARP {tag}: noKernelTun must be a boolean')
 
     # 3x-ui can rotate the WARP IP on a schedule (setting warpUpdateInterval, in days). That job
     # calls ChangeWarpIP() directly, which rewrites `address` with the Cloudflare IPv6 address and

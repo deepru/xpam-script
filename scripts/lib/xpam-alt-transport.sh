@@ -193,72 +193,69 @@ alt_panel_base_url(){
 # On success sets ALT_NEW_UUID and returns 0.
 ALT_NEW_UUID=""
 alt_create_inbound(){
-  local base payload ids rc=0
+  local base payload ids tmp rc=0
   base="$(alt_panel_base_url)"
   xui_ensure_api_token || { warn "Не удалось получить API-токен 3x-ui."; return 1; }
-  payload="$(mktemp /tmp/xpam-alt-inbound.XXXXXX.json)"
+  tmp="$(mktemp -d /tmp/xpam-alt-add.XXXXXX)" || return 1
+  chmod 700 "$tmp"
+  payload="$tmp/payload.json"
   case "${VLESS_ALT_TRANSPORT:-xhttp}" in
-    grpc) ids="$(alt_build_grpc_payload "$payload")" || { rm -f "$payload"; return 1; } ;;
-    *)    ids="$(alt_build_xhttp_payload "$payload")" || { rm -f "$payload"; return 1; } ;;
+    grpc) ids="$(alt_build_grpc_payload "$payload")" || { rm -rf -- "$tmp"; return 1; } ;;
+    *)    ids="$(alt_build_xhttp_payload "$payload")" || { rm -rf -- "$tmp"; return 1; } ;;
   esac
   ALT_NEW_UUID="${ids%%$'\t'*}"
   xpam_xui_api_post_json "$base/panel/api/inbounds/add" "$payload" \
-    /tmp/xpam-alt-add.out /tmp/xpam-alt-add.err || rc=$?
-  if [[ $rc -ne 0 ]] || ! grep -Eiq '"success"[[:space:]]*:[[:space:]]*true' /tmp/xpam-alt-add.out 2>/dev/null; then
-    warn "3x-ui add-inbound (${VLESS_ALT_TRANSPORT:-alt}) не вернул success. Ответ:"
-    sed -n '1,80p' /tmp/xpam-alt-add.out 2>/dev/null || true
-    rm -f "$payload"; return 1
+    "$tmp/response" "$tmp/error" || rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    python3 - "$tmp/response" <<'PY_XPAM_ALT_ADD' || rc=$?
+import json, sys
+try:
+    sys.exit(0 if json.load(open(sys.argv[1])).get('success') is True else 1)
+except Exception:
+    sys.exit(1)
+PY_XPAM_ALT_ADD
   fi
-  rm -f "$payload"; return 0
+  rm -rf -- "$tmp"
+  if [[ "$rc" -ne 0 ]]; then
+    ALT_NEW_UUID=""
+    warn "3x-ui не подтвердил создание инбаунда запасного транспорта."
+    return 1
+  fi
+  return 0
 }
 
 # Delete the active alt inbound (found by its loopback port XRAY_ALT_PORT — transport-agnostic, so it
 # removes whichever of xhttp/grpc is live) + its orphaned managed client. Used by disable and by the
 # enable switch path.
 alt_delete_inbound(){
-  local base id body rc=0 db=/etc/x-ui/x-ui.db emails email cbody
+  local base id body tmp rc=0 db=/etc/x-ui/x-ui.db emails email
   id="$(sqlite3 "$db" "SELECT id FROM inbounds WHERE protocol='vless' AND listen='127.0.0.1' AND port=${XRAY_ALT_PORT} ORDER BY id ASC LIMIT 1;" 2>/dev/null || true)"
-  [[ -n "$id" ]] || { warn "Альт-инбаунд не найден в БД (уже удалён?)."; return 0; }
+  [[ -n "$id" ]] || { warn "Инбаунд запасного транспорта не найден в БД (уже удалён?)."; return 0; }
   base="$(alt_panel_base_url)"
   xui_ensure_api_token || { warn "Нет API-токена для удаления инбаунда."; return 1; }
-  # 3x-ui 3.x makes a client a first-class many-to-many entity: DelInbound removes the inbound + the
-  # client_inbounds junction but LEAVES the `clients` row + client_traffics (no ON DELETE CASCADE) — by
-  # design, since a client may span inbounds — so our dedicated alt client would linger on the panel
-  # Clients page. Capture the client(s) bound to THIS inbound NOW (the junction is dropped once the
-  # inbound is deleted), so cleanup finds them by their link to the inbound — rename-safe: it does not
-  # rely on a hardcoded email the operator may have changed in the panel.
-  emails="$(sqlite3 "$db" "SELECT c.email FROM clients c JOIN client_inbounds ci ON ci.client_id=c.id WHERE ci.inbound_id=${id};" 2>/dev/null || true)"
-  # PRIMARY cleanup: remove each captured client through 3x-ui's OWN client API (drops the client + all
-  # its traffic/IP rows via the ORM, schema-agnostically) BEFORE the inbound, so no orphan is left.
+  emails="$(sqlite3 "$db" "SELECT c.email FROM clients c JOIN client_inbounds ci ON ci.client_id=c.id WHERE ci.inbound_id=${id};" 2>/dev/null)" || return 1
   while IFS= read -r email; do
     [[ -n "$email" ]] || continue
-    cbody="$(mktemp /tmp/xpam-alt-cdel.XXXXXX.json)"; printf '{}' > "$cbody"
-    xpam_xui_api_post_json "$base/panel/api/clients/del/${email}" "$cbody" \
-      /tmp/xpam-alt-cdel.out /tmp/xpam-alt-cdel.err >/dev/null 2>&1 \
-      || warn "client-API удаление клиента '${email}' не подтверждено — будет SQL-фолбэк."
-    rm -f "$cbody"
+    # A client shared with another inbound survives; deleting this inbound only
+    # detaches its association. Never purge by a guessed email or schema.
+    xpam_xui_delete_unshared_client "$email" "$id" || return 1
   done <<< "$emails"
-  # Now delete the inbound itself.
-  body="$(mktemp /tmp/xpam-alt-del.XXXXXX.json)"; printf '{}' > "$body"
-  xpam_xui_api_post_json "$base/panel/api/inbounds/del/${id}" "$body" \
-    /tmp/xpam-alt-del.out /tmp/xpam-alt-del.err || rc=$?
-  rm -f "$body"
-  if [[ $rc -ne 0 ]] || ! grep -Eiq '"success"[[:space:]]*:[[:space:]]*true' /tmp/xpam-alt-del.out 2>/dev/null; then
-    warn "Удаление альт-инбаунда не подтверждено (id=$id)."; return 1
+  tmp="$(mktemp -d /tmp/xpam-alt-delete.XXXXXX)" || return 1
+  chmod 700 "$tmp"
+  body="$tmp/body"; printf '{}' > "$body"
+  xpam_xui_api_post_json "$base/panel/api/inbounds/del/${id}" "$body" "$tmp/response" "$tmp/error" || rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    python3 - "$tmp/response" <<'PY_XPAM_ALT_DELETE' || rc=$?
+import json, sys
+try:
+    sys.exit(0 if json.load(open(sys.argv[1])).get('success') is True else 1)
+except Exception:
+    sys.exit(1)
+PY_XPAM_ALT_DELETE
   fi
-  # DEFENSIVE FALLBACK (older panels without the client API, or a failed call): purge each captured
-  # client directly. Guarded — a no-op once the API path already cleaned it. Plus sweep any traffic rows
-  # still bound to the now-deleted inbound id, regardless of email.
-  while IFS= read -r email; do
-    [[ -n "$email" ]] || continue
-    sqlite3 "$db" "DELETE FROM client_traffics WHERE email='${email}';" 2>/dev/null || true
-    sqlite3 "$db" "DELETE FROM clients WHERE email='${email}';" 2>/dev/null || true
-    sqlite3 "$db" "DELETE FROM client_global_traffics WHERE email='${email}';" 2>/dev/null || true
-    sqlite3 "$db" "DELETE FROM node_client_traffics WHERE email='${email}';" 2>/dev/null || true
-    sqlite3 "$db" "DELETE FROM inbound_client_ips WHERE client_email='${email}';" 2>/dev/null || true
-  done <<< "$emails"
-  sqlite3 "$db" "DELETE FROM client_traffics WHERE inbound_id=${id};" 2>/dev/null || true
-  return 0
+  rm -rf -- "$tmp"
+  [[ "$rc" -eq 0 ]] || warn "Удаление инбаунда запасного транспорта не подтверждено"
+  return "$rc"
 }
 
 alt_issue_cert(){
@@ -445,6 +442,10 @@ alt_dh_reapply_if_active(){
 # alt block, and re-applies DoubleHop to the remaining inbounds. The certificate is KEPT (re-enable reuses
 # it). The primary tcp path is NEVER touched. Safe after any step (idempotent).
 alt_enable_abort(){
+  if [[ -n "${ALT_TRANSACTION_BACKUP:-}" ]]; then
+    warn "Настройка запасного транспорта прервана; восстанавливаем предыдущее состояние."
+    return 1
+  fi
   warn "Откат: снимаю частично применённый альт-транспорт, возвращаю сервер в чистое состояние (основной tcp не затронут)."
   if systemctl is-active --quiet x-ui; then
     alt_delete_inbound >/dev/null 2>&1 || true
@@ -452,7 +453,7 @@ alt_enable_abort(){
   fi
   alt_nginx_remove
   VLESS_ALT_TRANSPORT=""; VLESS_ALT_DOMAIN=""; VLESS_ALT_PATH=""
-  save_config
+  save_config || return 1
   write_haproxy >/dev/null 2>&1 || warn "Откат: перегенерация HAProxy не удалась — выполните sudo ${SERVER_PREFIX}-repair."
   alt_rerender_health >/dev/null 2>&1 || true
   alt_dh_reapply_if_active >/dev/null 2>&1 || true
@@ -460,6 +461,55 @@ alt_enable_abort(){
 }
 
 alt_transport_enable(){
+  load_config
+  local backup_dir=/root/manual-backups/xui-alt-operation backup path rc
+  local -a files=("$CONFIG_FILE" /etc/haproxy/haproxy.cfg
+    /etc/systemd/system/haproxy.service.d/backend-order.conf
+    /etc/nginx/sites-available/xpam-alt.conf /etc/nginx/sites-enabled/xpam-alt.conf
+    /etc/nginx/sites-available/xpam-alt-xhttp.conf /etc/nginx/sites-enabled/xpam-alt-xhttp.conf
+    /etc/letsencrypt/renewal-hooks/deploy/xpam-alt-reload.sh
+    "/usr/local/sbin/${SERVER_PREFIX}-health")
+  systemctl is-active --quiet x-ui || { warn "Сначала восстановите службу 3x-ui."; return 1; }
+  mkdir -p "$backup_dir"; chmod 700 "$backup_dir"
+  backup="$(mktemp -d "$backup_dir/snapshot.XXXXXX")" || return 1
+  xui_db_safe_copy "$backup/x-ui.db" || { rm -rf -- "$backup"; return 1; }
+  for path in "${files[@]}"; do
+    if [[ -e "$path" || -L "$path" ]]; then
+      mkdir -p "$backup/files$(dirname "$path")" || return 1
+      cp -a -- "$path" "$backup/files$path" || return 1
+    fi
+  done
+  # Keep fail()/exit inside the operation from bypassing recovery.
+  if ( ALT_TRANSACTION_BACKUP="$backup"; alt_transport_enable_apply "$@" ); then
+    load_config
+    prune_keep_latest "$backup_dir" 'snapshot.*' 2
+    return 0
+  else
+    rc=$?
+  fi
+  systemctl stop x-ui || return 1
+  install -m 600 "$backup/x-ui.db" /etc/x-ui/x-ui.db || return 1
+  rm -f /etc/x-ui/x-ui.db-wal /etc/x-ui/x-ui.db-shm
+  for path in "${files[@]}"; do
+    rm -f -- "$path" || return 1
+    if [[ -e "$backup/files$path" || -L "$backup/files$path" ]]; then
+      mkdir -p "$(dirname "$path")" || return 1
+      cp -a -- "$backup/files$path" "$path" || return 1
+    fi
+  done
+  load_config
+  systemctl daemon-reload || return 1
+  systemctl start x-ui || return 1
+  /usr/local/sbin/wait-for-local-port.sh 127.0.0.1 "$XUI_PANEL_PORT" 30 xui-panel || return 1
+  wait_for_xray_vless 30 || return 1
+  nginx -t && systemctl reload nginx || return 1
+  haproxy -c -f /etc/haproxy/haproxy.cfg && systemctl restart haproxy || return 1
+  prune_keep_latest "$backup_dir" 'snapshot.*' 2
+  warn "Прежняя конфигурация запасного транспорта восстановлена."
+  return "$rc"
+}
+
+alt_transport_enable_apply(){
   local transport="${1:-xhttp}" tlabel d uuid code was_enabled=0
   local old_domain="${VLESS_ALT_DOMAIN:-}" old_transport="${VLESS_ALT_TRANSPORT:-}"
   [[ "$transport" == "grpc" ]] && tlabel="grpc" || tlabel="xhttp"
@@ -504,8 +554,8 @@ alt_transport_enable(){
   # re-pointed at the new domain below by alt_write_certbot_hook.
   if [[ "$was_enabled" == "1" ]]; then
     say "Снимаю текущий транспорт «${old_transport}» перед переключением на «${tlabel}»"
-    alt_delete_inbound || warn "Старый инбаунд не удалён автоматически — проверьте панель."
-    systemctl restart x-ui || true
+    alt_delete_inbound || { alt_enable_abort; return 1; }
+    systemctl restart x-ui || { alt_enable_abort; return 1; }
   fi
 
   # New transport state. Always generate a FRESH secret in the target transport's format (an xhttp path is
@@ -531,15 +581,15 @@ alt_transport_enable(){
   say "Поднимаю ACME-vhost nginx для $d и выпускаю сертификат"
   alt_nginx_write_acme || { warn "Не удалось поднять ACME-vhost nginx для $d."; alt_enable_abort; return 1; }
   alt_issue_cert "$d" || { warn "Не удалось выпустить сертификат для $d (проверьте A-запись и доступность :80)."; alt_enable_abort; return 1; }
-  alt_write_certbot_hook "$d"
+  alt_write_certbot_hook "$d" || { alt_enable_abort; return 1; }
 
   # 3) Plain security=none alt inbound (xhttp or grpc, per VLESS_ALT_TRANSPORT).
   say "Создаю ${tlabel}-инбаунд (security=none) на 127.0.0.1:${XRAY_ALT_PORT}"
   alt_create_inbound || { warn "Не удалось создать ${tlabel}-инбаунд."; alt_enable_abort; return 1; }
   uuid="$ALT_NEW_UUID"
-  systemctl restart x-ui || true
+  systemctl restart x-ui || { alt_enable_abort; return 1; }
   write_wait_for_port >/dev/null 2>&1 || true
-  /usr/local/sbin/wait-for-local-port.sh 127.0.0.1 "$XRAY_ALT_PORT" 30 xray-alt || warn "Порт альт-инбаунда пока не слушается — проверьте health/live-тест."
+  /usr/local/sbin/wait-for-local-port.sh 127.0.0.1 "$XRAY_ALT_PORT" 30 xray-alt || { alt_enable_abort; return 1; }
 
   # 4) nginx TLS front (cert now exists).
   say "Рендер nginx TLS-фронта для $d"
@@ -553,7 +603,7 @@ alt_transport_enable(){
   alt_rerender_health || warn "Не удалось перегенерировать health-скрипт (проверка alt-декоя добавится при repair)."
 
   # 7) Persist.
-  save_config
+  save_config || { alt_enable_abort; return 1; }
 
   # 7b) If DoubleHop is active, re-apply its rule to the new inbound set (primary + this alt transport) so
   #     the alt inbound is hopped too — otherwise DH reads "неполная" until a manual restore. The rule

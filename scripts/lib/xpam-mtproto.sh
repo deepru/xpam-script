@@ -692,35 +692,14 @@ mtproto_3xui_mtg_restart_runtime(){
   mtproto_3xui_mtg_assert_runtime_port_owner
 }
 
-# Purge the XPAM-managed mtproto client(s) left orphaned by an inbound delete. 3x-ui 3.x makes a client
-# a first-class many-to-many entity, so DelInbound removes the inbound + client_inbounds junction but
-# LEAVES the `clients` row + client_traffics behind (no ON DELETE CASCADE) — mirroring the xhttp/alt
-# teardown. $1 = newline-separated emails captured from the inbound's client_inbounds BEFORE deletion
-# (rename-safe: found by their link to the inbound, not a hardcoded name the operator may have changed);
-# the deterministic managed email <prefix>-mtproto is always added as a fallback for when the junction
-# was already gone. An mtproto client the operator added by hand under a different inbound keeps its
-# data. PRIMARY = 3x-ui's own client API (schema-agnostic); DEFENSIVE FALLBACK = direct SQL by email.
+# Only remove captured orphan clients through the panel API. Shared clients and
+# clients still attached after a failed inbound deletion must remain intact.
 mtproto_3xui_mtg_purge_managed_client(){
-  local db=/etc/x-ui/x-ui.db base body email captured="${1:-}" emails
-  emails="$(printf '%s\n%s\n' "$captured" "$(mtproto_3xui_mtg_managed_remark)" | awk 'NF && !seen[$0]++')"
-  base="$(xpam_xui_panel_base_url 2>/dev/null || true)"
-  { [[ -n "$base" ]] && xui_ensure_api_token >/dev/null 2>&1; } || base=""
+  local email captured="${1:-}"
   while IFS= read -r email; do
     [[ -n "$email" ]] || continue
-    if [[ -n "$base" ]]; then
-      body="$(mktemp /tmp/xpam-mtg-cdel.XXXXXX.json)"; printf '{}' > "$body"
-      xpam_xui_api_post_json "$base/panel/api/clients/del/${email}" "$body" \
-        /tmp/xpam-mtg-cdel.out /tmp/xpam-mtg-cdel.err >/dev/null 2>&1 || true
-      rm -f "$body"
-    fi
-    if command -v sqlite3 >/dev/null 2>&1; then
-      sqlite3 "$db" "DELETE FROM client_traffics WHERE email='${email}';" 2>/dev/null || true
-      sqlite3 "$db" "DELETE FROM clients WHERE email='${email}';" 2>/dev/null || true
-      sqlite3 "$db" "DELETE FROM client_global_traffics WHERE email='${email}';" 2>/dev/null || true
-      sqlite3 "$db" "DELETE FROM node_client_traffics WHERE email='${email}';" 2>/dev/null || true
-      sqlite3 "$db" "DELETE FROM inbound_client_ips WHERE client_email='${email}';" 2>/dev/null || true
-    fi
-  done <<< "$emails"
+    xpam_xui_delete_unshared_client "$email" 0 || return 1
+  done <<< "$captured"
 }
 
 mtproto_3xui_mtg_delete_managed_if_present(){
