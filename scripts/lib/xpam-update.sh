@@ -379,6 +379,7 @@ xpam_update_static_preflight(){
     "scripts/lib/xpam-update.sh"
     "scripts/lib/xpam-xui.sh"
     "scripts/lib/xpam_xray_compat.py"
+    "scripts/lib/xpam_warp_registration.py"
     "templates/backend-order.conf.tpl"
     "templates/check-dns-policy.sh.tpl"
     "templates/check-network-tuning-policy.sh.tpl"
@@ -394,6 +395,7 @@ xpam_update_static_preflight(){
     "templates/post-reboot-maint.sh.tpl"
     "templates/wait-for-local-port.sh.tpl"
     "templates/weekly.sh.tpl"
+    "templates/warp-registration-recover.service.tpl"
     "templates/xpam-maint-common.sh.tpl"
     "sites/_mask/generate.py"
     "sites/_mask/presets.json"
@@ -496,6 +498,8 @@ xpam_update_snapshot_create(){
     "/usr/local/bin/${prefix}-repair" "/usr/local/bin/${prefix}-netdiag" \
     "/usr/local/bin/${prefix}-weekly-maintenance" \
     "/etc/hosts" "/etc/default/x-ui" \
+    "/etc/systemd/system/xpam-warp-registration-recover.service" \
+    "/etc/systemd/system/multi-user.target.wants/xpam-warp-registration-recover.service" \
     "/etc/systemd/journald.conf.d/90-xpam-script.conf" "/etc/logrotate.d/xpam-script" \
     "/etc/cron.d/${prefix}-weekly-maintenance" \
     "/usr/local/sbin/${prefix}-install" "/usr/local/bin/${prefix}-install"
@@ -560,6 +564,8 @@ xpam_update_rollback(){
     "/usr/local/bin/${prefix}-repair" "/usr/local/bin/${prefix}-netdiag" \
     "/usr/local/bin/${prefix}-weekly-maintenance" \
     "/etc/hosts" "/etc/default/x-ui" \
+    "/etc/systemd/system/xpam-warp-registration-recover.service" \
+    "/etc/systemd/system/multi-user.target.wants/xpam-warp-registration-recover.service" \
     "/etc/systemd/journald.conf.d/90-xpam-script.conf" "/etc/logrotate.d/xpam-script" \
     "/etc/cron.d/${prefix}-weekly-maintenance" \
       "/usr/local/sbin/${prefix}-install" "/usr/local/bin/${prefix}-install"

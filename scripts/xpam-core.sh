@@ -4,7 +4,7 @@ set -Eeuo pipefail
 KIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Derive the displayed version from the VERSION file so it never goes stale between releases.
 KIT_VERSION="v$(head -n1 "${KIT_DIR}/VERSION" 2>/dev/null | tr -d '[:space:]' || true)"
-[[ "$KIT_VERSION" == v?* ]] || KIT_VERSION="v1.5.0"
+[[ "$KIT_VERSION" == v?* ]] || KIT_VERSION="v1.5.1"
 CONFIG_DIR="/etc/xpam-script"
 CONFIG_FILE="${CONFIG_DIR}/config.env"
 PREFIX_BOOTSTRAP_FILE="${CONFIG_DIR}/prefix.env"
@@ -3039,7 +3039,7 @@ verify_xui_manual_setup(){
 write_nginx_final(){ export_vars; cleanup_legacy_nginx_files; if uses_mtproto; then ensure_telegram_relay_nginx_snippet; render_template "$KIT_DIR/templates/nginx-mtproto.conf.tpl" /etc/nginx/sites-available/xpam-script-final.conf; else render_template "$KIT_DIR/templates/nginx-direct.conf.tpl" /etc/nginx/sites-available/xpam-script-final.conf; fi; rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/xpam-script-certonly.conf; ln -sf /etc/nginx/sites-available/xpam-script-final.conf /etc/nginx/sites-enabled/xpam-script-final.conf; ensure_htpasswd; nginx -t; systemctl reload nginx || systemctl restart nginx; }
 
 write_haproxy(){ uses_mtproto || return 0; export_vars; render_template "$KIT_DIR/templates/haproxy.cfg.tpl" /etc/haproxy/haproxy.cfg; haproxy -c -f /etc/haproxy/haproxy.cfg; mkdir -p /etc/systemd/system/haproxy.service.d; render_template "$KIT_DIR/templates/backend-order.conf.tpl" /etc/systemd/system/haproxy.service.d/backend-order.conf; systemctl daemon-reload; systemctl enable haproxy; systemctl restart haproxy; }
-write_health_weekly(){ say "Writing health and weekly scripts"; write_common_library; bash -c '. /usr/local/sbin/xpam-maint-common.sh; xpam_apply_small_vm_policies' || true; xpam_xui_cleanup_legacy_warp_workers || true; write_dns_policy_script; write_network_tuning_policy_script; write_telegram_https_relay_worker; migrate_legacy_system_file_names || true; migrate_maint_apt_mode_default || true; export_vars; render_template "$KIT_DIR/templates/health.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-health"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-health"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-health"; write_health_launcher || true; write_links_launcher || true; remove_legacy_vless_launcher || true; remove_legacy_tg_launcher || true; write_repair_launcher || true; remove_legacy_status_launcher || true; write_netdiag_launcher || true; render_template "$KIT_DIR/templates/weekly.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; write_weekly_launcher || true; render_template "$KIT_DIR/templates/post-reboot-maint.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-post-reboot-maint.sh"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-post-reboot-maint.sh"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-post-reboot-maint.sh"; render_template "$KIT_DIR/templates/post-reboot-maint.service.tpl" "/etc/systemd/system/${SERVER_PREFIX}-post-reboot-maint.service"; systemctl daemon-reload 2>/dev/null || true; local cron_min=35; [[ "$SERVER_PREFIX" == "se" ]] && cron_min=30; [[ "$SERVER_PREFIX" == "lt" ]] && cron_min=40; cat > "/etc/cron.d/${SERVER_PREFIX}-weekly-maintenance" <<EOF
+write_health_weekly(){ xpam_warp_write_recovery_unit || return 1; say "Writing health and weekly scripts"; write_common_library; bash -c '. /usr/local/sbin/xpam-maint-common.sh; xpam_apply_small_vm_policies' || true; xpam_xui_cleanup_legacy_warp_workers || true; write_dns_policy_script; write_network_tuning_policy_script; write_telegram_https_relay_worker; migrate_legacy_system_file_names || true; migrate_maint_apt_mode_default || true; export_vars; render_template "$KIT_DIR/templates/health.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-health"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-health"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-health"; write_health_launcher || true; write_links_launcher || true; remove_legacy_vless_launcher || true; remove_legacy_tg_launcher || true; write_repair_launcher || true; remove_legacy_status_launcher || true; write_netdiag_launcher || true; render_template "$KIT_DIR/templates/weekly.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh"; write_weekly_launcher || true; render_template "$KIT_DIR/templates/post-reboot-maint.sh.tpl" "/usr/local/sbin/${SERVER_PREFIX}-post-reboot-maint.sh"; chmod +x "/usr/local/sbin/${SERVER_PREFIX}-post-reboot-maint.sh"; bash -n "/usr/local/sbin/${SERVER_PREFIX}-post-reboot-maint.sh"; render_template "$KIT_DIR/templates/post-reboot-maint.service.tpl" "/etc/systemd/system/${SERVER_PREFIX}-post-reboot-maint.service"; systemctl daemon-reload 2>/dev/null || true; local cron_min=35; [[ "$SERVER_PREFIX" == "se" ]] && cron_min=30; [[ "$SERVER_PREFIX" == "lt" ]] && cron_min=40; cat > "/etc/cron.d/${SERVER_PREFIX}-weekly-maintenance" <<EOF
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ${cron_min} 4 * * 0 root /usr/bin/nice -n 19 /usr/bin/ionice -c3 /usr/local/sbin/${SERVER_PREFIX}-weekly-maintenance.sh >/dev/null 2>&1
@@ -4014,8 +4014,11 @@ warp_gen_wg_keypair(){
 # then re-asserts exactly the same policy, so normalization stays the single source of truth.
 # `reserved` IS derived here (base64-decoded client_id → 3 bytes), which the old manual flow could
 # never do — that is why health used to warn "reserved bytes are missing".
-warp_auto_register(){
+warp_register_account_response(){
+  (
+  umask 077
   local keypair priv pub reg_file db backup_dir backup rc
+  reg_file="$1"
   db="/etc/x-ui/x-ui.db"
   xui_assert_sqlite_backend
   [[ -s "$db" ]] || fail "3x-ui DB не найден: $db"
@@ -4035,29 +4038,60 @@ warp_auto_register(){
   pub="${keypair##* }"
   [[ -n "$priv" && -n "$pub" && "$priv" != "$pub" ]] || fail "Внутренняя ошибка генерации ключей WARP"
 
-  reg_file="$(mktemp)" || fail "Не удалось создать временный файл"
   chmod 600 "$reg_file" 2>/dev/null || true
 
   say "Регистрируем аккаунт WARP в Cloudflare через 3x-ui"
   # The reg response embeds the private key, so it goes to a 600 temp file — never to stdout/logs.
   if ! XPAM_WARP_PRIVATE_KEY="$priv" XPAM_WARP_PUBLIC_KEY="$pub" xpam_xui_warp_api reg >"$reg_file" 2>"${reg_file}.err"; then
-    warn "Не удалось зарегистрировать аккаунт WARP: сервер не смог связаться с Cloudflare (api.cloudflareclient.com)."
-    warn "Причина обычно в маршрутизации провайдера до диапазона WARP API. Конфигурация НЕ изменена."
-    [[ -s "${reg_file}.err" ]] && sed -e 's/^/  /' "${reg_file}.err" >&2 || true
-    rm -f -- "$reg_file" "${reg_file}.err"
-    return 1
+    if ! XPAM_WARP_PRIVATE_KEY="$priv" XPAM_WARP_PUBLIC_KEY="$pub" warp_offer_vless_registration "$reg_file" "${reg_file}.err"; then
+      warn "Регистрация WARP не завершена. Предыдущие настройки будут восстановлены."
+      rm -f -- "$reg_file" "${reg_file}.err"
+      return 1
+    fi
   fi
   rm -f -- "${reg_file}.err"
+  XPAM_REG_EXPECTED_KEY="$priv" PYTHONPATH="$KIT_DIR/scripts/lib" python3 - "$reg_file" <<'PY_XPAM_REGISTER_VALIDATE' || return 1
+import json,os,sys
+from xpam_xray_compat import validated_warp_registration
+from xpam_warp_registration import cache_registration
+try:
+    account,_=validated_warp_registration(json.load(open(sys.argv[1])))
+    if account['private_key']!=os.environ['XPAM_REG_EXPECTED_KEY']:
+        raise ValueError('registration key mismatch')
+    cache_registration('/etc/x-ui/x-ui.db',json.load(open(sys.argv[1])))
+except Exception:
+    print('ERROR: ответ регистрации WARP не прошёл проверку',file=sys.stderr)
+    sys.exit(1)
+PY_XPAM_REGISTER_VALIDATE
   ok "Аккаунт WARP зарегистрирован"
+  )
+}
 
-  if warp_install_registration_file "$reg_file" no; then
-    rc=0
-  else
-    rc=$?
-  fi
-  rm -f -- "$reg_file"
-  priv=""; pub=""; keypair=""
-  return "$rc"
+warp_auto_register(){
+  (
+    umask 077
+    local reg_file
+    reg_file="$(mktemp /tmp/xpam-warp-registration.XXXXXX)" || return 1
+    trap 'rm -f -- "$reg_file" "${reg_file}.err"' EXIT
+    if PYTHONPATH="$KIT_DIR/scripts/lib" python3 - "$reg_file" <<'PY_XPAM_CACHED_WARP'
+import json,sys
+from xpam_warp_registration import cached_registration
+try:
+    envelope=cached_registration('/etc/x-ui/x-ui.db')
+    if envelope is None:
+        sys.exit(1)
+    with open(sys.argv[1],'w') as output:
+        json.dump(envelope,output)
+except Exception:
+    sys.exit(1)
+PY_XPAM_CACHED_WARP
+    then
+      ok "Используем ранее зарегистрированный аккаунт WARP"
+    else
+      warp_register_account_response "$reg_file" || return 1
+    fi
+    warp_install_registration_file "$reg_file" no
+  )
 }
 
 # A root-only registration response can be imported without calling Cloudflare

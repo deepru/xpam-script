@@ -141,6 +141,7 @@ def restore_warp_state(snapshot, database):
     from contextlib import closing
     with closing(sqlite3.connect(Path(snapshot).resolve().as_uri() + '?mode=ro', uri=True)) as saved:
         old_account = saved.execute("SELECT value FROM settings WHERE key='warp'").fetchone()
+        old_registration = saved.execute("SELECT value FROM settings WHERE key='xpamWarpRegistrationConfig'").fetchone()
         old_template = saved.execute("SELECT value FROM settings WHERE key='xrayTemplateConfig'").fetchone()
         old_config = json.loads(old_template[0]) if old_template and old_template[0] else {}
         old_sniffing = saved.execute("SELECT id,settings,sniffing FROM inbounds WHERE protocol='vless'").fetchall()
@@ -167,9 +168,10 @@ def restore_warp_state(snapshot, database):
                         remaining.insert(min(position, len(remaining)), old)
                 routing['rules'] = remaining
                 live.execute("UPDATE settings SET value=? WHERE key='xrayTemplateConfig'", (json.dumps(config),))
-            live.execute("DELETE FROM settings WHERE key='warp'")
-            if old_account:
-                live.execute("INSERT INTO settings(key,value) VALUES('warp',?)", (old_account[0],))
+            for key, previous in (('warp', old_account), ('xpamWarpRegistrationConfig', old_registration)):
+                live.execute('DELETE FROM settings WHERE key=?', (key,))
+                if previous:
+                    live.execute('INSERT INTO settings(key,value) VALUES(?,?)', (key, previous[0]))
             for ident, settings, sniffing in old_sniffing:
                 # A replaced inbound is not the one whose sniffing we changed.
                 live.execute('UPDATE inbounds SET sniffing=? WHERE id=? AND settings=?', (sniffing, ident, settings))

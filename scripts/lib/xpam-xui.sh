@@ -900,6 +900,12 @@ PY_XPAM_XUI_WARP_DISABLE
   # removes the outbound — so it complements the teardown above instead of duplicating it.
   # Best-effort: a stale credential blob is harmless, so a failure here must not fail disable.
   if xpam_xui_warp_api del >/dev/null 2>&1; then
+    python3 - <<'PY_XPAM_WARP_CACHE_DELETE' || warn "Не удалось удалить сохранённые данные интерфейса WARP"
+import sqlite3
+with sqlite3.connect('/etc/x-ui/x-ui.db') as connection:
+    connection.execute("DELETE FROM settings WHERE key='xpamWarpRegistrationConfig'")
+    connection.commit()
+PY_XPAM_WARP_CACHE_DELETE
     ok "Сохранённый аккаунт WARP удалён из 3x-ui"
   else
     warn "Не удалось удалить сохранённый аккаунт WARP из 3x-ui (не критично; outbound и маршруты уже отключены)"
@@ -965,6 +971,108 @@ stage_warp_change_ip(){
     y|Y|yes|YES|д|Д) warp_with_rollback warp_change_ip ;;
     *) echo "Отменено. Изменений не внесено."; return 0 ;;
   esac
+}
+
+xpam_warp_write_recovery_unit(){
+  # First use installs the recovery guard. Merely upgrading an older kit must
+  # not add a unit its already-loaded updater cannot remove on rollback.
+  [[ "${1:-no}" == yes || -e /etc/systemd/system/xpam-warp-registration-recover.service ]] || return 0
+  render_template "$KIT_DIR/templates/warp-registration-recover.service.tpl" /etc/systemd/system/xpam-warp-registration-recover.service || return 1
+  systemctl daemon-reload || return 1
+  systemctl enable xpam-warp-registration-recover.service >/dev/null 2>&1
+}
+
+warp_offer_vless_registration(){
+  local output="$1" error_file="$2" mode choice link='' link_file token rc
+  # Only a Cloudflare transport/access failure offers this path. A local panel
+  # auth error, malformed request or failed tunnel does not trigger it.
+  PYTHONPATH="$KIT_DIR/scripts/lib" python3 - "$error_file" <<'PY_XPAM_REG_FAILURE' || return 1
+from pathlib import Path
+import sys
+from xpam_warp_registration import registration_network_failure
+sys.exit(0 if registration_network_failure(Path(sys.argv[1]).read_text(errors='replace')) else 1)
+PY_XPAM_REG_FAILURE
+  python3 - <<'PY_XPAM_REG_PANEL_SUPPORT' || return 1
+import re,subprocess,sys
+result=subprocess.run(['/usr/local/x-ui/x-ui','-v'],capture_output=True,text=True,timeout=5)
+match=re.search(r'\b(\d+)\.(\d+)\.(\d+)\b',result.stdout)
+if not match or tuple(map(int,match.groups())) < (3,11,0):
+    print('Для временной регистрации через VLESS обновите 3x-ui (например, до 3.11.0).',file=sys.stderr)
+    sys.exit(1)
+PY_XPAM_REG_PANEL_SUPPORT
+  [[ -t 0 ]] || { warn "Для регистрации через VLESS запустите меню XPAM в интерактивной SSH-сессии."; return 1; }
+  echo "API Cloudflare недоступен. Можно временно зарегистрировать аккаунт через другой VLESS-сервер."
+  echo "После операции временный выход будет удалён; состояние DoubleHop Mode не изменится."
+  mode="$(dh_detect_mode 2>/dev/null || echo unknown)"
+  link_file="$(dh_exit_link_file)"
+  if [[ "$mode" == vless-only || "$mode" == telegram-only || "$mode" == all ]] && [[ -s "$link_file" ]]; then
+    echo "1) Использовать существующую ссылку DoubleHop Mode"
+    echo "2) Ввести временную VLESS-ссылку"
+    echo "0) Отмена"
+    read -r -p "Выберите пункт [0-2]: " choice || return 1
+    case "$choice" in
+      1) link="$(cat -- "$link_file")" || return 1 ;;
+      2) ;;
+      *) return 1 ;;
+    esac
+  else
+    confirm "Зарегистрировать WARP через временную VLESS-ссылку?" no || return 1
+  fi
+  if [[ -z "$link" ]]; then
+    read -r -s -p "Введите VLESS-ссылку (ввод скрыт, пустая строка — отмена): " link || { echo; return 1; }
+    echo
+    [[ -n "$link" ]] || return 1
+  fi
+  token="$(xui_api_token)" || { link=''; return 1; }
+  xpam_warp_write_recovery_unit yes || { link=''; token=''; return 1; }
+  say "Проверяем VLESS и выполняем временную регистрацию через панель"
+  if printf '%s' "$link" | XPAM_REG_PANEL_URL="$(xpam_xui_panel_base_url)" \
+      XPAM_REG_API_TOKEN="$token" python3 "$KIT_DIR/scripts/lib/xpam_warp_registration.py" register "$output"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  link=''; token=''
+  [[ "$rc" -eq 0 ]] || return "$rc"
+  /usr/local/sbin/wait-for-local-port.sh 127.0.0.1 "$XUI_PANEL_PORT" 30 xui-panel || return 1
+  wait_for_xray_vless 30 || return 1
+  ok "Аккаунт зарегистрирован через VLESS; временный выход удалён, прежний выход панели восстановлен."
+}
+
+warp_register_only(){
+  (
+  umask 077
+  local response
+  response="$(mktemp /tmp/xpam-warp-registration.XXXXXX)" || return 1
+  trap 'rm -f -- "$response" "${response}.err"' EXIT
+  chmod 600 "$response"
+  if warp_register_account_response "$response"; then
+    rm -f -- "$response" "${response}.err"
+    ok "Аккаунт WARP зарегистрирован. Маршруты WARP не включались; DoubleHop Mode не изменён."
+    return 0
+  fi
+  rm -f -- "$response" "${response}.err"
+  return 1
+  )
+}
+
+stage_warp_register_account(){
+  load_config
+  xui_assert_sqlite_backend
+  if python3 - <<'PY_XPAM_WARP_EXISTS'
+import sqlite3,json,sys
+with sqlite3.connect('file:/etc/x-ui/x-ui.db?mode=ro',uri=True) as connection:
+    row=connection.execute("SELECT value FROM settings WHERE key='warp'").fetchone()
+    config=connection.execute("SELECT value FROM settings WHERE key='xrayTemplateConfig'").fetchone()
+    account=json.loads(row[0]) if row and row[0] else {}
+    outbounds=json.loads(config[0]).get('outbounds',[]) if config and config[0] else []
+    sys.exit(0 if account.get('access_token') or any(o.get('tag')=='warp' for o in outbounds) else 1)
+PY_XPAM_WARP_EXISTS
+  then
+    echo "Аккаунт или подключение WARP уже настроены. Для проверки используйте пункт 1, для смены аккаунта — пункт 2."
+    return 0
+  fi
+  warp_with_rollback warp_register_only
 }
 
 warp_with_rollback(){
@@ -1039,14 +1147,16 @@ stage_warp_menu(){
   echo "3) Отключить WARP и вернуть VLESS в обычный режим"
   echo "4) Выйти"
   echo "5) Импортировать аккаунт и включить WARP"
+  echo "6) Зарегистрировать аккаунт WARP без включения маршрутов"
   local choice
-  read -r -p "Выберите пункт [1-5]: " choice || true
+  read -r -p "Выберите пункт [1-6]: " choice || true
   case "$choice" in
     1) stage_warp_3xui_youtube ;;
     2) stage_warp_change_ip ;;
     3) stage_warp_3xui_disable ;;
     4) return 0 ;;
     5) stage_warp_import ;;
+    6) stage_warp_register_account ;;
     *) fail "Неизвестный пункт меню" ;;
   esac
 }

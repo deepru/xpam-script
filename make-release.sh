@@ -49,6 +49,7 @@ REQUIRED_FILES=(
   scripts/lib/xpam-update.sh
   scripts/lib/xpam-xui.sh
   scripts/lib/xpam_xray_compat.py
+  scripts/lib/xpam_warp_registration.py
   # Every template the code renders. The nginx/haproxy ones are load-bearing for masking and for
   # the front layer; repair re-renders them, so a kit without them cannot self-heal.
   templates/backend-order.conf.tpl
@@ -66,6 +67,7 @@ REQUIRED_FILES=(
   templates/post-reboot-maint.sh.tpl
   templates/wait-for-local-port.sh.tpl
   templates/weekly.sh.tpl
+  templates/warp-registration-recover.service.tpl
   templates/xpam-maint-common.sh.tpl
   # Masking depends on these at install/repair time; without them the decoy cannot be rendered.
   sites/_mask/generate.py
